@@ -91,8 +91,8 @@ pass "uv sync"
 OLW="uv run --project $REPO_DIR olw"
 export OLW_VAULT="$VAULT_DIR"
 
-# ── Init ──────────────────────────────────────────────────────────────────────
-header "olw init"
+# ── Init (Stage 1) ────────────────────────────────────────────────────────────
+header "olw init (Stage 1)"
 
 $OLW init "$VAULT_DIR" 2>&1 | grep -v "^$" || true
 
@@ -129,8 +129,8 @@ similarity_threshold = 0.7
 TOML
 pass "wiki.toml configured (fast=$FAST_MODEL, heavy=$HEAVY_MODEL)"
 
-# ── Doctor ───────────────────────────────────────────────────────────────────
-header "olw doctor"
+# ── Doctor (Stage 1) ──────────────────────────────────────────────────────────
+header "olw doctor (Stage 1)"
 $OLW doctor 2>&1 || true
 # Doctor exit code not checked (models may not be present before pull)
 
@@ -193,8 +193,8 @@ check "raw note 2 created" "test -f $VAULT_DIR/raw/machine-learning-basics.md"
 RAW_HASH_1=$(shasum "$VAULT_DIR/raw/quantum-computing.md" | awk '{print $1}')
 RAW_HASH_2=$(shasum "$VAULT_DIR/raw/machine-learning-basics.md" | awk '{print $1}')
 
-# ── Ingest ────────────────────────────────────────────────────────────────────
-header "olw ingest --all"
+# ── Ingest (Stage 2) ──────────────────────────────────────────────────────────
+header "olw ingest --all (Stage 2)"
 info "Calling Ollama ($FAST_MODEL) — may take 30-120s..."
 
 $OLW ingest --all 2>&1
@@ -223,15 +223,15 @@ check "wiki/index.md created" "test -f $VAULT_DIR/wiki/index.md"
 check "wiki/log.md created"   "test -f $VAULT_DIR/wiki/log.md"
 check "index.md has wikilinks" "grep -q '\[\[' $VAULT_DIR/wiki/index.md"
 
-# ── Status after ingest ───────────────────────────────────────────────────────
-header "olw status (after ingest)"
+# ── Status after ingest (Stage 2) ─────────────────────────────────────────────
+header "olw status (after ingest, Stage 2)"
 STATUS_OUT=$($OLW status 2>&1)
 echo "$STATUS_OUT"
 
 check "status shows ingested notes" "echo '$STATUS_OUT' | grep -q 'ingested'"
 
-# ── Concept extraction check ──────────────────────────────────────────────────
-header "Concept extraction"
+# ── Concept extraction check (Stage 2) ────────────────────────────────────────
+header "Concept extraction (Stage 2)"
 # Source summary pages should have wikilinks pointing to extracted concepts
 if [[ "$SOURCE_COUNT" -gt 0 ]]; then
     # Verify concept wikilinks exist in source pages (extracted during ingest)
@@ -239,8 +239,8 @@ if [[ "$SOURCE_COUNT" -gt 0 ]]; then
     check "source pages have concept wikilinks" "test '$CONCEPT_LINKS' -ge 1"
 fi
 
-# ── Compile (concept-driven) ──────────────────────────────────────────────────
-header "olw compile (concept-driven)"
+# ── Compile (Stage 3, concept-driven) ─────────────────────────────────────────
+header "olw compile (Stage 3, concept-driven)"
 info "Calling Ollama ($HEAVY_MODEL) — may take 2-5 min..."
 
 $OLW compile 2>&1
@@ -259,12 +259,12 @@ if [[ "$DRAFT_COUNT" -gt 0 ]]; then
     check "draft has confidence field"   "grep -q 'confidence:' \"$FIRST_DRAFT\""
 fi
 
-# ── Status after compile ──────────────────────────────────────────────────────
-header "olw status (after compile)"
+# ── Status after compile (Stage 3) ────────────────────────────────────────────
+header "olw status (after compile, Stage 3)"
 $OLW status 2>&1
 
-# ── Approve ───────────────────────────────────────────────────────────────────
-header "olw approve --all"
+# ── Approve (Stage 3) ─────────────────────────────────────────────────────────
+header "olw approve --all (Stage 3)"
 $OLW approve --all 2>&1
 
 WIKI_COUNT=$(find "$VAULT_DIR/wiki" -name "*.md" -not -path "*/.drafts/*" 2>/dev/null | wc -l | tr -d ' ')
@@ -283,8 +283,8 @@ $OLW undo 2>&1
 check "undo reverted publish commit" \
     "git -C $VAULT_DIR log --oneline | grep -q 'Revert'"
 
-# ── Incremental compile (3rd note → only new concepts compiled) ───────────────
-header "Incremental compile"
+# ── Incremental compile (Stage 3) ─────────────────────────────────────────────
+header "Incremental compile (Stage 3)"
 info "Adding 3rd note to test concept-based incremental updates..."
 
 cat > "$VAULT_DIR/raw/deep-learning.md" <<'EOF'
@@ -309,8 +309,8 @@ echo "$INGEST3_OUT"
 check "dry run shows only new concepts" \
     "echo \"$INGEST3_OUT\" | grep -qi 'concept\|compile\|deep\|neural\|no concept'"
 
-# ── Manual edit protection ────────────────────────────────────────────────────
-header "Manual edit protection"
+# ── Manual edit protection (Stage 3) ──────────────────────────────────────────
+header "Manual edit protection (Stage 3)"
 # Find any published wiki article (not index, log, sources)
 WIKI_ARTICLE=$(find "$VAULT_DIR/wiki" -maxdepth 1 -name "*.md" \
     ! -name "index.md" ! -name "log.md" 2>/dev/null | head -1)
@@ -329,16 +329,16 @@ if [[ -n "$WIKI_ARTICLE" ]]; then
         "test '$DRAFT_AFTER_EDIT' -eq 0"
 fi
 
-# ── Duplicate detection ───────────────────────────────────────────────────────
-header "Duplicate detection"
+# ── Duplicate detection (Stage 2) ─────────────────────────────────────────────
+header "Duplicate detection (Stage 2)"
 cp "$VAULT_DIR/raw/quantum-computing.md" "$VAULT_DIR/raw/quantum-computing-copy.md" 2>/dev/null || true
 
 INGEST_OUT=$($OLW ingest "$VAULT_DIR/raw/quantum-computing-copy.md" 2>&1 || true)
 check "duplicate skipped" "echo \"$INGEST_OUT\" | grep -qi 'skip\|duplicate\|already'"
 rm -f "$VAULT_DIR/raw/quantum-computing-copy.md"
 
-# ── Query (Stage 3) ───────────────────────────────────────────────────────────
-header "olw query (Stage 3)"
+# ── Query (Stage 4) ───────────────────────────────────────────────────────────
+header "olw query (Stage 4)"
 info "Approving drafts so query has articles to search..."
 $OLW approve --all 2>&1 || true
 
@@ -354,8 +354,8 @@ echo "$QUERY_SAVE_OUT"
 QUERY_COUNT=$(find "$VAULT_DIR/wiki/queries" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
 check "query --save creates file in wiki/queries/" "test '$QUERY_COUNT' -ge 1"
 
-# ── Lint (Stage 3) ────────────────────────────────────────────────────────────
-header "olw lint (Stage 3)"
+# ── Lint (Stage 4) ────────────────────────────────────────────────────────────
+header "olw lint (Stage 4)"
 LINT_OUT=$($OLW lint 2>&1 || true)
 echo "$LINT_OUT"
 check "lint reports health score" \
@@ -365,8 +365,8 @@ check "lint reports health score" \
 $OLW lint --fix 2>&1 || true
 pass "lint --fix runs without error"
 
-# ── Retry failed (Stage 4) ────────────────────────────────────────────────────
-header "olw compile --retry-failed (Stage 4)"
+# ── Retry failed (Stage 3) ────────────────────────────────────────────────────
+header "olw compile --retry-failed (Stage 3)"
 # Inject a fake failed record directly, then verify --retry-failed notices it
 python3 - <<PYEOF
 import sqlite3, pathlib
@@ -384,6 +384,30 @@ RETRY_OUT=$($OLW compile --retry-failed 2>&1 || true)
 echo "$RETRY_OUT"
 check "retry-failed reports failed notes" \
     "echo \"$RETRY_OUT\" | grep -qi 'retry\|failed\|not found\|re-ingest'"
+
+# ── Status (Stage 5) ─────────────────────────────────────────────────────────
+header "olw status (Stage 5)"
+STATUS_FINAL=$($OLW status 2>&1)
+echo "$STATUS_FINAL"
+check "status shows vault table" "echo '$STATUS_FINAL' | grep -qi 'vault\|status\|raw\|published'"
+
+info "Testing status --failed..."
+STATUS_FAILED=$($OLW status --failed 2>&1)
+echo "$STATUS_FAILED"
+check "status --failed runs without error" "echo '$STATUS_FAILED' | grep -qi 'vault\|status\|raw\|published\|failed'"
+
+# ── Clean (Stage 5) ──────────────────────────────────────────────────────────
+header "olw clean (Stage 5)"
+# Preserve a copy of raw/ to verify clean keeps it
+RAW_COUNT_BEFORE=$(find "$VAULT_DIR/raw" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+
+$OLW clean --yes 2>&1
+check "clean completes" "test -d $VAULT_DIR/wiki"
+check "clean recreates wiki/.drafts" "test -d $VAULT_DIR/wiki/.drafts"
+check "clean recreates wiki/sources" "test -d $VAULT_DIR/wiki/sources"
+check "clean preserves raw notes" \
+    "test \$(find $VAULT_DIR/raw -name '*.md' 2>/dev/null | wc -l) -eq $RAW_COUNT_BEFORE"
+check "state.db removed after clean" "test ! -f $VAULT_DIR/.olw/state.db"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 header "Results"
