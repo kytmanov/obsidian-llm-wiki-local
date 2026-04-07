@@ -214,3 +214,20 @@ def test_verbose_and_quiet_mutually_exclusive(runner: CliRunner, tmp_path: Path)
     result = runner.invoke(cli, ["--verbose", "--quiet", "status", "--vault", str(vault)])
     assert result.exit_code == 0
     assert logging.getLogger().level == logging.WARNING
+
+
+def test_quiet_suppresses_progress_bars(runner: CliRunner, vault_dir: Path):
+    """--quiet should suppress rich Progress output during ingest."""
+    # Put a note in raw/ so the progress bar code path is triggered
+    (vault_dir / "raw" / "note.md").write_text("---\ntitle: Test\n---\nBody text.\n")
+    with _mock_ollama():
+        normal = runner.invoke(cli, ["ingest", "--vault", str(vault_dir), "--all"])
+    assert normal.exit_code == 0
+
+    # Reset: re-create the note so it's not a duplicate
+    (vault_dir / "raw" / "note2.md").write_text("---\ntitle: Test2\n---\nDifferent body.\n")
+    with _mock_ollama():
+        quiet = runner.invoke(cli, ["--quiet", "ingest", "--vault", str(vault_dir), "--all"])
+    assert quiet.exit_code == 0
+    # In quiet mode the spinner/bar text should not appear
+    assert "Ingesting" not in quiet.output

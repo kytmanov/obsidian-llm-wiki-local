@@ -402,6 +402,7 @@ def compile_notes(
         DeprecationWarning,
         stacklevel=2,
     )
+    log.warning("--legacy compile is deprecated and will be removed in a future version")
     # Resolve source files to compile
     if source_paths is None:
         records = db.list_raw(status="ingested")

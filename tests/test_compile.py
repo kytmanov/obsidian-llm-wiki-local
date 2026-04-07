@@ -54,6 +54,16 @@ def test_compile_notes_emits_deprecation_warning(vault, config, db):
         assert "deprecated" in str(deprecation_warnings[0].message).lower()
 
 
+def test_compile_notes_logs_deprecation_warning(vault, config, db, caplog):
+    """compile_notes() should also log the deprecation via the logging module."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="obsidian_llm_wiki.pipeline.compile"):
+        client = MagicMock()
+        compile_notes(config=config, client=client, db=db)
+    assert any("deprecated" in r.message.lower() for r in caplog.records)
+
+
 def _make_client(plan_json: str, article_json: str):
     """Mock client: first call returns plan, subsequent return article."""
     client = MagicMock()

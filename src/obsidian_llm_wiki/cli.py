@@ -73,8 +73,12 @@ def _load_deps(config):
     default=False,
     help="WARNING-only logging; suppress progress bars. Overrides --verbose.",
 )
-def cli(verbose: bool, quiet: bool):
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool, quiet: bool):
     """obsidian-llm-wiki (olw) — 100% local Obsidian → wiki pipeline."""
+    ctx.ensure_object(dict)
+    ctx.obj["quiet"] = quiet
+
     if quiet:
         level = logging.WARNING
     elif verbose:
@@ -88,6 +92,15 @@ def cli(verbose: bool, quiet: bool):
         else "%(levelname)s: %(message)s"
     )
     logging.basicConfig(level=level, format=fmt, force=True)
+
+
+def _is_quiet() -> bool:
+    """Return True when ``--quiet`` was passed to the CLI root."""
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    obj = ctx.find_root().obj
+    return bool(obj and obj.get("quiet"))
 
 
 # ── init ──────────────────────────────────────────────────────────────────────
@@ -221,6 +234,7 @@ def ingest(vault_str, ingest_all, force, paths):
         TextColumn("{task.completed}/{task.total}"),
         TimeElapsedColumn(),
         console=console,
+        disable=_is_quiet(),
     ) as progress:
         task = progress.add_task("Ingesting...", total=len(target_paths))
 
@@ -323,6 +337,7 @@ def compile(vault_str, dry_run, auto_approve, force, legacy, retry_failed):
         TextColumn("{task.completed}/{task.total}"),
         TimeElapsedColumn(),
         console=console,
+        disable=_is_quiet(),
     ) as progress:
         if legacy:
             task = progress.add_task("Planning compilation (legacy)...", total=None)
