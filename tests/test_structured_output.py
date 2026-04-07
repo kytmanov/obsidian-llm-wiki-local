@@ -15,7 +15,6 @@ from obsidian_llm_wiki.models import AnalysisResult, CompilePlan, SingleArticle
 from obsidian_llm_wiki.ollama_client import OllamaClient
 from obsidian_llm_wiki.structured_output import (
     StructuredOutputError,
-    _extract_json,
     _unwrap,
     request_structured,
 )

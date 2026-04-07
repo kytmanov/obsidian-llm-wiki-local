@@ -196,8 +196,4 @@ def test_watch_function(tmp_path):
     watch_thread.join(timeout=3)
 
     assert len(events_received) >= 1
-    assert any(
-        "note.md" in p
-        for batch in events_received
-        for p in batch
-    )
+    assert any("note.md" in p for batch in events_received for p in batch)

@@ -297,7 +297,10 @@ def test_atomic_write_cleans_tmp_on_error(tmp_path):
 
 def test_build_wiki_frontmatter_preserves_created():
     meta = build_wiki_frontmatter(
-        "T", ["tag"], ["src"], 0.9,
+        "T",
+        ["tag"],
+        ["src"],
+        0.9,
         existing_meta={"created": "2020-01-01"},
     )
     assert meta["created"] == "2020-01-01"
@@ -307,6 +310,10 @@ def test_build_wiki_frontmatter_sets_created_when_missing():
     from datetime import datetime
 
     meta = build_wiki_frontmatter(
-        "T", ["tag"], ["src"], 0.9, existing_meta={},
+        "T",
+        ["tag"],
+        ["src"],
+        0.9,
+        existing_meta={},
     )
     assert meta["created"] == datetime.now().strftime("%Y-%m-%d")

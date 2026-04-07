@@ -300,9 +300,7 @@ def test_ingest_note_no_frontmatter_fallback(vault, config, db):
 
     path = _write_raw(vault, "bad_fm.md", "No frontmatter content here.")
     call_count = [0]
-    original_parse = __import__(
-        "obsidian_llm_wiki.vault", fromlist=["parse_note"]
-    ).parse_note
+    original_parse = __import__("obsidian_llm_wiki.vault", fromlist=["parse_note"]).parse_note
 
     def parse_side_effect(p):
         call_count[0] += 1

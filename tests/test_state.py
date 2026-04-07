@@ -194,12 +194,7 @@ def test_migrate_adds_missing_columns(tmp_path):
     conn.close()
 
     sdb = StateDB(db_path)
-    cols = [
-        row[1]
-        for row in sdb._conn.execute(
-            "PRAGMA table_info(raw_notes)"
-        ).fetchall()
-    ]
+    cols = [row[1] for row in sdb._conn.execute("PRAGMA table_info(raw_notes)").fetchall()]
     assert "summary" in cols
     assert "quality" in cols
     sdb.close()
@@ -220,17 +215,10 @@ def test_close(db):
 
 
 def test_tx_rollback_on_exception(db):
-    db.upsert_raw(
-        RawNoteRecord(
-            path="raw/x.md", content_hash="hx", status="new"
-        )
-    )
+    db.upsert_raw(RawNoteRecord(path="raw/x.md", content_hash="hx", status="new"))
     with pytest.raises(RuntimeError):
         with db._tx():
-            db._conn.execute(
-                "UPDATE raw_notes SET status='bad' "
-                "WHERE path='raw/x.md'"
-            )
+            db._conn.execute("UPDATE raw_notes SET status='bad' WHERE path='raw/x.md'")
             raise RuntimeError("force rollback")
 
     got = db.get_raw("raw/x.md")
@@ -241,21 +229,9 @@ def test_tx_rollback_on_exception(db):
 
 
 def test_list_raw_no_filter(db):
-    db.upsert_raw(
-        RawNoteRecord(
-            path="raw/a.md", content_hash="h1", status="new"
-        )
-    )
-    db.upsert_raw(
-        RawNoteRecord(
-            path="raw/b.md", content_hash="h2", status="ingested"
-        )
-    )
-    db.upsert_raw(
-        RawNoteRecord(
-            path="raw/c.md", content_hash="h3", status="compiled"
-        )
-    )
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="new"))
+    db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested"))
+    db.upsert_raw(RawNoteRecord(path="raw/c.md", content_hash="h3", status="compiled"))
     all_rows = db.list_raw()
     assert len(all_rows) == 3
     paths = {r.path for r in all_rows}

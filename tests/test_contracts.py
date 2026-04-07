@@ -17,10 +17,9 @@ from obsidian_llm_wiki.models import RawNoteRecord, WikiArticleRecord
 from obsidian_llm_wiki.pipeline.compile import approve_drafts, compile_concepts
 from obsidian_llm_wiki.pipeline.ingest import ingest_note
 from obsidian_llm_wiki.pipeline.lint import run_lint
-from obsidian_llm_wiki.pipeline.query import _find_page, _load_pages, run_query
+from obsidian_llm_wiki.pipeline.query import _find_page, _load_pages
 from obsidian_llm_wiki.state import StateDB
 from obsidian_llm_wiki.vault import parse_note, write_note
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -50,12 +49,14 @@ def _analysis_json(
     quality: str = "high",
     summary: str = "A summary.",
 ) -> str:
-    return json.dumps({
-        "summary": summary,
-        "key_concepts": concepts or ["Quantum Computing", "Qubit"],
-        "suggested_topics": ["Quantum Computing"],
-        "quality": quality,
-    })
+    return json.dumps(
+        {
+            "summary": summary,
+            "key_concepts": concepts or ["Quantum Computing", "Qubit"],
+            "suggested_topics": ["Quantum Computing"],
+            "quality": quality,
+        }
+    )
 
 
 def _article_json(
@@ -63,11 +64,13 @@ def _article_json(
     content: str = "## Overview\n\nQuantum computing uses qubits.",
     tags: list[str] | None = None,
 ) -> str:
-    return json.dumps({
-        "title": title,
-        "content": content,
-        "tags": tags or ["quantum", "computing"],
-    })
+    return json.dumps(
+        {
+            "title": title,
+            "content": content,
+            "tags": tags or ["quantum", "computing"],
+        }
+    )
 
 
 def _write_raw(vault: Path, name: str, content: str) -> Path:
@@ -79,9 +82,7 @@ def _write_raw(vault: Path, name: str, content: str) -> Path:
 # ── 1. Ingest → Compile contract ─────────────────────────────────────────────
 
 
-def test_ingest_compile_contract(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_ingest_compile_contract(vault: Path, config: Config, db: StateDB) -> None:
     """After ingest stores concepts+raw_notes, compile reads them correctly."""
     # Ingest phase
     path = _write_raw(vault, "quantum.md", "# Quantum\n\nQubits are cool.")
@@ -133,15 +134,11 @@ def test_ingest_compile_contract(
 # ── 2. Compile → Approve contract ────────────────────────────────────────────
 
 
-def test_compile_approve_contract(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_compile_approve_contract(vault: Path, config: Config, db: StateDB) -> None:
     """Draft frontmatter has correct fields; approve moves to wiki."""
     # Set up a draft via compile
-    path = _write_raw(vault, "note.md", "# Note\n\nSome content.")
-    db.upsert_raw(RawNoteRecord(
-        path="raw/note.md", content_hash="abc", status="ingested"
-    ))
+    _write_raw(vault, "note.md", "# Note\n\nSome content.")
+    db.upsert_raw(RawNoteRecord(path="raw/note.md", content_hash="abc", status="ingested"))
     db.upsert_concepts("raw/note.md", ["Test Concept"])
 
     client = MagicMock()
@@ -184,9 +181,7 @@ def test_compile_approve_contract(
 # ── 3. Approve → Lint contract ────────────────────────────────────────────────
 
 
-def test_approve_lint_contract(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_approve_lint_contract(vault: Path, config: Config, db: StateDB) -> None:
     """Published article structure is valid for lint checks."""
     # Create and approve a draft
     draft_path = config.drafts_dir / "Test Article.md"
@@ -201,13 +196,15 @@ def test_approve_lint_contract(
         },
         "## Overview\n\nTest content about the article.",
     )
-    db.upsert_article(WikiArticleRecord(
-        path=str(draft_path.relative_to(vault)),
-        title="Test Article",
-        sources=["raw/note.md"],
-        content_hash="h",
-        is_draft=True,
-    ))
+    db.upsert_article(
+        WikiArticleRecord(
+            path=str(draft_path.relative_to(vault)),
+            title="Test Article",
+            sources=["raw/note.md"],
+            content_hash="h",
+            is_draft=True,
+        )
+    )
 
     published = approve_drafts(config, db, [draft_path])
     assert len(published) == 1
@@ -216,9 +213,7 @@ def test_approve_lint_contract(
     result = run_lint(config, db)
 
     # No missing_frontmatter since title/tags/status are all present
-    fm_issues = [
-        i for i in result.issues if i.issue_type == "missing_frontmatter"
-    ]
+    fm_issues = [i for i in result.issues if i.issue_type == "missing_frontmatter"]
     assert not fm_issues
 
     # No low_confidence since confidence=0.75 > 0.3 threshold
@@ -229,9 +224,7 @@ def test_approve_lint_contract(
 # ── 4. Approve → Query contract ──────────────────────────────────────────────
 
 
-def test_approve_query_contract(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_approve_query_contract(vault: Path, config: Config, db: StateDB) -> None:
     """Published articles are findable by query's _find_page and _load_pages."""
     # Create a published article
     page_path = config.wiki_dir / "Quantum Computing.md"
@@ -264,9 +257,7 @@ def test_full_pipeline_ingest_compile_approve_lint_query(
 ) -> None:
     """Full pipeline: ingest → compile → approve → lint → query (mocked LLM)."""
     # Step 1: Ingest
-    path = _write_raw(
-        vault, "physics.md", "# Physics\n\nNewton's laws of motion."
-    )
+    path = _write_raw(vault, "physics.md", "# Physics\n\nNewton's laws of motion.")
     ingest_client = MagicMock()
     ingest_client.generate.return_value = _analysis_json(
         concepts=["Newtons Laws"],
@@ -297,10 +288,7 @@ def test_full_pipeline_ingest_compile_approve_lint_query(
 
     # Step 4: Lint
     lint_result = run_lint(config, db)
-    fm_issues = [
-        i for i in lint_result.issues
-        if i.issue_type == "missing_frontmatter"
-    ]
+    fm_issues = [i for i in lint_result.issues if i.issue_type == "missing_frontmatter"]
     assert not fm_issues
 
     # Step 5: Query
@@ -321,9 +309,7 @@ def test_full_pipeline_ingest_compile_approve_lint_query(
 # ── 6. State DB round-trip ────────────────────────────────────────────────────
 
 
-def test_raw_note_record_roundtrip(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_raw_note_record_roundtrip(vault: Path, config: Config, db: StateDB) -> None:
     """RawNoteRecord → upsert → get preserves all fields."""
     from datetime import datetime
 
@@ -351,22 +337,24 @@ def test_raw_note_record_roundtrip(
     assert loaded.error is None
 
 
-def test_raw_note_record_update_preserves_fields(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_raw_note_record_update_preserves_fields(vault: Path, config: Config, db: StateDB) -> None:
     """Updating a record preserves changed fields."""
-    db.upsert_raw(RawNoteRecord(
-        path="raw/a.md",
-        content_hash="h1",
-        status="new",
-    ))
-    db.upsert_raw(RawNoteRecord(
-        path="raw/a.md",
-        content_hash="h2",
-        status="ingested",
-        summary="Updated summary",
-        quality="medium",
-    ))
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/a.md",
+            content_hash="h1",
+            status="new",
+        )
+    )
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/a.md",
+            content_hash="h2",
+            status="ingested",
+            summary="Updated summary",
+            quality="medium",
+        )
+    )
     rec = db.get_raw("raw/a.md")
     assert rec.content_hash == "h2"
     assert rec.status == "ingested"
@@ -377,9 +365,7 @@ def test_raw_note_record_update_preserves_fields(
 # ── 7. WikiArticleRecord sources serialization ───────────────────────────────
 
 
-def test_wiki_article_sources_roundtrip(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_wiki_article_sources_roundtrip(vault: Path, config: Config, db: StateDB) -> None:
     """Sources list survives JSON serialization in DB."""
     sources = ["raw/note1.md", "raw/note2.md", "raw/subdir/note3.md"]
     record = WikiArticleRecord(
@@ -398,9 +384,7 @@ def test_wiki_article_sources_roundtrip(
     assert len(loaded.sources) == 3
 
 
-def test_wiki_article_empty_sources_roundtrip(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_wiki_article_empty_sources_roundtrip(vault: Path, config: Config, db: StateDB) -> None:
     """Empty sources list survives serialization."""
     record = WikiArticleRecord(
         path="wiki/Orphan.md",
@@ -417,9 +401,7 @@ def test_wiki_article_empty_sources_roundtrip(
     assert loaded.is_draft is True
 
 
-def test_wiki_article_special_chars_in_sources(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_wiki_article_special_chars_in_sources(vault: Path, config: Config, db: StateDB) -> None:
     """Source paths with special characters survive serialization."""
     sources = [
         "raw/note with spaces.md",

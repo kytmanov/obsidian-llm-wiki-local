@@ -34,5 +34,17 @@ jobs:
       - name: Format check (ruff)
         run: uv run ruff format --check src/ tests/
 
-      - name: Run tests
-        run: uv run pytest --tb=short -q
+      - name: Run tests with coverage
+        run: |
+          uv run pytest --tb=short -q \
+            --cov=obsidian_llm_wiki \
+            --cov-fail-under=80 \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-py${{ matrix.python-version }}
+          path: coverage.xml

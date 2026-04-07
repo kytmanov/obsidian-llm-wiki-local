@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,7 +14,6 @@ from obsidian_llm_wiki.pipeline.ingest import ingest_note
 from obsidian_llm_wiki.state import StateDB
 from obsidian_llm_wiki.structured_output import StructuredOutputError, request_structured
 from obsidian_llm_wiki.vault import atomic_write, parse_note
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -51,12 +49,14 @@ def _analysis_json(
     quality: str = "high",
     summary: str = "A summary.",
 ) -> str:
-    return json.dumps({
-        "summary": summary,
-        "key_concepts": concepts or ["Concept A"],
-        "suggested_topics": ["Topic A"],
-        "quality": quality,
-    })
+    return json.dumps(
+        {
+            "summary": summary,
+            "key_concepts": concepts or ["Concept A"],
+            "suggested_topics": ["Topic A"],
+            "quality": quality,
+        }
+    )
 
 
 def _make_client(response: str) -> MagicMock:
@@ -90,9 +90,7 @@ def test_structured_output_invalid_json_raises(config: Config) -> None:
 # ── 2. Ollama timeout during ingest → note marked failed ─────────────────────
 
 
-def test_ingest_timeout_marks_note_failed(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_ingest_timeout_marks_note_failed(vault: Path, config: Config, db: StateDB) -> None:
     """Ollama timeout → note marked 'failed', pipeline continues."""
     path = _write_raw(vault, "timeout.md", "# Timeout\n\nContent here.")
     client = MagicMock()
@@ -107,9 +105,7 @@ def test_ingest_timeout_marks_note_failed(
     assert "timed out" in (rec.error or "").lower()
 
 
-def test_ingest_failure_does_not_block_next_note(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_ingest_failure_does_not_block_next_note(vault: Path, config: Config, db: StateDB) -> None:
     """After one note fails, the next note can still be ingested."""
     fail_path = _write_raw(vault, "fail.md", "# Fail\n\nBad note.")
     good_path = _write_raw(vault, "good.md", "# Good\n\nGood note.")
@@ -131,9 +127,7 @@ def test_ingest_failure_does_not_block_next_note(
 # ── 3. Empty .md file → ingest handles gracefully ────────────────────────────
 
 
-def test_ingest_empty_md_file(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_ingest_empty_md_file(vault: Path, config: Config, db: StateDB) -> None:
     """Empty .md file should not crash ingest."""
     path = _write_raw(vault, "empty.md", "")
     client = _make_client(_analysis_json())
@@ -151,9 +145,7 @@ def test_ingest_empty_md_file(
 # ── 4. Binary file renamed to .md → ingest handles gracefully ────────────────
 
 
-def test_ingest_binary_file_as_md(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_ingest_binary_file_as_md(vault: Path, config: Config, db: StateDB) -> None:
     """Binary file with .md extension should not crash."""
     path = vault / "raw" / "binary.md"
     path.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\xff\xfe")
@@ -166,9 +158,7 @@ def test_ingest_binary_file_as_md(
 # ── 5. Non-UTF-8 file → ingest handles gracefully ────────────────────────────
 
 
-def test_ingest_non_utf8_file(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_ingest_non_utf8_file(vault: Path, config: Config, db: StateDB) -> None:
     """File with Latin-1 encoding should raise or fail gracefully."""
     path = vault / "raw" / "latin1.md"
     path.write_bytes("# Café résumé\n\nNaïve text.".encode("latin-1"))
@@ -240,8 +230,7 @@ def test_parse_note_nested_frontmatter(tmp_path: Path) -> None:
     """Nested objects in frontmatter should be parsed without crash."""
     p = tmp_path / "note.md"
     p.write_text(
-        "---\ntitle: Test\nmeta:\n  key: value\n  nested:\n    deep: true\n"
-        "---\n\nBody.",
+        "---\ntitle: Test\nmeta:\n  key: value\n  nested:\n    deep: true\n---\n\nBody.",
         encoding="utf-8",
     )
     meta, body = parse_note(p)
@@ -267,9 +256,7 @@ def test_statedb_opened_twice_same_file(tmp_path: Path) -> None:
     db1 = StateDB(db_path)
     db2 = StateDB(db_path)
 
-    db1.upsert_raw(RawNoteRecord(
-        path="raw/a.md", content_hash="h1", status="new"
-    ))
+    db1.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="new"))
     rec = db2.get_raw("raw/a.md")
     assert rec is not None
     assert rec.content_hash == "h1"
@@ -281,9 +268,7 @@ def test_statedb_opened_twice_same_file(tmp_path: Path) -> None:
 # ── 9. Compile with no raw notes → returns empty, no crash ───────────────────
 
 
-def test_compile_concepts_no_raw_notes(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_compile_concepts_no_raw_notes(vault: Path, config: Config, db: StateDB) -> None:
     """compile_concepts with no concepts needing compile returns empty."""
     from obsidian_llm_wiki.pipeline.compile import compile_concepts
 
@@ -295,9 +280,7 @@ def test_compile_concepts_no_raw_notes(
     client.generate.assert_not_called()
 
 
-def test_compile_notes_no_ingested(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_compile_notes_no_ingested(vault: Path, config: Config, db: StateDB) -> None:
     """compile_notes with no ingested notes returns empty."""
     from obsidian_llm_wiki.pipeline.compile import compile_notes
 
@@ -312,9 +295,7 @@ def test_compile_notes_no_ingested(
 # ── 10. Query with empty wiki → helpful error message ────────────────────────
 
 
-def test_query_empty_wiki_helpful_message(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_query_empty_wiki_helpful_message(vault: Path, config: Config, db: StateDB) -> None:
     """Query with no index.md returns helpful guidance."""
     from obsidian_llm_wiki.pipeline.query import run_query
 
@@ -329,9 +310,7 @@ def test_query_empty_wiki_helpful_message(
 # ── 11. Lint on empty wiki dir → healthy result, no crash ────────────────────
 
 
-def test_lint_empty_wiki_dir(
-    vault: Path, config: Config, db: StateDB
-) -> None:
+def test_lint_empty_wiki_dir(vault: Path, config: Config, db: StateDB) -> None:
     """Lint on empty wiki/ returns healthy result."""
     from obsidian_llm_wiki.pipeline.lint import run_lint
 
