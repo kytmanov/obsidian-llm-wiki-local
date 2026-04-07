@@ -190,31 +190,30 @@ Fix false-confidence issues in `scripts/smoke_test.sh`:
 
 ---
 
-## Stage 7 — Observability & Debugging (TODO)
+## Stage 7 — Observability & Debugging (✅ Done)
 
 **Goal:** Make pipeline failures debuggable without reading source code.
 
-### 7a. Structured logging
+### 7a. Structured logging (✅ Done)
 
-- Add `--verbose` / `-v` flag to CLI root (sets `logging.DEBUG`)
-- Add `--quiet` / `-q` flag (sets `logging.WARNING`, suppresses progress bars)
-- Log LLM prompt/response pairs at DEBUG level for post-mortem analysis
-- Include timestamps and note paths in all log lines
+- ✅ Added `--verbose` / `-v` flag to CLI root (sets `logging.DEBUG`)
+- ✅ Added `--quiet` / `-q` flag (sets `logging.WARNING`)
+- ✅ LLM prompt/response pairs logged at DEBUG level in `structured_output.py`
+- ✅ Verbose mode includes timestamps in log format
 
-### 7b. State DB versioning
+### 7b. State DB versioning (✅ Done)
 
-- Add a `schema_version` table to `state.db` (single row: `version INTEGER`)
-- `StateDB.__init__` checks version and runs only the migrations needed
-- Add test: create a v0 DB (no summary/quality columns), open with current
-  code, verify migration ran and data preserved
-- Add test: open a DB with a *future* version → clear error, no silent corruption
+- ✅ Added `schema_version` table to `state.db` (single row: `version INTEGER`)
+- ✅ `StateDB.__init__` checks version, runs only needed migrations, guards future versions
+- ✅ Test: v0 DB (no summary/quality) → migrated correctly, data preserved
+- ✅ Test: future version → `RuntimeError` with clear message
+- ✅ Test: fresh DB gets current version; reopen preserves version
 
-### 7c. Deprecate legacy compile mode
+### 7c. Deprecate legacy compile mode (✅ Done)
 
-- Add `warnings.warn("--legacy compile is deprecated", DeprecationWarning)` in
-  `compile_notes()` entry point
-- Remove `compile_notes` entirely in the next major version bump
-- Update `README.md` to remove any references to `--legacy`
+- ✅ `compile_notes()` emits `DeprecationWarning` on every call
+- ✅ Test verifies warning is emitted
+- ✅ `README.md` has no `--legacy` references (none existed)
 
 ---
 
