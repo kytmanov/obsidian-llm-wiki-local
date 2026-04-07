@@ -15,6 +15,8 @@ from pathlib import Path
 
 from .models import RawNoteRecord, WikiArticleRecord
 
+_CURRENT_VERSION = 2
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS raw_notes (
     path        TEXT PRIMARY KEY,
@@ -43,15 +45,23 @@ CREATE TABLE IF NOT EXISTS wiki_articles (
     is_draft     INTEGER NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS schema_version (
+    version     INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_raw_hash ON raw_notes(content_hash);
 CREATE INDEX IF NOT EXISTS idx_raw_status ON raw_notes(status);
 CREATE INDEX IF NOT EXISTS idx_concept_name ON concepts(name);
 """
 
-_MIGRATIONS = [
-    "ALTER TABLE raw_notes ADD COLUMN summary TEXT",
-    "ALTER TABLE raw_notes ADD COLUMN quality TEXT",
-]
+# Each value is a list of SQL statements to run when upgrading to that version.
+# Key 2 → upgrade from v1 to v2 (add summary/quality columns).
+_MIGRATIONS: dict[int, list[str]] = {
+    2: [
+        "ALTER TABLE raw_notes ADD COLUMN summary TEXT",
+        "ALTER TABLE raw_notes ADD COLUMN quality TEXT",
+    ],
+}
 
 
 class StateDB:
@@ -61,16 +71,42 @@ class StateDB:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
-        self._migrate()
+        self._ensure_schema_version()
 
-    def _migrate(self) -> None:
-        """Apply schema migrations idempotently (ignore 'duplicate column' errors)."""
-        for stmt in _MIGRATIONS:
-            try:
-                self._conn.execute(stmt)
-                self._conn.commit()
-            except Exception:
-                pass  # column already exists
+    def _ensure_schema_version(self) -> None:
+        """Check schema version, run needed migrations, and guard against future versions."""
+        row = self._conn.execute("SELECT version FROM schema_version").fetchone()
+        if row is None:
+            # Fresh DB or pre-versioning DB — run all applicable migrations then stamp.
+            self._run_migrations_from(1)
+            self._conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?)",
+                (_CURRENT_VERSION,),
+            )
+            self._conn.commit()
+            return
+
+        version = row[0]
+        if version > _CURRENT_VERSION:
+            raise RuntimeError(
+                f"Database schema version {version} is newer than supported"
+                f" version {_CURRENT_VERSION}."
+                " Please upgrade obsidian-llm-wiki."
+            )
+        if version < _CURRENT_VERSION:
+            self._run_migrations_from(version)
+            self._conn.execute("UPDATE schema_version SET version = ?", (_CURRENT_VERSION,))
+            self._conn.commit()
+
+    def _run_migrations_from(self, from_version: int) -> None:
+        """Apply all migration steps from *from_version* up to _CURRENT_VERSION."""
+        for target in range(from_version + 1, _CURRENT_VERSION + 1):
+            for stmt in _MIGRATIONS.get(target, []):
+                try:
+                    self._conn.execute(stmt)
+                    self._conn.commit()
+                except sqlite3.OperationalError:
+                    pass  # e.g. column already exists
 
     def close(self) -> None:
         self._conn.close()
