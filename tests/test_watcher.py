@@ -5,10 +5,12 @@ No filesystem watching, no Ollama, no threads started beyond Timer.
 
 from __future__ import annotations
 
+import ctypes
 import threading
 import time
+from unittest.mock import MagicMock
 
-from obsidian_llm_wiki.watcher import _DebounceHandler
+from obsidian_llm_wiki.watcher import _DebounceHandler, watch
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -152,3 +154,50 @@ def test_thread_safety_concurrent_events():
     time.sleep(0.3)
     assert len(calls) == 1
     assert len(calls[0]) == 20
+
+
+# ── watch() function ─────────────────────────────────────────────────────
+
+
+def test_watch_function(tmp_path):
+    """watch() blocks, observes file creation, calls on_event."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+
+    pipeline_mock = MagicMock()
+    pipeline_mock.watch_debounce = 0.05
+    config = MagicMock()
+    config.raw_dir = raw_dir
+    config.pipeline = pipeline_mock
+
+    events_received: list[list[str]] = []
+
+    def on_event(paths):
+        events_received.append(paths)
+
+    watch_thread = threading.Thread(
+        target=watch,
+        args=(config, None, None, on_event),
+        kwargs={"debounce_secs": 0.05},
+        daemon=True,
+    )
+    watch_thread.start()
+    time.sleep(0.3)
+
+    (raw_dir / "note.md").write_text("hello", encoding="utf-8")
+    time.sleep(0.5)
+
+    tid = watch_thread.ident
+    assert tid is not None
+    ctypes.pythonapi.PyThreadState_SetAsyncExc(
+        ctypes.c_ulong(tid),
+        ctypes.py_object(KeyboardInterrupt),
+    )
+    watch_thread.join(timeout=3)
+
+    assert len(events_received) >= 1
+    assert any(
+        "note.md" in p
+        for batch in events_received
+        for p in batch
+    )

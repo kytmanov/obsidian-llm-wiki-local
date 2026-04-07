@@ -226,3 +226,116 @@ def test_summary_mentions_issue_counts(vault, config, db):
 def test_summary_healthy_when_no_issues(vault, config, db):
     result = run_lint(config, db)
     assert "healthy" in result.summary.lower()
+
+
+# ── Draft files skipped in indexes ────────────────────────────────────────
+
+
+def test_drafts_skipped_in_title_index(vault, config, db):
+    """Files under .drafts/ must not appear in the title index."""
+    draft = config.drafts_dir / "Draft Note.md"
+    write_note(draft, {"title": "Draft Note", "tags": [], "status": "draft"}, "Draft.")
+    _write_page(config, "Real Page", "See [[Draft Note]].")
+    result = run_lint(config, db)
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    # Draft is NOT in title index → [[Draft Note]] is broken
+    assert any("Draft Note" in i.description for i in broken)
+
+
+def test_drafts_skipped_in_inbound_index(vault, config, db):
+    """Links from draft pages must not count as inbound links."""
+    draft = config.drafts_dir / "Linker.md"
+    write_note(
+        draft,
+        {"title": "Linker", "tags": [], "status": "draft"},
+        "See [[Orphan Target]].",
+    )
+    _write_page(config, "Orphan Target", "Content.")
+    result = run_lint(config, db)
+    orphans = [i for i in result.issues if i.issue_type == "orphan"]
+    assert any("Orphan Target" in i.path for i in orphans)
+
+
+# ── Parse exceptions in index builders ────────────────────────────────────
+
+
+def test_title_index_parse_exception(vault, config, db):
+    """Binary file in wiki/ should not crash _build_title_index."""
+    (config.wiki_dir / "Binary.md").write_bytes(b"\x80\x81\x82")
+    # Should not raise; the bad file is silently skipped
+    result = run_lint(config, db)
+    # Binary.md is a concept page → parse fails → missing_frontmatter
+    fm = [i for i in result.issues if i.issue_type == "missing_frontmatter"]
+    assert any("Failed to parse" in i.description for i in fm)
+
+
+def test_inbound_index_parse_exception(vault, config, db):
+    """Binary file should not crash _build_inbound_index."""
+    (config.wiki_dir / "Bad.md").write_bytes(b"\x80\x81\x82")
+    _write_page(config, "Good Page", "Content.")
+    # Should complete without error
+    result = run_lint(config, db)
+    assert result is not None
+
+
+# ── _concept_pages: wiki_dir doesn't exist ────────────────────────────────
+
+
+def test_concept_pages_missing_wiki_dir(tmp_path):
+    """If wiki_dir doesn't exist, _concept_pages returns []."""
+    from obsidian_llm_wiki.pipeline.lint import _concept_pages
+
+    cfg = Config(vault=tmp_path)
+    # wiki/ directory not created
+    assert _concept_pages(cfg) == []
+
+
+# ── Parse exception on concept page (lines 103-113) ──────────────────────
+
+
+def test_parse_exception_yields_missing_frontmatter(vault, config, db):
+    """Unparseable concept page → missing_frontmatter issue."""
+    (config.wiki_dir / "Corrupt.md").write_bytes(b"\x80\x81\x82")
+    result = run_lint(config, db)
+    fm = [i for i in result.issues if i.issue_type == "missing_frontmatter"]
+    match = [i for i in fm if "Failed to parse" in i.description]
+    assert match
+    assert not match[0].auto_fixable
+
+
+# ── Fix mode: title and tags fields ──────────────────────────────────────
+
+
+def test_fix_mode_adds_title_and_tags(vault, config, db):
+    """Fix mode should add title (from stem) and tags ([])."""
+    import frontmatter
+
+    path = config.wiki_dir / "NeedsFix.md"
+    write_note(path, {"status": "published"}, "Some body.")
+
+    run_lint(config, db, fix=True)
+
+    post = frontmatter.load(str(path))
+    assert post.metadata["title"] == "NeedsFix"
+    assert post.metadata["tags"] == []
+    assert post.metadata["status"] == "published"
+
+
+# ── Non-numeric confidence ────────────────────────────────────────────────
+
+
+def test_non_numeric_confidence_ignored(vault, config, db):
+    """confidence: 'not_a_number' should not raise or flag."""
+    _write_page(
+        config,
+        "WeirdConf",
+        meta_override={
+            "confidence": "not_a_number",
+            "title": "WeirdConf",
+            "tags": [],
+            "status": "published",
+        },
+    )
+    result = run_lint(config, db)
+    low = [i for i in result.issues if i.issue_type == "low_confidence"]
+    assert not low

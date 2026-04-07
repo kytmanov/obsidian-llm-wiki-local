@@ -156,3 +156,55 @@ def test_run_query_passes_index_to_first_call(vault, config, db):
 
     first_call_prompt = client.generate.call_args_list[0].kwargs.get("prompt", "")
     assert "Special Topic" in first_call_prompt
+
+
+# ── _find_page: sources/ directory lookup ─────────────────────────────────
+
+
+def test_find_page_in_sources_dir(vault, config):
+    """_find_page should find pages in wiki/sources/."""
+    src_page = config.sources_dir / "Source Note.md"
+    write_note(
+        src_page,
+        {"title": "Source Note", "tags": [], "status": "published"},
+        "Content.",
+    )
+    found = _find_page(config, "Source Note")
+    assert found is not None
+    assert found == src_page
+
+
+# ── _find_page: .drafts skipped ───────────────────────────────────────────
+
+
+def test_find_page_skips_drafts(vault, config):
+    """Draft files must not be found via frontmatter title scan."""
+    draft = config.wiki_dir / ".drafts" / "Hidden.md"
+    write_note(
+        draft,
+        {"title": "Hidden Draft", "tags": [], "status": "draft"},
+        "Draft content.",
+    )
+    found = _find_page(config, "Hidden Draft")
+    assert found is None
+
+
+# ── _find_page: parse exception during frontmatter scan ──────────────────
+
+
+def test_find_page_parse_exception(vault, config):
+    """Binary file in wiki/ should not crash frontmatter scan."""
+    (config.wiki_dir / "Broken.md").write_bytes(b"\x80\x81\x82")
+    # Looking for a title that doesn't match any valid file
+    found = _find_page(config, "Nonexistent Title")
+    assert found is None
+
+
+# ── _load_pages: parse exception ──────────────────────────────────────────
+
+
+def test_load_pages_parse_exception(vault, config):
+    """Unparseable page file should be silently skipped."""
+    (config.wiki_dir / "BadPage.md").write_bytes(b"\x80\x81\x82")
+    result = _load_pages(config, ["BadPage"])
+    assert result == ""
