@@ -190,3 +190,27 @@ def _mock_ollama():
         "obsidian_llm_wiki.ollama_client.OllamaClient",
         return_value=mock_client,
     )
+
+
+# ── verbose / quiet flags ────────────────────────────────────────────────────
+
+
+def test_verbose_flag_accepted(runner: CliRunner):
+    result = runner.invoke(cli, ["--verbose", "--help"])
+    assert result.exit_code == 0
+
+
+def test_quiet_flag_accepted(runner: CliRunner):
+    result = runner.invoke(cli, ["--quiet", "--help"])
+    assert result.exit_code == 0
+
+
+def test_verbose_and_quiet_mutually_exclusive(runner: CliRunner, tmp_path: Path):
+    """When both flags are given, --quiet wins (WARNING level)."""
+    import logging
+
+    vault = tmp_path / "v"
+    runner.invoke(cli, ["init", str(vault)])
+    result = runner.invoke(cli, ["--verbose", "--quiet", "status", "--vault", str(vault)])
+    assert result.exit_code == 0
+    assert logging.getLogger().level == logging.WARNING

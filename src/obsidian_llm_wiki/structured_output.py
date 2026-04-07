@@ -146,6 +146,7 @@ def request_structured(
 
     for attempt in range(max_retries + 1):
         log.debug("structured_output attempt %d/%d model=%s", attempt + 1, max_retries + 1, model)
+        log.debug("Prompt:\n%s", current_prompt)
 
         # Tier 1: JSON mode
         raw = client.generate(
@@ -155,6 +156,7 @@ def request_structured(
             format="json",
             num_ctx=num_ctx,
         )
+        log.debug("Response:\n%s", raw)
 
         # Try direct parse
         result = _try_parse(raw, model_class)

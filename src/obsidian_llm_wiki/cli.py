@@ -16,6 +16,7 @@ Commands:
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -64,8 +65,29 @@ def _load_deps(config):
 
 @click.group()
 @click.version_option(package_name="obsidian-llm-wiki")
-def cli():
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
+@click.option(
+    "-q",
+    "--quiet",
+    is_flag=True,
+    default=False,
+    help="WARNING-only logging; suppress progress bars. Overrides --verbose.",
+)
+def cli(verbose: bool, quiet: bool):
     """obsidian-llm-wiki (olw) — 100% local Obsidian → wiki pipeline."""
+    if quiet:
+        level = logging.WARNING
+    elif verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+
+    fmt = (
+        "%(asctime)s %(name)s %(levelname)s %(message)s"
+        if verbose
+        else "%(levelname)s: %(message)s"
+    )
+    logging.basicConfig(level=level, format=fmt, force=True)
 
 
 # ── init ──────────────────────────────────────────────────────────────────────
