@@ -41,6 +41,19 @@ def db(config):
     return StateDB(config.state_db_path)
 
 
+def test_compile_notes_emits_deprecation_warning(vault, config, db):
+    """compile_notes() should emit a DeprecationWarning."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        client = MagicMock()
+        compile_notes(config=config, client=client, db=db)
+        deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
+        assert len(deprecation_warnings) >= 1
+        assert "deprecated" in str(deprecation_warnings[0].message).lower()
+
+
 def _make_client(plan_json: str, article_json: str):
     """Mock client: first call returns plan, subsequent return article."""
     client = MagicMock()

@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import warnings
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -396,6 +397,11 @@ def compile_notes(
     Legacy compile: LLM plans articles from source summaries, then writes each one.
     Use compile_concepts() instead for incremental, concept-driven compilation.
     """
+    warnings.warn(
+        "--legacy compile is deprecated and will be removed in a future version",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Resolve source files to compile
     if source_paths is None:
         records = db.list_raw(status="ingested")
