@@ -13,7 +13,12 @@ import pytest
 
 from obsidian_llm_wiki.models import AnalysisResult, CompilePlan, SingleArticle
 from obsidian_llm_wiki.ollama_client import OllamaClient
-from obsidian_llm_wiki.structured_output import StructuredOutputError, request_structured
+from obsidian_llm_wiki.structured_output import (
+    StructuredOutputError,
+    _extract_json,
+    _unwrap,
+    request_structured,
+)
 
 
 def _client(response: str) -> OllamaClient:
@@ -166,3 +171,63 @@ def test_single_article_missing_required_field():
             model="qwen2.5:14b",
             max_retries=0,
         )
+
+
+# ── Tier 2b: bare ``` fenced block extraction ─────────────────────────────
+
+
+def test_bare_fenced_block_extraction(fixtures_dir):
+    """Bare ``` block (no json tag) triggers line 61."""
+    inner = (fixtures_dir / "analysis_valid.json").read_text()
+    wrapped = f"Here is the result:\n\n```\n{inner}\n```\n\nDone."
+    result = request_structured(
+        client=_client(wrapped),
+        prompt="analyze",
+        model_class=AnalysisResult,
+        model="gemma4:e4b",
+    )
+    assert result.quality == "high"
+    assert "quantum entanglement" in result.key_concepts
+
+
+# ── _unwrap direct tests ──────────────────────────────────────────────────
+
+
+def test_unwrap_non_dict_returns_as_is():
+    """Line 79: non-dict input is returned unchanged."""
+    assert _unwrap("hello", AnalysisResult) == "hello"
+    assert _unwrap(42, AnalysisResult) == 42
+    assert _unwrap([1, 2], AnalysisResult) == [1, 2]
+
+
+def test_unwrap_single_key_wrapper_with_dict_value():
+    """Line 86: single-key wrapper whose value is a dict."""
+    inner = {"summary": "s", "quality": "high"}
+    wrapped = {"AnalysisResult": inner}
+    assert _unwrap(wrapped, AnalysisResult) == inner
+
+
+def test_unwrap_json_schema_echo():
+    """Lines 91-94: JSON Schema echo with flat property values."""
+    data = {
+        "description": "Analysis result",
+        "properties": {
+            "summary": "A short summary",
+            "quality": "high",
+        },
+    }
+    result = _unwrap(data, AnalysisResult)
+    assert result == {"summary": "A short summary", "quality": "high"}
+
+
+def test_unwrap_json_schema_echo_skipped_for_real_schema():
+    """Lines 91-94: real schema dicts with 'type' are NOT unwrapped."""
+    data = {
+        "description": "Analysis result",
+        "properties": {
+            "summary": {"type": "string", "description": "s"},
+            "quality": {"type": "string", "description": "q"},
+        },
+    }
+    result = _unwrap(data, AnalysisResult)
+    assert result is data  # unchanged
