@@ -13,6 +13,7 @@ from obsidian_llm_wiki.pipeline.ingest import (
     _build_analysis_prompt,
     _normalize_concept_names,
     _preprocess_web_clip,
+    ingest_all,
     ingest_note,
 )
 from obsidian_llm_wiki.state import StateDB
@@ -263,3 +264,135 @@ def test_ingest_note_respects_max_concepts_per_source(vault, config, db):
     names = db.list_all_concept_names()
     # Only first 2 should be stored
     assert len(names) <= 2
+
+
+# ── Web-clip preprocessing (source_url in frontmatter) ────────────────────
+
+
+def test_ingest_web_clip_triggers_preprocess(vault, config, db):
+    """Notes with source/url in frontmatter trigger _preprocess_web_clip."""
+    content = (
+        "---\ntitle: Clip\nsource: http://example.com\n---\n\n"
+        "Home\nAbout\n\n# Real Content\n\n"
+        "Full paragraph with enough words to pass the filter."
+    )
+    path = _write_raw(vault, "clip.md", content)
+    client = _make_client(_analysis_json())
+    result = ingest_note(path, config, client, db)
+    assert result is not None
+    # Source summary page should include source_url
+    sources = list((vault / "wiki" / "sources").glob("*.md"))
+    assert sources
+    text = sources[0].read_text()
+    assert "source_url: http://example.com" in text
+    assert "**URL:** http://example.com" in text
+
+
+# ── parse_note fallback (no valid frontmatter) ───────────────────────────
+
+
+def test_ingest_note_no_frontmatter_fallback(vault, config, db):
+    """When parse_note raises, body_for_hash falls back to raw content."""
+    # Write a file with invalid frontmatter to trigger the except path
+    # The file just has no --- delimiters at all, but parse_note may
+    # still handle it. We mock parse_note to raise on first call only.
+    from unittest.mock import patch
+
+    path = _write_raw(vault, "bad_fm.md", "No frontmatter content here.")
+    call_count = [0]
+    original_parse = __import__(
+        "obsidian_llm_wiki.vault", fromlist=["parse_note"]
+    ).parse_note
+
+    def parse_side_effect(p):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise ValueError("bad frontmatter")
+        return original_parse(p)
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.ingest.parse_note",
+        side_effect=parse_side_effect,
+    ):
+        client = _make_client(_analysis_json())
+        result = ingest_note(path, config, client, db)
+    assert result is not None
+
+
+# ── RAG code path ─────────────────────────────────────────────────────────
+
+
+def test_ingest_note_with_rag(vault, config, db):
+    """When rag is not None, chunk+embed is called."""
+    path = _write_raw(vault, "rag.md", "# RAG Test\n\nContent for RAG.")
+    client = _make_client(_analysis_json())
+    client.embed_batch.return_value = [[0.1] * 768]
+
+    rag = MagicMock()
+    result = ingest_note(path, config, client, db, rag=rag)
+
+    assert result is not None
+    client.embed_batch.assert_called_once()
+    rag.add_document.assert_called_once()
+    call_kwargs = rag.add_document.call_args
+    assert call_kwargs[1]["doc_id"] == "raw/rag.md"
+
+
+# ── Source summary page failure ───────────────────────────────────────────
+
+
+def test_ingest_note_source_summary_failure(vault, config, db):
+    """Exception in _create_source_summary_page is caught gracefully."""
+    from unittest.mock import patch
+
+    path = _write_raw(vault, "sumfail.md", "# Sum\n\nContent here.")
+    client = _make_client(_analysis_json())
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.ingest._create_source_summary_page",
+        side_effect=OSError("disk full"),
+    ):
+        result = ingest_note(path, config, client, db)
+
+    # Should still succeed despite summary page failure
+    assert result is not None
+    rec = db.get_raw("raw/sumfail.md")
+    assert rec.status == "ingested"
+
+
+# ── ingest_all ────────────────────────────────────────────────────────────
+
+
+def test_ingest_all_processes_multiple_files(vault, config, db):
+    """ingest_all finds and processes all .md files in raw/."""
+    _write_raw(vault, "a.md", "# Alpha\n\nAlpha content.")
+    _write_raw(vault, "b.md", "# Beta\n\nBeta content.")
+    client = _make_client(_analysis_json())
+
+    results = ingest_all(config, client, db)
+
+    assert len(results) == 2
+    assert all(r is not None for _, r in results)
+    assert client.generate.call_count == 2
+
+
+def test_ingest_all_skips_processed_subfolder(vault, config, db):
+    """Files under raw/processed/ should be excluded."""
+    _write_raw(vault, "good.md", "# Good\n\nKeep me.")
+    proc_dir = vault / "raw" / "processed"
+    proc_dir.mkdir()
+    (proc_dir / "old.md").write_text("# Old\n\nSkip me.")
+    client = _make_client(_analysis_json())
+
+    results = ingest_all(config, client, db)
+    assert len(results) == 1
+
+
+def test_ingest_all_skips_dotfiles(vault, config, db):
+    """Files starting with '.' should be excluded."""
+    _write_raw(vault, "real.md", "# Real\n\nKeep.")
+    _write_raw(vault, ".hidden.md", "# Hidden\n\nSkip.")
+    client = _make_client(_analysis_json())
+
+    results = ingest_all(config, client, db)
+    assert len(results) == 1

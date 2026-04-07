@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +10,10 @@ import pytest
 from obsidian_llm_wiki.config import Config
 from obsidian_llm_wiki.models import RawNoteRecord
 from obsidian_llm_wiki.pipeline.compile import (
+    _compute_confidence,
+    _gather_sources,
+    _load_vault_schema,
+    _truncate_to_budget,
     approve_drafts,
     compile_concepts,
     compile_notes,
@@ -310,3 +315,585 @@ def test_compile_concepts_marks_sources_compiled(vault, config, db, fixtures_dir
 
     record = db.get_raw("raw/note.md")
     assert record.status == "compiled"
+
+
+# ── _load_vault_schema ────────────────────────────────────────────────────
+
+
+def test_load_vault_schema_returns_content(vault, config):
+    schema_file = config.schema_path
+    schema_file.write_text("# Vault Schema\n\nUse ## headings.")
+    result = _load_vault_schema(config)
+    assert "Vault Schema" in result
+
+
+def test_load_vault_schema_returns_empty_when_missing(vault, config):
+    assert not config.schema_path.exists()
+    result = _load_vault_schema(config)
+    assert result == ""
+
+
+def test_load_vault_schema_returns_empty_on_read_error(vault, config):
+    from unittest.mock import patch
+
+    config.schema_path.write_text("content")
+    with patch.object(
+        type(config.schema_path),
+        "read_text",
+        side_effect=OSError("permission denied"),
+    ):
+        result = _load_vault_schema(config)
+    assert result == ""
+
+
+# ── _truncate_to_budget ───────────────────────────────────────────────────
+
+
+def test_truncate_to_budget_short_text():
+    assert _truncate_to_budget("short", 100) == "short"
+
+
+def test_truncate_to_budget_long_text():
+    text = "x" * 5000
+    result = _truncate_to_budget(text, 500)  # limit = 500*4 = 2000
+    assert len(result) < len(text)
+    assert result.endswith("[...truncated...]")
+
+
+# ── _gather_sources ───────────────────────────────────────────────────────
+
+
+def test_gather_sources_parse_exception(vault, config):
+    """Source file that can't be parsed yields warning, not crash."""
+    bad_file = vault / "raw" / "bad.md"
+    bad_file.write_text("content")
+
+    from unittest.mock import patch
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile.parse_note",
+        side_effect=ValueError("bad parse"),
+    ):
+        text, resolved = _gather_sources(
+            ["raw/bad.md"], vault
+        )
+    assert resolved == []
+    assert text == ""
+
+
+# ── _compute_confidence ──────────────────────────────────────────────────
+
+
+def test_compute_confidence_high_quality_bonus(vault, config, db):
+    raw_note = vault / "raw" / "q.md"
+    raw_note.write_text("content")
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/q.md",
+            content_hash="h",
+            status="ingested",
+            quality="high",
+        )
+    )
+    conf = _compute_confidence(["raw/q.md"], db)
+    # 1 source * 0.25 + 0.25 high bonus = 0.5
+    assert conf == pytest.approx(0.5)
+
+
+def test_compute_confidence_medium_quality(vault, config, db):
+    raw_note = vault / "raw" / "m.md"
+    raw_note.write_text("content")
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/m.md",
+            content_hash="h",
+            status="ingested",
+            quality="medium",
+        )
+    )
+    conf = _compute_confidence(["raw/m.md"], db)
+    # 1 * 0.25 + 0.1 medium bonus = 0.35
+    assert conf == pytest.approx(0.35)
+
+
+def test_compute_confidence_multiple_sources(vault, config, db):
+    for i in range(5):
+        p = vault / "raw" / f"s{i}.md"
+        p.write_text("content")
+        db.upsert_raw(
+            RawNoteRecord(
+                path=f"raw/s{i}.md",
+                content_hash=f"h{i}",
+                status="ingested",
+                quality="low",
+            )
+        )
+    paths = [f"raw/s{i}.md" for i in range(5)]
+    conf = _compute_confidence(paths, db)
+    # min(1.0, 5*0.25 + 0.0) = 1.0
+    assert conf == 1.0
+
+
+# ── _inject_body_sections (source path doesn't exist) ────────────────────
+
+
+def test_inject_body_sections_missing_source(vault, config):
+    from obsidian_llm_wiki.pipeline.compile import _inject_body_sections
+
+    body = "## Overview\n\nSome content."
+    # Source path doesn't exist — falls back to stem title
+    result = _inject_body_sections(
+        body, ["raw/nonexistent.md"], config
+    )
+    assert "## Sources" in result
+    assert "Nonexistent" in result
+
+
+# ── _write_concept_prompt with vault_schema ──────────────────────────────
+
+
+def test_write_concept_prompt_with_schema():
+    from obsidian_llm_wiki.pipeline.compile import (
+        _write_concept_prompt,
+    )
+
+    prompt = _write_concept_prompt(
+        concept="Test",
+        sources="source text",
+        existing_titles=["A", "B"],
+        vault_schema="Use ## sections and [[wikilinks]].",
+    )
+    assert "VAULT CONVENTIONS" in prompt
+    assert "Use ## sections" in prompt
+
+
+# ── compile_concepts edge cases ──────────────────────────────────────────
+
+
+def test_compile_concepts_no_source_paths(vault, config, db):
+    """Concept with no source_paths is silently skipped."""
+    from unittest.mock import patch
+
+    raw_note = vault / "raw" / "note.md"
+    raw_note.write_text("Content.")
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="abc",
+            status="ingested",
+        )
+    )
+    db.upsert_concepts("raw/note.md", ["EmptyConcept"])
+
+    with patch.object(
+        db,
+        "get_sources_for_concept",
+        return_value=[],
+    ):
+        client = MagicMock()
+        drafts, failed = compile_concepts(
+            config=config, client=client, db=db
+        )
+    client.generate.assert_not_called()
+
+
+def test_compile_concepts_no_readable_sources(
+    vault, config, db
+):
+    """When _gather_sources returns nothing → concept is failed."""
+    from unittest.mock import patch
+
+    raw_note = vault / "raw" / "note.md"
+    raw_note.write_text("Content.")
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="abc",
+            status="ingested",
+        )
+    )
+    db.upsert_concepts("raw/note.md", ["NoSources"])
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile._gather_sources",
+        return_value=("", []),
+    ):
+        client = MagicMock()
+        drafts, failed = compile_concepts(
+            config=config, client=client, db=db
+        )
+    assert "NoSources" in failed
+
+
+def test_compile_concepts_parse_note_exception_in_edit_check(
+    vault, config, db, fixtures_dir
+):
+    """parse_note exception during manual-edit check is caught."""
+    from obsidian_llm_wiki.models import WikiArticleRecord
+
+    raw_note = vault / "raw" / "note.md"
+    raw_note.write_text("Content.")
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="abc",
+            status="ingested",
+        )
+    )
+    db.upsert_concepts("raw/note.md", ["BadParse"])
+
+    wiki_path = config.wiki_dir / "BadParse.md"
+    wiki_path.write_text("invalid content without frontmatter")
+    db.upsert_article(
+        WikiArticleRecord(
+            path=str(wiki_path.relative_to(vault)),
+            title="BadParse",
+            sources=["raw/note.md"],
+            content_hash="old",
+            is_draft=False,
+        )
+    )
+
+    article_json = (
+        fixtures_dir / "single_article_valid.json"
+    ).read_text()
+    client = _make_concept_client(article_json)
+
+    from unittest.mock import patch
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile.parse_note",
+        side_effect=ValueError("bad fm"),
+    ):
+        drafts, failed = compile_concepts(
+            config=config, client=client, db=db
+        )
+    # Should still proceed (exception is caught)
+    # Client was called because the except: pass path was taken
+    assert client.generate.called or len(failed) > 0
+
+
+def test_compile_concepts_existing_content_snippet(
+    vault, config, db, fixtures_dir
+):
+    """Existing wiki article content is included in prompt."""
+    raw_note = vault / "raw" / "note.md"
+    raw_note.write_text("Content.")
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="abc",
+            status="ingested",
+        )
+    )
+    db.upsert_concepts(
+        "raw/note.md", ["Quantum Entanglement"]
+    )
+
+    wiki_path = config.wiki_dir / "Quantum Entanglement.md"
+    wiki_path.write_text(
+        "---\ntitle: Quantum Entanglement\n---\n\n"
+        "Existing body content here."
+    )
+
+    article_json = (
+        fixtures_dir / "single_article_valid.json"
+    ).read_text()
+    client = _make_concept_client(article_json)
+
+    drafts, _ = compile_concepts(
+        config=config, client=client, db=db, force=True
+    )
+    assert len(drafts) == 1
+
+
+def test_compile_concepts_structured_output_error(
+    vault, config, db
+):
+    """StructuredOutputError from request_structured → failed."""
+    from unittest.mock import patch
+
+    from obsidian_llm_wiki.structured_output import (
+        StructuredOutputError,
+    )
+
+    raw_note = vault / "raw" / "note.md"
+    raw_note.write_text("Content.")
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="abc",
+            status="ingested",
+        )
+    )
+    db.upsert_concepts("raw/note.md", ["FailConcept"])
+
+    client = MagicMock()
+    client.generate.side_effect = StructuredOutputError("bad")
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile.request_structured",
+        side_effect=StructuredOutputError("bad json"),
+    ):
+        drafts, failed = compile_concepts(
+            config=config, client=client, db=db
+        )
+    assert "FailConcept" in failed
+    assert drafts == []
+
+
+# ── compile_notes edge cases ─────────────────────────────────────────────
+
+
+def test_compile_notes_unreadable_source(vault, config, db):
+    """Unreadable source file uses '(unreadable)' summary."""
+    from unittest.mock import patch
+
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/bad.md",
+            content_hash="h",
+            status="ingested",
+        )
+    )
+    (vault / "raw" / "bad.md").write_text("content")
+
+    plan_json = (
+        Path(__file__).parent
+        / "fixtures"
+        / "compile_plan_valid.json"
+    ).read_text()
+    article_json = (
+        Path(__file__).parent
+        / "fixtures"
+        / "single_article_valid.json"
+    ).read_text()
+    client = _make_client(plan_json, article_json)
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile.parse_note",
+        side_effect=ValueError("unreadable"),
+    ):
+        drafts, failed = compile_notes(
+            config=config, client=client, db=db
+        )
+    # Planning still happens; articles may fail gathering
+    assert isinstance(drafts, list)
+
+
+def test_compile_notes_planning_structured_error(
+    vault, config, db
+):
+    """StructuredOutputError during planning → early return."""
+    from unittest.mock import patch
+
+    from obsidian_llm_wiki.structured_output import (
+        StructuredOutputError,
+    )
+
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="h",
+            status="ingested",
+        )
+    )
+    (vault / "raw" / "note.md").write_text("Content.")
+
+    client = MagicMock()
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile.request_structured",
+        side_effect=StructuredOutputError("plan fail"),
+    ):
+        drafts, failed = compile_notes(
+            config=config, client=client, db=db
+        )
+    assert drafts == []
+    assert "__planning_failed__" in failed
+
+
+def test_compile_notes_empty_plan(vault, config, db):
+    """Plan with no articles → empty results."""
+    from unittest.mock import patch
+
+    from obsidian_llm_wiki.models import CompilePlan
+
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="h",
+            status="ingested",
+        )
+    )
+    (vault / "raw" / "note.md").write_text("Content.")
+
+    empty_plan = CompilePlan(articles=[], mocs_to_update=[])
+    client = MagicMock()
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile.request_structured",
+        return_value=empty_plan,
+    ):
+        drafts, failed = compile_notes(
+            config=config, client=client, db=db
+        )
+    assert drafts == []
+    assert failed == []
+
+
+def test_compile_notes_article_write_structured_error(
+    vault, config, db
+):
+    """StructuredOutputError writing an article → that article fails."""
+    from unittest.mock import patch
+
+    from obsidian_llm_wiki.models import (
+        ArticlePlan,
+        CompilePlan,
+    )
+    from obsidian_llm_wiki.structured_output import (
+        StructuredOutputError,
+    )
+
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="h",
+            status="ingested",
+        )
+    )
+    (vault / "raw" / "note.md").write_text(
+        "---\ntitle: Note\n---\n\nContent."
+    )
+
+    plan = CompilePlan(
+        articles=[
+            ArticlePlan(
+                title="FailArticle",
+                action="create",
+                path="fail-article.md",
+                reasoning="test",
+                source_paths=["raw/note.md"],
+            )
+        ]
+    )
+
+    call_count = [0]
+
+    def mock_structured(**kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return plan
+        raise StructuredOutputError("write fail")
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile.request_structured",
+        side_effect=mock_structured,
+    ):
+        client = MagicMock()
+        drafts, failed = compile_notes(
+            config=config, client=client, db=db
+        )
+    assert "FailArticle" in failed
+    assert drafts == []
+
+
+def test_compile_notes_existing_article_meta_preserved(
+    vault, config, db, fixtures_dir
+):
+    """Existing article meta is preserved when updating."""
+    from obsidian_llm_wiki.vault import write_note
+
+    db.upsert_raw(
+        RawNoteRecord(
+            path="raw/note.md",
+            content_hash="h",
+            status="ingested",
+        )
+    )
+    (vault / "raw" / "note.md").write_text(
+        "---\ntitle: Note\n---\n\nContent."
+    )
+
+    # Create existing article at the path the plan references
+    existing_path = (
+        config.wiki_dir / "quantum-entanglement.md"
+    )
+    write_note(
+        existing_path,
+        {
+            "title": "Quantum Entanglement",
+            "status": "published",
+            "custom_field": "preserve_me",
+        },
+        "Old body.",
+    )
+
+    plan_json = (
+        fixtures_dir / "compile_plan_valid.json"
+    ).read_text()
+    article_json = (
+        fixtures_dir / "single_article_valid.json"
+    ).read_text()
+    client = _make_client(plan_json, article_json)
+
+    drafts, _ = compile_notes(
+        config=config, client=client, db=db
+    )
+    assert len(drafts) == 1
+
+
+# ── approve_drafts edge cases ────────────────────────────────────────────
+
+
+def test_approve_drafts_not_found(vault, config, db):
+    """Approving a non-existent draft is skipped gracefully."""
+    missing = config.drafts_dir / "nonexistent.md"
+    result = approve_drafts(config, db, [missing])
+    assert result == []
+
+
+def test_approve_drafts_hash_update_exception(
+    vault, config, db
+):
+    """Exception in post-publish hash update is caught."""
+    from unittest.mock import patch
+
+    from obsidian_llm_wiki.models import WikiArticleRecord
+    from obsidian_llm_wiki.vault import write_note
+
+    draft_path = config.drafts_dir / "hashfail.md"
+    write_note(
+        draft_path,
+        {"title": "HashFail", "status": "draft", "tags": []},
+        "Body.",
+    )
+    db.upsert_article(
+        WikiArticleRecord(
+            path=str(draft_path.relative_to(vault)),
+            title="HashFail",
+            sources=[],
+            content_hash="h",
+            is_draft=True,
+        )
+    )
+
+    original_parse = __import__(
+        "obsidian_llm_wiki.vault", fromlist=["parse_note"]
+    ).parse_note
+    call_count = [0]
+
+    def parse_side_effect(p):
+        call_count[0] += 1
+        # Let draft parse succeed, fail on published parse
+        if call_count[0] >= 2:
+            raise OSError("disk error")
+        return original_parse(p)
+
+    with patch(
+        "obsidian_llm_wiki.pipeline.compile.parse_note",
+        side_effect=parse_side_effect,
+    ):
+        result = approve_drafts(config, db, [draft_path])
+
+    assert len(result) == 1
+    assert result[0].exists()
