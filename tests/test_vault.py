@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from obsidian_llm_wiki.vault import (
     atomic_write,
+    build_wiki_frontmatter,
     chunk_text,
     ensure_wikilinks,
     extract_wikilinks,
     generate_aliases,
+    list_draft_articles,
+    list_wiki_articles,
     parse_note,
     sanitize_filename,
+    update_frontmatter,
     write_note,
 )
 
@@ -195,3 +199,114 @@ def test_chunk_text_short_note():
     text = "Short note."
     chunks = chunk_text(text, chunk_size=512)
     assert chunks == ["Short note."]
+
+
+# ── update_frontmatter ────────────────────────────────────────────────────────
+
+
+def test_update_frontmatter_read_update_write(tmp_path):
+    p = tmp_path / "note.md"
+    write_note(p, {"title": "Old", "tags": ["a"]}, "Body.")
+    update_frontmatter(p, {"title": "New", "status": "draft"})
+    meta, body = parse_note(p)
+    assert meta["title"] == "New"
+    assert meta["tags"] == ["a"]
+    assert meta["status"] == "draft"
+    assert "Body." in body
+
+
+# ── list_wiki_articles ────────────────────────────────────────────────────────
+
+
+def test_list_wiki_articles_skips_drafts(tmp_path):
+    wiki = tmp_path / "wiki"
+    drafts = wiki / ".drafts"
+    drafts.mkdir(parents=True)
+    write_note(wiki / "pub.md", {"title": "Pub"}, "")
+    write_note(drafts / "draft.md", {"title": "Draft"}, "")
+    articles = list_wiki_articles(wiki)
+    titles = [t for t, _ in articles]
+    assert "Pub" in titles
+    assert "Draft" not in titles
+
+
+def test_list_wiki_articles_parse_error_fallback(tmp_path):
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    bad = wiki / "broken.md"
+    bad.write_bytes(b"\x80\x81\x82")
+    articles = list_wiki_articles(wiki)
+    titles = [t for t, _ in articles]
+    assert "broken" in titles
+
+
+# ── list_draft_articles ───────────────────────────────────────────────────────
+
+
+def test_list_draft_articles_nonexistent_dir(tmp_path):
+    result = list_draft_articles(tmp_path / "nope")
+    assert result == []
+
+
+def test_list_draft_articles_extracts_title_and_sources(tmp_path):
+    drafts = tmp_path / "drafts"
+    drafts.mkdir()
+    write_note(
+        drafts / "d.md",
+        {"title": "My Draft", "sources": ["http://x"]},
+        "body",
+    )
+    result = list_draft_articles(drafts)
+    assert len(result) == 1
+    title, path, sources = result[0]
+    assert title == "My Draft"
+    assert sources == ["http://x"]
+
+
+def test_list_draft_articles_parse_error_fallback(tmp_path):
+    drafts = tmp_path / "drafts"
+    drafts.mkdir()
+    bad = drafts / "bad.md"
+    bad.write_bytes(b"\x80\x81\x82")
+    result = list_draft_articles(drafts)
+    assert len(result) == 1
+    title, _, sources = result[0]
+    assert title == "bad"
+    assert sources == []
+
+
+# ── atomic_write error path ───────────────────────────────────────────────────
+
+
+def test_atomic_write_cleans_tmp_on_error(tmp_path):
+    from unittest.mock import patch
+
+    p = tmp_path / "out.md"
+    with patch("obsidian_llm_wiki.vault.Path.replace", side_effect=OSError):
+        try:
+            atomic_write(p, "data")
+        except OSError:
+            pass
+    tmps = list(tmp_path.glob("*.tmp"))
+    assert tmps == []
+    assert not p.exists()
+
+
+# ── build_wiki_frontmatter ────────────────────────────────────────────────────
+
+
+def test_build_wiki_frontmatter_preserves_created():
+    meta = build_wiki_frontmatter(
+        "T", ["tag"], ["src"], 0.9,
+        existing_meta={"created": "2020-01-01"},
+    )
+    assert meta["created"] == "2020-01-01"
+
+
+def test_build_wiki_frontmatter_sets_created_when_missing():
+    from datetime import datetime
+
+    meta = build_wiki_frontmatter(
+        "T", ["tag"], ["src"], 0.9, existing_meta={},
+    )
+    assert meta["created"] == datetime.now().strftime("%Y-%m-%d")
