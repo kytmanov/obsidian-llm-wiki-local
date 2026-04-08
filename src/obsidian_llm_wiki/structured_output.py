@@ -176,7 +176,7 @@ def request_structured(
         except json.JSONDecodeError as e:
             last_error = f"Invalid JSON: {e}"
 
-        log.warning(
+        log.debug(
             "structured_output attempt %d failed: %s. Raw (first 300): %s",
             attempt + 1,
             last_error,
