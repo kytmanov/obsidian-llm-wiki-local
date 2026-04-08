@@ -5,24 +5,41 @@ from pathlib import Path
 
 from pydantic import BaseModel, field_validator
 
-DEFAULT_WIKI_TOML = """\
-[models]
-fast = "gemma4:e4b"
-heavy = "qwen2.5:14b"
-# Optional: set heavy = fast to use a single model for everything
 
-[ollama]
-url = "http://localhost:11434"
-timeout = 600
-fast_ctx = 8192
-heavy_ctx = 16384
+def _toml_quote(value: str) -> str:
+    """Return a safely quoted TOML basic string, escaping backslashes, quotes, and control chars."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
 
-[pipeline]
-auto_approve = false
-auto_commit = true
-watch_debounce = 3.0
-max_concepts_per_source = 8
-"""
+
+def default_wiki_toml(
+    fast_model: str = "gemma4:e4b",
+    heavy_model: str = "qwen2.5:14b",
+    ollama_url: str = "http://localhost:11434",
+) -> str:
+    """Generate wiki.toml content, optionally pre-filled from global config."""
+    return (
+        f"[models]\n"
+        f"fast = {_toml_quote(fast_model)}\n"
+        f"heavy = {_toml_quote(heavy_model)}\n"
+        f"# Optional: set heavy = fast to use a single model for everything\n\n"
+        f"[ollama]\n"
+        f"url = {_toml_quote(ollama_url)}\n"
+        f"timeout = 600\n"
+        f"fast_ctx = 8192\n"
+        f"heavy_ctx = 16384\n\n"
+        f"[pipeline]\n"
+        f"auto_approve = false\n"
+        f"auto_commit = true\n"
+        f"watch_debounce = 3.0\n"
+        f"max_concepts_per_source = 8\n"
+    )
 
 
 class ModelsConfig(BaseModel):

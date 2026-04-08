@@ -19,7 +19,7 @@ The key insight: treat your notes as **source material**, not as the final artif
 ```
 You write raw notes  →  LLM extracts concepts  →  Wiki articles created/updated
      raw/                    (automatic)                    wiki/
-  quantum.md          "Qubit", "Superposition"       Qubit.md  ←──┐
+  quantum.md          "Qubit", "Superposition"       Qubit.md   ←──┐
   ml-basics.md        "Neural Network", "SGD"    Superposition.md  │
   physics.md          "Qubit" (again!)           Neural Network.md │
                                                       ↑  linked via [[wikilinks]]
@@ -39,7 +39,7 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
-- **Offline test suite** — all 117 tests run without Ollama
+- **Offline test suite** — all 139 tests run without Ollama
 
 ---
 
@@ -47,35 +47,61 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 
 ### 1. Install
 
-```bash
-pip install obsidian-llm-wiki
-```
-
-Or with [uv](https://docs.astral.sh/uv/) (recommended):
+**From source** (clone and install with one command):
 
 ```bash
-uv tool install obsidian-llm-wiki
+git clone https://github.com/kytmanov/obsidian-llm-wiki
+cd obsidian-llm-wiki
+python install.py
 ```
+
+`install.py` detects `uv` or falls back to `pip`, verifies the install, and tells you to run the next step.
 
 ### 2. Install and start Ollama
 
 ```bash
 # Install Ollama: https://ollama.com/download
-ollama pull gemma3:4b       # fast model — analysis and routing
+ollama pull gemma4:e4b      # fast model — analysis and routing
 ollama pull qwen2.5:14b     # heavy model — article writing (optional, 7B+ recommended)
 ```
 
-> **Minimal setup:** set both `fast` and `heavy` to `gemma3:4b` in `wiki.toml` to use a single model.
+> **Minimal setup:** pull only `gemma4:e4b` and set both `fast` and `heavy` to it in the wizard.
 
-### 3. Set up your vault
+### 3. Run the setup wizard
+
+```bash
+olw setup
+```
+
+An interactive wizard configures your Ollama URL, fast and heavy models, and an optional default vault path. Takes ~30 seconds.
+
+```
+╭──────────────────────────────────────────────────╮
+│      obsidian-llm-wiki  ·  first run setup       │
+╰──────────────────────────────────────────────────╯
+
+  Step 1/4  Ollama connection
+    Trying http://localhost:11434 …  ✓ connected
+
+  Step 2/4  Fast model (analysis · 3–8B recommended)
+    #  Model           Size
+    1  gemma4:e4b      9.6 GB
+    2  phi4-mini       2.5 GB
+    Select (number or name) [1]: _
+  ...
+```
+
+Settings are saved to `~/.config/olw/config.toml` (Mac/Linux) or `%APPDATA%\olw\config.toml` (Windows).
+
+### 4. Set up your vault
 
 ```bash
 olw init ~/my-wiki
 ```
 
-This creates the folder structure and a `wiki.toml` config file.
+This creates the folder structure and a `wiki.toml` pre-filled with your setup wizard choices.
 
-### 4. Add some notes
+### 5. Add some notes
 
 Drop any `.md` files into `~/my-wiki/raw/`. Web clips, book notes, meeting notes, anything.
 
@@ -86,25 +112,27 @@ Drop any `.md` files into `~/my-wiki/raw/`. Web clips, book notes, meeting notes
   physics-lecture.md
 ```
 
-### 5. Run the pipeline
+### 6. Run the pipeline
 
 ```bash
 # Analyze notes, extract concepts
-olw ingest --vault ~/my-wiki --all
+olw ingest --all
 
 # Generate wiki articles (lands in .drafts/)
-olw compile --vault ~/my-wiki
+olw compile
 
 # Review drafts, then publish
-olw approve --vault ~/my-wiki --all
+olw approve --all
 ```
+
+If you set a default vault in `olw setup`, the `--vault` flag is optional. Otherwise use `--vault ~/my-wiki` or `export OLW_VAULT=~/my-wiki`.
 
 Open `~/my-wiki` as an Obsidian vault. The graph view shows your connected wiki.
 
-### 6. Keep it running (optional)
+### 7. Keep it running (optional)
 
 ```bash
-olw watch --vault ~/my-wiki
+olw watch
 # Drop a file in raw/ → ingest + compile happen automatically
 ```
 
@@ -173,13 +201,15 @@ my-wiki/
 
 ```toml
 [models]
-fast = "gemma3:4b"        # extraction, analysis, query routing
+fast = "gemma4:e4b"        # extraction, analysis, query routing
 heavy = "qwen2.5:14b"     # article generation, Q&A answers
 # Single-model: set heavy = fast
 
 [ollama]
 url = "http://localhost:11434"   # supports LAN: http://192.168.1.x:11434
-timeout = 900
+timeout = 600
+fast_ctx = 8192                  # context window for fast model (tokens)
+heavy_ctx = 16384                # context window for heavy model (tokens)
 
 [pipeline]
 auto_approve = false             # true = skip draft review
@@ -188,12 +218,28 @@ max_concepts_per_source = 8      # limit concepts extracted per note
 watch_debounce = 3.0             # seconds after last file event before processing
 ```
 
+### Tuning context windows
+
+`heavy_ctx` controls how much source material the heavy model reads when writing articles (`source budget = heavy_ctx / 2` chars) and how long the generated article can be. The default of `16384` is sized for 7–14B models. **If you use a model with a large context window (e.g. `gemma4:e4b` supports 128K), increase it.**
+
+| RAM available | Recommended `heavy_ctx` | Source budget | Notes |
+|---|---|---|---|
+| 8 GB | `8192` | ~4K chars | Minimum; short articles |
+| 16 GB | `16384` | ~8K chars | Default |
+| 16 GB+ | `32768` | ~16K chars | Recommended for `gemma4:e4b` |
+| 32 GB+ | `65536` | ~32K chars | Rich multi-source articles |
+
+`fast_ctx` (used for ingest/routing) rarely needs changing — single notes fit comfortably in 8K.
+
+After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to regenerate articles with the new context budget.
+
 ---
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
+| `olw setup` | Interactive setup wizard (first run) |
 | `olw init PATH` | Create vault structure and git repo |
 | `olw init PATH --existing` | Adopt an existing Obsidian vault |
 | `olw doctor` | Check Ollama, models, vault structure |
@@ -223,7 +269,7 @@ All commands accept `--vault PATH` or the env var `OLW_VAULT`.
 
 | Role | Recommended | Minimum |
 |------|-------------|---------|
-| Fast (analysis + routing) | `gemma3:4b`, `llama3.2:3b` | any 3B with JSON format |
+| Fast (analysis + routing) | `gemma4:e4b`, `llama3.2:3b` | any 3B with JSON format |
 | Heavy (article writing) | `qwen2.5:14b`, `llama3.1:8b` | any 7B |
 | Single model (everything) | `llama3.1:8b`, `mistral:7b` | any 7B |
 
@@ -255,6 +301,67 @@ For the full end-to-end smoke test (requires a running Ollama instance):
 
 ```bash
 OLLAMA_URL=http://localhost:11434 bash scripts/smoke_test.sh
+```
+
+---
+
+## FAQ
+
+**Q: I ran `olw compile` but nothing appears in Obsidian.**
+
+Drafts land in `wiki/.drafts/` — Obsidian hides dotfolders by default so they won't show in the graph yet. Run:
+
+```bash
+olw approve --all
+```
+
+Articles move to `wiki/` and become fully visible. Open `~/my-wiki` as an Obsidian vault (**File → Open vault**) if you haven't already.
+
+---
+
+**Q: Compile says "2 article(s) failed: Methodology, Sprints" — what do I do?**
+
+Failed concepts are not recorded in the DB, so simply re-running compile retries them automatically:
+
+```bash
+olw compile
+```
+
+If the same concepts keep failing, the LLM is likely struggling with JSON output for those specific titles. Try:
+
+```bash
+# More room for the model to produce clean output
+# Edit wiki.toml: heavy_ctx = 32768, then:
+olw compile
+```
+
+See [Tuning context windows](#tuning-context-windows) for the `heavy_ctx` table.
+
+---
+
+**Q: I see `structured_output attempt N failed` messages during compile — is something broken?**
+
+No. This is the built-in 3-tier retry system working as designed. The model occasionally echoes the JSON schema structure instead of flat output — the retry corrects it. Articles are still generated. These messages are debug-level noise; a real failure surfaces as `article(s) failed: ...` in the summary line.
+
+---
+
+**Q: `olw ingest --all && olw compile` gives "Missing option '--vault'".**
+
+Run `olw setup` first to configure a default vault, or pass it explicitly:
+
+```bash
+export OLW_VAULT=~/my-wiki
+olw ingest --all && olw compile
+```
+
+---
+
+**Q: I changed models in `olw setup` but `olw compile` still uses the old model.**
+
+Re-run `olw init` on your vault — it now syncs the model settings from your global config into `wiki.toml`:
+
+```bash
+olw init ~/my-wiki
 ```
 
 ---

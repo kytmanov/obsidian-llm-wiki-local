@@ -52,6 +52,22 @@ class OllamaClient:
         resp.raise_for_status()
         return [m["name"] for m in resp.json().get("models", [])]
 
+    def list_models_detailed(self) -> list[dict]:
+        """Return list of {'name': str, 'size_gb': str} for the setup wizard table."""
+        try:
+            resp = self._client.get(f"{self.base_url}/api/tags")
+            resp.raise_for_status()
+            models = resp.json().get("models", [])
+            return [
+                {
+                    "name": m["name"],
+                    "size_gb": f"{m.get('size', 0) / 1e9:.1f} GB",
+                }
+                for m in models
+            ]
+        except (httpx.HTTPError, KeyError, ValueError):
+            return []
+
     def pull_model(self, model: str) -> None:
         """Pull model if not present. Streams progress to stderr."""
         import sys

@@ -21,7 +21,9 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+from rich.prompt import Prompt
 from rich.table import Table
 
 console = Console()
@@ -33,9 +35,17 @@ err_console = Console(stderr=True, style="bold red")
 
 def _load_config(vault_str: str | None, **kwargs):
     from .config import Config
+    from .global_config import load_global_config
+
+    if vault_str is None:
+        gcfg = load_global_config()
+        vault_str = gcfg.vault if gcfg and gcfg.vault else None
 
     if not vault_str:
-        click.echo("Error: --vault required (or set OLW_VAULT env var)", err=True)
+        click.echo(
+            "Error: no vault specified. Use --vault, set OLW_VAULT, or run `olw setup`.",
+            err=True,
+        )
         sys.exit(1)
     return Config.from_vault(Path(vault_str), **kwargs)
 
@@ -65,7 +75,10 @@ def _load_deps(config):
 @click.group()
 @click.version_option(package_name="obsidian-llm-wiki")
 def cli():
-    """obsidian-llm-wiki (olw) — 100% local Obsidian → wiki pipeline."""
+    """obsidian-llm-wiki (olw) — 100% local Obsidian → wiki pipeline.
+
+    Run `olw setup` for interactive configuration.
+    """
 
 
 # ── init ──────────────────────────────────────────────────────────────────────
@@ -77,7 +90,6 @@ def cli():
 @click.option("--non-interactive", is_flag=True)
 def init(vault_path: str, existing: bool, non_interactive: bool):
     """Create vault structure and initialise olw."""
-    from .config import DEFAULT_WIKI_TOML
     from .git_ops import git_init
 
     vault = Path(vault_path).expanduser().resolve()
@@ -88,10 +100,22 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
     else:
         _init_fresh(vault)
 
-    # Write wiki.toml
+    # Write or sync wiki.toml from global config
     toml_path = vault / "wiki.toml"
+    from .config import default_wiki_toml
+    from .global_config import load_global_config
+
+    gcfg = load_global_config()
+    fast = gcfg.fast_model if gcfg and gcfg.fast_model else "gemma4:e4b"
+    heavy = gcfg.heavy_model if gcfg and gcfg.heavy_model else "qwen2.5:14b"
+    ollama_url = gcfg.ollama_url if gcfg and gcfg.ollama_url else "http://localhost:11434"
+
     if not toml_path.exists():
-        toml_path.write_text(DEFAULT_WIKI_TOML)
+        toml_path.write_text(default_wiki_toml(fast, heavy, ollama_url))
+    else:
+        # Existing vault: patch model/URL fields from global config so that
+        # olw setup changes are reflected without overwriting pipeline settings.
+        _sync_wiki_toml_models(toml_path, fast, heavy, ollama_url)
 
     # Init git
     git_init(vault)
@@ -107,6 +131,35 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
     console.print("  2. Run [bold]olw ingest --all[/bold]")
     console.print("  3. Run [bold]olw compile[/bold]")
     console.print("  4. Run [bold]olw approve --all[/bold]")
+
+
+def _sync_wiki_toml_models(toml_path: Path, fast: str, heavy: str, ollama_url: str) -> None:
+    """Patch fast/heavy model and Ollama URL in an existing wiki.toml in-place.
+
+    Preserves all other settings (pipeline, rag, etc.) so user customisations
+    are not lost. Only updates fields that come from global config.
+    """
+    import re
+
+    text = toml_path.read_text(encoding="utf-8")
+    original = text
+
+    def _replace_value(t: str, key: str, value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return re.sub(
+            rf'^({re.escape(key)}\s*=\s*)".+"',
+            rf'\g<1>"{escaped}"',
+            t,
+            flags=re.MULTILINE,
+        )
+
+    text = _replace_value(text, "fast", fast)
+    text = _replace_value(text, "heavy", heavy)
+    text = _replace_value(text, "url", ollama_url)
+
+    if text != original:
+        toml_path.write_text(text, encoding="utf-8")
+        console.print(f"[dim]wiki.toml updated: fast={fast}, heavy={heavy}, url={ollama_url}[/dim]")
 
 
 def _init_fresh(vault: Path) -> None:
@@ -160,11 +213,194 @@ def _write_index(vault: Path) -> None:
         )
 
 
+# ── setup ─────────────────────────────────────────────────────────────────────
+
+
+def _pick_model(
+    console: Console,
+    client,
+    step_label: str,
+    description: str,
+    default_fallback: str,
+    connected: bool,
+) -> str:
+    """Interactive model selector — shows table if models available, else free-text."""
+    console.print()
+    console.print(f"  [bold]{step_label}[/bold]  {description}")
+
+    models: list[dict] = []
+    if connected:
+        models = client.list_models_detailed()
+
+    if models:
+        table = Table(show_header=True, box=None, padding=(0, 2))
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Model")
+        table.add_column("Size", style="dim")
+        for i, m in enumerate(models, 1):
+            table.add_row(str(i), m["name"], m["size_gb"])
+        console.print(table)
+        console.print()
+        raw = Prompt.ask("    Select (number or name)", default="1", console=console).strip()
+        if not raw:
+            return default_fallback
+        if raw.isdigit():
+            idx = int(raw) - 1
+            if 0 <= idx < len(models):
+                return models[idx]["name"]
+            console.print(f"    [yellow]Invalid number, using {default_fallback}[/yellow]")
+            return default_fallback
+        return raw
+    else:
+        if connected:
+            console.print(
+                "    [yellow]No models found.[/yellow] "
+                "Pull one first: [bold]ollama pull gemma4:e4b[/bold]"
+            )
+        console.print("    (e.g. gemma4:e4b, llama3.2:3b, qwen2.5:14b)")
+        raw = Prompt.ask("    Model name", default=default_fallback, console=console).strip()
+        return raw if raw else default_fallback
+
+
+@cli.command()
+@click.option("--non-interactive", is_flag=True, help="Print current config and exit")
+@click.option("--reset", is_flag=True, help="Clear saved config and re-run wizard")
+def setup(non_interactive: bool, reset: bool):
+    """Interactive wizard: configure Ollama URL, models, and default vault."""
+    from .global_config import GlobalConfig, load_global_config, save_global_config
+    from .ollama_client import OllamaClient
+
+    # ── non-interactive: show current config ──────────────────────────────────
+    if non_interactive:
+        gcfg = load_global_config()
+        if not gcfg:
+            console.print(
+                "[dim]No global config found. Run [bold]olw setup[/bold] to configure.[/dim]"
+            )
+            return
+        table = Table(title="Global config", show_header=False, box=None, padding=(0, 2))
+        table.add_column("Key", style="bold")
+        table.add_column("Value")
+        table.add_row("Fast model", gcfg.fast_model or "[dim]not set[/dim]")
+        table.add_row("Heavy model", gcfg.heavy_model or "[dim]not set[/dim]")
+        table.add_row("Ollama URL", gcfg.ollama_url or "[dim]not set[/dim]")
+        table.add_row("Default vault", gcfg.vault or "[dim]not set[/dim]")
+        console.print(table)
+        return
+
+    # ── reset: wipe config before wizard ─────────────────────────────────────
+    if reset:
+        save_global_config(GlobalConfig())
+        console.print("[dim]Config cleared.[/dim]")
+
+    try:
+        # ── Header ───────────────────────────────────────────────────────────
+        console.print()
+        console.print(
+            Panel(
+                "[bold]obsidian-llm-wiki[/bold]  ·  first run setup",
+                expand=False,
+                border_style="blue",
+                padding=(0, 4),
+            )
+        )
+        console.print()
+
+        # ── Step 1/4 — Ollama connection ──────────────────────────────────────
+        DEFAULT_URL = "http://localhost:11434"
+        console.print("  [bold]Step 1/4[/bold]  Ollama connection")
+
+        client = OllamaClient(base_url=DEFAULT_URL, timeout=5)
+        connected = client.healthcheck()
+
+        if connected:
+            console.print(f"    Trying {DEFAULT_URL} …  [green]✓ connected[/green]")
+        else:
+            console.print(f"    [yellow]Warning:[/yellow] Could not reach {DEFAULT_URL}")
+            console.print(
+                "    You can still configure manually — run [bold]olw doctor[/bold] later."
+            )
+
+        ollama_url = Prompt.ask("    Ollama URL", default=DEFAULT_URL, console=console)
+
+        if ollama_url != DEFAULT_URL:
+            client = OllamaClient(base_url=ollama_url, timeout=5)
+            connected = client.healthcheck()
+            if not connected:
+                console.print(
+                    f"    [yellow]Warning:[/yellow] Cannot reach {ollama_url} — continuing anyway."
+                )
+
+        # ── Step 2/4 — Fast model ─────────────────────────────────────────────
+        fast_model = _pick_model(
+            console=console,
+            client=client,
+            step_label="Step 2/4",
+            description="Fast model  [dim](analysis & routing · 3–8B recommended)[/dim]",
+            default_fallback="gemma4:e4b",
+            connected=connected,
+        )
+
+        # ── Step 3/4 — Heavy model ────────────────────────────────────────────
+        heavy_model = _pick_model(
+            console=console,
+            client=client,
+            step_label="Step 3/4",
+            description="Heavy model  [dim](article writing · 7–14B recommended)[/dim]",
+            default_fallback="qwen2.5:14b",
+            connected=connected,
+        )
+
+        # ── Step 4/4 — Default vault ──────────────────────────────────────────
+        console.print()
+        console.print(
+            "  [bold]Step 4/4[/bold]  Default vault path  [dim](press Enter to skip)[/dim]"
+        )
+        vault_input = Prompt.ask("    Vault path", default="", console=console)
+        vault_path: str | None = None
+        if vault_input.strip():
+            vault_path = str(Path(vault_input).expanduser().resolve())
+
+        # ── Save ──────────────────────────────────────────────────────────────
+        cfg = GlobalConfig(
+            vault=vault_path,
+            ollama_url=ollama_url,
+            fast_model=fast_model,
+            heavy_model=heavy_model,
+        )
+        save_global_config(cfg)
+
+        # ── Summary panel ─────────────────────────────────────────────────────
+        init_target = vault_path or "~/my-wiki"
+        summary_lines = [
+            "[green]✓[/green]  Setup complete\n",
+            f"  Fast model:   [bold]{fast_model}[/bold]",
+            f"  Heavy model:  [bold]{heavy_model}[/bold]",
+            f"  Ollama:       {ollama_url}",
+        ]
+        if vault_path:
+            summary_lines.append(f"  Vault:        {vault_path}")
+        summary_lines += [
+            "",
+            "  Next steps:",
+            f"    [bold]olw init {init_target}[/bold]",
+            "    [bold]olw ingest --all && olw compile[/bold]",
+        ]
+        console.print()
+        console.print(
+            Panel("\n".join(summary_lines), border_style="green", expand=False, padding=(0, 2))
+        )
+
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n[yellow]Setup interrupted.[/yellow]")
+        sys.exit(1)
+
+
 # ── ingest ────────────────────────────────────────────────────────────────────
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--all", "ingest_all", is_flag=True, help="Ingest all files in raw/")
 @click.option("--force", is_flag=True, help="Re-ingest already-processed notes")
 @click.argument("paths", nargs=-1, type=click.Path(exists=True))
@@ -251,7 +487,7 @@ def ingest(vault_str, ingest_all, force, paths):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--dry-run", is_flag=True, help="Show plan, write nothing")
 @click.option("--auto-approve", is_flag=True, help="Publish immediately (skip draft review)")
 @click.option("--force", is_flag=True, help="Recompile even manually-edited articles")
@@ -367,7 +603,7 @@ def compile(vault_str, dry_run, auto_approve, force, legacy, retry_failed):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--all", "approve_all", is_flag=True)
 @click.argument("files", nargs=-1, type=click.Path())
 def approve(vault_str, approve_all, files):
@@ -410,7 +646,7 @@ def approve(vault_str, approve_all, files):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--feedback", default="", help="Reason for rejection (logged)")
 @click.argument("file", type=click.Path(exists=True))
 def reject(vault_str, feedback, file):
@@ -427,7 +663,7 @@ def reject(vault_str, feedback, file):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--failed", "show_failed", is_flag=True, help="List failed notes with error messages")
 def status(vault_str, show_failed):
     """Show vault health, pending drafts, and pipeline stats."""
@@ -475,7 +711,7 @@ def status(vault_str, show_failed):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--steps", default=1, show_default=True)
 def undo(vault_str, steps):
     """Revert last N [olw] auto-commits (uses git revert — safe)."""
@@ -495,7 +731,7 @@ def undo(vault_str, steps):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
 def clean(vault_str, yes):
     """Clear state DB, wiki/, and drafts — raw/ notes are kept.
@@ -540,7 +776,7 @@ def clean(vault_str, yes):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 def doctor(vault_str):
     """Check Ollama connection, model availability, and vault health."""
     from .ollama_client import OllamaClient, OllamaError
@@ -623,7 +859,7 @@ def doctor(vault_str):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--save", is_flag=True, help="Save answer to wiki/queries/")
 @click.argument("question")
 def query(vault_str, question, save):
@@ -650,7 +886,7 @@ def query(vault_str, question, save):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--fix", is_flag=True, help="Auto-fix simple issues (missing frontmatter fields)")
 def lint(vault_str, fix):
     """Check wiki health: orphans, broken links, missing frontmatter, low confidence."""
@@ -693,7 +929,7 @@ def lint(vault_str, fix):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option(
     "--auto-approve", is_flag=True, help="Publish drafts immediately without manual review"
 )
