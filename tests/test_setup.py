@@ -322,3 +322,34 @@ def test_init_defaults_without_global_config(runner: CliRunner, cfg_dir: Path, t
     content = (vault / "wiki.toml").read_text()
     assert "gemma4:e4b" in content
     assert "qwen2.5:14b" in content
+
+
+def test_init_syncs_models_into_existing_wiki_toml(
+    runner: CliRunner, cfg_dir: Path, tmp_path: Path
+):
+    """olw init on an existing vault should patch models from global config."""
+    vault = tmp_path / "existing-vault"
+    vault.mkdir()
+    # Simulate old wiki.toml with stale heavy model
+    old_toml = (
+        '[models]\nfast = "gemma4:e4b"\nheavy = "qwen2.5:14b"\n\n'
+        '[ollama]\nurl = "http://localhost:11434"\ntimeout = 600\n\n'
+        "[pipeline]\nauto_approve = false\nauto_commit = true\n"
+    )
+    (vault / "wiki.toml").write_text(old_toml)
+
+    save_global_config(
+        GlobalConfig(
+            fast_model="gemma4:e4b",
+            heavy_model="gemma4:e4b",
+            ollama_url="http://localhost:11434",
+        )
+    )
+    result = runner.invoke(cli, ["init", str(vault)])
+    assert result.exit_code == 0
+
+    content = (vault / "wiki.toml").read_text()
+    # heavy should now be gemma4:e4b (patched from global config)
+    assert 'heavy = "gemma4:e4b"' in content
+    # pipeline settings must be preserved
+    assert "auto_approve = false" in content

@@ -100,22 +100,22 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
     else:
         _init_fresh(vault)
 
-    # Write wiki.toml — pre-fill from global config if available
+    # Write or sync wiki.toml from global config
     toml_path = vault / "wiki.toml"
-    if not toml_path.exists():
-        from .config import default_wiki_toml
-        from .global_config import load_global_config
+    from .config import default_wiki_toml
+    from .global_config import load_global_config
 
-        gcfg = load_global_config()
-        toml_path.write_text(
-            default_wiki_toml(
-                fast_model=gcfg.fast_model if gcfg and gcfg.fast_model else "gemma4:e4b",
-                heavy_model=gcfg.heavy_model if gcfg and gcfg.heavy_model else "qwen2.5:14b",
-                ollama_url=gcfg.ollama_url
-                if gcfg and gcfg.ollama_url
-                else "http://localhost:11434",
-            )
-        )
+    gcfg = load_global_config()
+    fast = gcfg.fast_model if gcfg and gcfg.fast_model else "gemma4:e4b"
+    heavy = gcfg.heavy_model if gcfg and gcfg.heavy_model else "qwen2.5:14b"
+    ollama_url = gcfg.ollama_url if gcfg and gcfg.ollama_url else "http://localhost:11434"
+
+    if not toml_path.exists():
+        toml_path.write_text(default_wiki_toml(fast, heavy, ollama_url))
+    else:
+        # Existing vault: patch model/URL fields from global config so that
+        # olw setup changes are reflected without overwriting pipeline settings.
+        _sync_wiki_toml_models(toml_path, fast, heavy, ollama_url)
 
     # Init git
     git_init(vault)
@@ -131,6 +131,35 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
     console.print("  2. Run [bold]olw ingest --all[/bold]")
     console.print("  3. Run [bold]olw compile[/bold]")
     console.print("  4. Run [bold]olw approve --all[/bold]")
+
+
+def _sync_wiki_toml_models(toml_path: Path, fast: str, heavy: str, ollama_url: str) -> None:
+    """Patch fast/heavy model and Ollama URL in an existing wiki.toml in-place.
+
+    Preserves all other settings (pipeline, rag, etc.) so user customisations
+    are not lost. Only updates fields that come from global config.
+    """
+    import re
+
+    text = toml_path.read_text(encoding="utf-8")
+    original = text
+
+    def _replace_value(t: str, key: str, value: str) -> str:
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return re.sub(
+            rf'^({re.escape(key)}\s*=\s*)".+"',
+            rf'\g<1>"{escaped}"',
+            t,
+            flags=re.MULTILINE,
+        )
+
+    text = _replace_value(text, "fast", fast)
+    text = _replace_value(text, "heavy", heavy)
+    text = _replace_value(text, "url", ollama_url)
+
+    if text != original:
+        toml_path.write_text(text, encoding="utf-8")
+        console.print(f"[dim]wiki.toml updated: fast={fast}, heavy={heavy}, url={ollama_url}[/dim]")
 
 
 def _init_fresh(vault: Path) -> None:
