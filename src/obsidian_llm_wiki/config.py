@@ -5,29 +5,16 @@ from pathlib import Path
 
 from pydantic import BaseModel, field_validator
 
-DEFAULT_WIKI_TOML = """\
-[models]
-fast = "gemma4:e4b"
-heavy = "qwen2.5:14b"
-# Optional: set heavy = fast to use a single model for everything
-
-[ollama]
-url = "http://localhost:11434"
-timeout = 600
-fast_ctx = 8192
-heavy_ctx = 16384
-
-[pipeline]
-auto_approve = false
-auto_commit = true
-watch_debounce = 3.0
-max_concepts_per_source = 8
-"""
-
 
 def _toml_quote(value: str) -> str:
-    """Return a safely quoted TOML basic string, escaping backslashes and double quotes."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    """Return a safely quoted TOML basic string, escaping backslashes, quotes, and control chars."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
     return f'"{escaped}"'
 
 

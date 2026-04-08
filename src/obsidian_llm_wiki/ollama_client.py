@@ -65,7 +65,7 @@ class OllamaClient:
                 }
                 for m in models
             ]
-        except Exception:
+        except (httpx.HTTPError, KeyError, ValueError):
             return []
 
     def pull_model(self, model: str) -> None:

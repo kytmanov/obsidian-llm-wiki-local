@@ -37,7 +37,7 @@ def _load_config(vault_str: str | None, **kwargs):
     from .config import Config
     from .global_config import load_global_config
 
-    if not vault_str:
+    if vault_str is None:
         gcfg = load_global_config()
         vault_str = gcfg.vault if gcfg and gcfg.vault else None
 
@@ -241,7 +241,9 @@ def _pick_model(
             table.add_row(str(i), m["name"], m["size_gb"])
         console.print(table)
         console.print()
-        raw = Prompt.ask("    Select (number or name)", default="1", console=console)
+        raw = Prompt.ask("    Select (number or name)", default="1", console=console).strip()
+        if not raw:
+            return default_fallback
         if raw.isdigit():
             idx = int(raw) - 1
             if 0 <= idx < len(models):
@@ -256,7 +258,8 @@ def _pick_model(
                 "Pull one first: [bold]ollama pull gemma4:e4b[/bold]"
             )
         console.print("    (e.g. gemma4:e4b, llama3.2:3b, qwen2.5:14b)")
-        return Prompt.ask("    Model name", default=default_fallback, console=console)
+        raw = Prompt.ask("    Model name", default=default_fallback, console=console).strip()
+        return raw if raw else default_fallback
 
 
 @cli.command()

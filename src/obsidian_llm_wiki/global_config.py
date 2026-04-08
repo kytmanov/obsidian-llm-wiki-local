@@ -63,6 +63,12 @@ def save_global_config(cfg: GlobalConfig) -> None:
 
 
 def _toml_str(value: str) -> str:
-    """Minimal safe TOML string quoting — escapes backslashes and double quotes."""
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    """Minimal safe TOML string quoting — escapes backslashes, double quotes, and control chars."""
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
     return f'"{escaped}"'

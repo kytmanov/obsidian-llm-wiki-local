@@ -58,6 +58,21 @@ def test_toml_str_combined():
     assert result == '"C:\\\\path\\\\to\\\\my \\"wiki\\""'
 
 
+def test_toml_str_escapes_control_chars():
+    assert _toml_str("line1\nline2") == '"line1\\nline2"'
+    assert _toml_str("col1\tcol2") == '"col1\\tcol2"'
+    assert _toml_str("cr\rhere") == '"cr\\rhere"'
+
+
+def test_toml_str_control_chars_produce_valid_toml(cfg_dir: Path):
+    """Paths with control chars must still round-trip through save/load."""
+    cfg = GlobalConfig(fast_model="model\twith\ttabs")
+    save_global_config(cfg)
+    loaded = load_global_config()
+    assert loaded is not None
+    assert loaded.fast_model == "model\twith\ttabs"
+
+
 # ── save / load round-trip ────────────────────────────────────────────────────
 
 
@@ -264,6 +279,30 @@ def test_setup_wizard_model_number_selection(runner: CliRunner, cfg_dir: Path):
     assert cfg is not None
     assert cfg.fast_model == "gemma4:e4b"
     assert cfg.heavy_model == "qwen2.5:14b"
+
+
+def test_setup_wizard_whitespace_input_uses_default(runner: CliRunner, cfg_dir: Path):
+    """Spaces-only model input should fall back to default, not save a blank model name."""
+    with patch("obsidian_llm_wiki.ollama_client.OllamaClient") as MockClient:
+        instance = MagicMock()
+        instance.healthcheck.return_value = False
+        instance.list_models_detailed.return_value = []
+        MockClient.return_value = instance
+
+        # Send spaces for fast and heavy model prompts (no table, free-text path)
+        result = runner.invoke(
+            cli,
+            ["setup"],
+            input="\n   \n   \n\n",  # URL default, spaces for fast, spaces for heavy, no vault
+            catch_exceptions=False,
+        )
+
+    assert result.exit_code == 0
+    cfg = load_global_config()
+    assert cfg is not None
+    # Should have fallen back to defaults, not saved empty/whitespace strings
+    assert cfg.fast_model and cfg.fast_model.strip() != ""
+    assert cfg.heavy_model and cfg.heavy_model.strip() != ""
 
 
 def test_setup_wizard_with_vault(runner: CliRunner, cfg_dir: Path, tmp_path: Path):
