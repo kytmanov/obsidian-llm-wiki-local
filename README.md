@@ -216,6 +216,8 @@ heavy = "qwen2.5:14b"     # article generation, Q&A answers
 [ollama]
 url = "http://localhost:11434"   # supports LAN: http://192.168.1.x:11434
 timeout = 600
+fast_ctx = 8192                  # context window for fast model (tokens)
+heavy_ctx = 16384                # context window for heavy model (tokens)
 
 [pipeline]
 auto_approve = false             # true = skip draft review
@@ -223,6 +225,21 @@ auto_commit = true               # git commit after each operation
 max_concepts_per_source = 8      # limit concepts extracted per note
 watch_debounce = 3.0             # seconds after last file event before processing
 ```
+
+### Tuning context windows
+
+`heavy_ctx` controls how much source material the heavy model reads when writing articles (`source budget = heavy_ctx / 2` chars) and how long the generated article can be. The default of `16384` is sized for 7–14B models. **If you use a model with a large context window (e.g. `gemma4:e4b` supports 128K), increase it.**
+
+| RAM available | Recommended `heavy_ctx` | Source budget | Notes |
+|---|---|---|---|
+| 8 GB | `8192` | ~4K chars | Minimum; short articles |
+| 16 GB | `16384` | ~8K chars | Default |
+| 16 GB+ | `32768` | ~16K chars | Recommended for `gemma4:e4b` |
+| 32 GB+ | `65536` | ~32K chars | Rich multi-source articles |
+
+`fast_ctx` (used for ingest/routing) rarely needs changing — single notes fit comfortably in 8K.
+
+After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to regenerate articles with the new context budget.
 
 ---
 
