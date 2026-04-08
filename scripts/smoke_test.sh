@@ -278,7 +278,7 @@ import sys, frontmatter
 frontmatter.load(sys.argv[1])
 PYEOF
 )
-    check "draft YAML is parseable" "test -z '$DRAFT_YAML_OK' || true"
+    check "draft YAML is parseable" "test -z \"$DRAFT_YAML_OK\""
     DRAFT_TAG_BAD=$(uv run --project "$REPO_DIR" python - "$FIRST_DRAFT" 2>&1 <<'PYEOF'
 import sys, frontmatter
 m = frontmatter.load(sys.argv[1])
@@ -378,7 +378,7 @@ INGEST3_OUT=$($OLW compile --dry-run 2>&1)
 echo "$INGEST3_OUT"
 _TMP=$(mktemp); echo "$INGEST3_OUT" > "$_TMP"
 check "dry run shows only new concepts" \
-    "grep -qiE 'concept|compile|deep|neural|no concept' '$_TMP'"
+    "grep -qiE '\1' \"\2\""
 rm -f "$_TMP"
 
 # ── Manual edit protection ────────────────────────────────────────────────────
@@ -407,7 +407,7 @@ cp "$VAULT_DIR/raw/quantum-computing.md" "$VAULT_DIR/raw/quantum-computing-copy.
 
 INGEST_OUT=$($OLW ingest "$VAULT_DIR/raw/quantum-computing-copy.md" 2>&1 || true)
 _TMP=$(mktemp); echo "$INGEST_OUT" > "$_TMP"
-check "duplicate skipped" "grep -qiE 'skip|duplicate|already' '$_TMP'"
+check "duplicate skipped" "grep -qiE '\1' \"\2\""
 rm -f "$_TMP"
 rm -f "$VAULT_DIR/raw/quantum-computing-copy.md"
 
@@ -421,7 +421,7 @@ QUERY_OUT=$($OLW query "What is a qubit?" 2>&1 || true)
 echo "$QUERY_OUT"
 _TMP=$(mktemp); echo "$QUERY_OUT" > "$_TMP"
 check "query returns an answer" \
-    "grep -qiE 'qubit|quantum|superposition|bit' '$_TMP'"
+    "grep -qiE '\1' \"\2\""
 rm -f "$_TMP"
 
 info "Running query with --save..."
@@ -436,7 +436,7 @@ LINT_OUT=$($OLW lint 2>&1 || true)
 echo "$LINT_OUT"
 _TMP=$(mktemp); echo "$LINT_OUT" > "$_TMP"
 check "lint reports health score" \
-    "grep -qiE 'health|score|100|issue' '$_TMP'"
+    "grep -qiE '\1' \"\2\""
 rm -f "$_TMP"
 
 # Lint --fix (should not crash even if no fixable issues)
@@ -461,7 +461,7 @@ PYEOF
 _RETRY_TMP=$(mktemp)
 $OLW compile --retry-failed 2>&1 | tee "$_RETRY_TMP" || true
 check "retry-failed reports failed notes" \
-    "grep -qiE 'retry|failed|not found|re-ingest' '$_RETRY_TMP'"
+    "grep -qiE 'retry|failed|not found|re-ingest' \"$_RETRY_TMP\""
 rm -f "$_RETRY_TMP"
 
 # ── Summary ───────────────────────────────────────────────────────────────────

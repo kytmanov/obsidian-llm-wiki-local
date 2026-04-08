@@ -43,7 +43,6 @@ def update_frontmatter(path: Path, updates: dict[str, Any]) -> None:
 # ── Wikilinks ─────────────────────────────────────────────────────────────────
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]")
-_CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```|`[^`]+`")
 # Images/media embedded via ![[file.ext]] — filter these from link extraction
 _MEDIA_EXTENSIONS = frozenset(
     {
@@ -73,8 +72,6 @@ _MEDIA_EXTENSIONS = frozenset(
         ".docx",
     }
 )
-# Embeds and markdown images — mask before wikilink insertion to protect alt text
-_EMBED_RE = re.compile(r"!\[\[[^\]]+\]\]|!\[[^\]]*\]\([^)]*\)")
 
 
 def extract_wikilinks(content: str) -> list[str]:

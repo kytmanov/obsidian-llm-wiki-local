@@ -124,7 +124,7 @@ def _collect_media_refs(body: str) -> list[str]:
 
 def _create_source_summary_page(
     path: Path,
-    meta: dict,
+    src_meta: dict,
     result: AnalysisResult,
     config: Config,
     body: str = "",
@@ -134,14 +134,14 @@ def _create_source_summary_page(
     Returns the path written.
     """
     # Derive title from note frontmatter > file stem
-    title = meta.get("title") or path.stem.replace("-", " ").title()
+    title = src_meta.get("title") or path.stem.replace("-", " ").title()
     safe_name = sanitize_filename(title)
     out_path = config.sources_dir / f"{safe_name}.md"
     config.sources_dir.mkdir(parents=True, exist_ok=True)
 
     now = datetime.now().strftime("%Y-%m-%d")
     rel_raw = str(path.relative_to(config.vault))
-    source_url = meta.get("source") or meta.get("url") or ""
+    source_url = src_meta.get("source") or src_meta.get("url") or ""
     aliases = generate_aliases(title, "")  # source pages rarely have abbreviations
 
     # Build concept list as [[wikilinks]]
@@ -149,7 +149,7 @@ def _create_source_summary_page(
         f"- [[{sanitize_wikilink_target(c)}]]" for c in result.key_concepts[:8] if c.strip()
     )
 
-    meta: dict = {
+    out_meta: dict = {
         "title": title,
         "aliases": aliases,
         "tags": ["source"],
@@ -159,7 +159,7 @@ def _create_source_summary_page(
         "created": now,
     }
     if source_url:
-        meta["source_url"] = source_url
+        out_meta["source_url"] = source_url
 
     body_parts = [
         f"# {title}",
@@ -182,7 +182,7 @@ def _create_source_summary_page(
     if media_refs:
         body_parts += ["", "## Media"] + media_refs
 
-    write_note(out_path, meta, "\n".join(body_parts))
+    write_note(out_path, out_meta, "\n".join(body_parts))
     log.info("Source summary written: %s", out_path.name)
     return out_path
 

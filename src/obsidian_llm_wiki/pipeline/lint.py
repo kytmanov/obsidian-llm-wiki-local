@@ -156,19 +156,21 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
         # ── Invalid tags ──────────────────────────────────────────────────────
         tags = meta.get("tags", [])
         if isinstance(tags, list):
-            invalid = [t for t in tags if isinstance(t, str) and t != sanitize_tag(t)]
+            non_str = [t for t in tags if not isinstance(t, str)]
+            str_tags = [t for t in tags if isinstance(t, str)]
+            invalid = non_str + [t for t in str_tags if t != sanitize_tag(t)]
             if invalid:
                 issues.append(
                     LintIssue(
                         path=rel_path,
                         issue_type="invalid_tag",
-                        description=f"Invalid tags: {', '.join(invalid)}",
-                        suggestion=f"Sanitized: {', '.join(sanitize_tag(t) for t in invalid)}",
+                        description=f"Invalid tags: {', '.join(str(t) for t in invalid)}",
+                        suggestion=f"Sanitized: {', '.join(sanitize_tag(str(t)) for t in invalid)}",
                         auto_fixable=True,
                     )
                 )
                 if fix:
-                    meta["tags"] = sanitize_tags(tags)
+                    meta["tags"] = sanitize_tags([str(t) for t in tags])
                     write_note(page, meta, body)
 
         # ── Low confidence ────────────────────────────────────────────────────
@@ -254,19 +256,21 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
         # Invalid tags
         tags = meta.get("tags", [])
         if isinstance(tags, list):
-            invalid = [t for t in tags if isinstance(t, str) and t != sanitize_tag(t)]
+            non_str = [t for t in tags if not isinstance(t, str)]
+            str_tags = [t for t in tags if isinstance(t, str)]
+            invalid = non_str + [t for t in str_tags if t != sanitize_tag(t)]
             if invalid:
                 issues.append(
                     LintIssue(
                         path=rel_path,
                         issue_type="invalid_tag",
-                        description=f"Invalid tags: {', '.join(invalid)}",
-                        suggestion=f"Sanitized: {', '.join(sanitize_tag(t) for t in invalid)}",
+                        description=f"Invalid tags: {', '.join(str(t) for t in invalid)}",
+                        suggestion=f"Sanitized: {', '.join(sanitize_tag(str(t)) for t in invalid)}",
                         auto_fixable=True,
                     )
                 )
                 if fix:
-                    meta["tags"] = sanitize_tags(tags)
+                    meta["tags"] = sanitize_tags([str(t) for t in tags])
                     write_note(page, meta, body)
 
         # Missing required frontmatter
@@ -292,8 +296,8 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
                 write_note(page, meta, body)
 
     # ── Health score ──────────────────────────────────────────────────────────
-    # Score based on % of clean pages (multiple issues on one page count once)
-    total = max(len(pages), 1)
+    # Score based on % of clean pages across all checked pages
+    total = max(len(all_pages), 1)
     pages_with_issues = len({iss.path for iss in issues})
     score = round(100.0 * (1 - pages_with_issues / total), 1)
 
