@@ -5,8 +5,6 @@ All tests are offline — no Ollama instance required.
 
 from __future__ import annotations
 
-import os
-import sys
 import tomllib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -22,7 +20,6 @@ from obsidian_llm_wiki.global_config import (
     load_global_config,
     save_global_config,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -57,7 +54,7 @@ def test_toml_str_escapes_quotes():
 
 
 def test_toml_str_combined():
-    result = _toml_str("C:\\path\\to\\my \"wiki\"")
+    result = _toml_str('C:\\path\\to\\my "wiki"')
     assert result == '"C:\\\\path\\\\to\\\\my \\"wiki\\""'
 
 
@@ -145,7 +142,9 @@ def test_load_unknown_fields_returns_none(cfg_dir: Path):
 # ── _load_config fallback ─────────────────────────────────────────────────────
 
 
-def test_load_config_uses_global_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cfg_dir: Path):
+def test_load_config_uses_global_vault(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cfg_dir: Path
+):
     """_load_config(None) should fall back to global config vault."""
     vault = tmp_path / "wiki"
     vault.mkdir()
@@ -203,7 +202,7 @@ def test_setup_reset_clears_config(runner: CliRunner, cfg_dir: Path):
     save_global_config(GlobalConfig(fast_model="old-model"))
 
     # Provide all wizard inputs via stdin so it runs non-interactively in tests
-    # Inputs: URL (enter=default), fast model (enter=default), heavy model (enter=default), vault (enter=skip)
+    # Inputs: URL (default), fast model (default), heavy model (default), vault (skip)
     result = runner.invoke(
         cli,
         ["setup", "--reset"],

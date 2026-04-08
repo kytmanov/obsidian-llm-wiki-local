@@ -17,19 +17,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 # ── Color helpers (stdlib only, no deps) ──────────────────────────────────────
 
 
 def _windows_ansi_enabled() -> bool:
-    """Enable VT processing on Windows 10+ and return True if successful."""
+    """Enable VT processing on Windows 10+ and return True only if SetConsoleMode succeeds."""
     try:
         import ctypes
 
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        stdout = kernel32.GetStdHandle(-11)
         # ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004, combined with default 0x0003
-        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
-        return True
+        return kernel32.SetConsoleMode(stdout, 7) != 0
     except Exception:
         return False
 
@@ -126,7 +125,10 @@ def detect_installer(force_uv: bool, force_pip: bool) -> str:
         return "pip"
     if force_uv:
         if not shutil.which("uv"):
-            die("uv not found. Install from https://docs.astral.sh/uv/ or use: python install.py --pip")
+            die(
+                "uv not found. Install from https://docs.astral.sh/uv/ "
+                "or use: python install.py --pip"
+            )
         return "uv"
     return "uv" if shutil.which("uv") else "pip"
 
@@ -208,7 +210,7 @@ def main() -> None:
     print()
 
     if verify_install():
-        ok(f"olw is on PATH and working")
+        ok("olw is on PATH and working")
         print()
         rule("━")
         print()
