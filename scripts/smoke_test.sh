@@ -380,10 +380,11 @@ conn.execute("""
 conn.commit()
 conn.close()
 PYEOF
-RETRY_OUT=$($OLW compile --retry-failed 2>&1 || true)
-echo "$RETRY_OUT"
+RETRY_TMP=$(mktemp)
+$OLW compile --retry-failed 2>&1 | tee "$RETRY_TMP" || true
 check "retry-failed reports failed notes" \
-    "echo \"$RETRY_OUT\" | grep -qi 'retry\|failed\|not found\|re-ingest'"
+    "grep -qi 'retry\|failed\|not found\|re-ingest' '$RETRY_TMP'"
+rm -f "$RETRY_TMP"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 header "Results"

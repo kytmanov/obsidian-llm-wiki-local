@@ -39,7 +39,7 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
-- **Offline test suite** — all 117 tests run without Ollama
+- **Offline test suite** — all 139 tests run without Ollama
 
 ---
 
@@ -65,7 +65,17 @@ python install.py
 
 `install.py` detects `uv` or falls back to `pip`, verifies the install, and tells you to run the next step.
 
-### 2. Run the setup wizard
+### 2. Install and start Ollama
+
+```bash
+# Install Ollama: https://ollama.com/download
+ollama pull gemma4:e4b      # fast model — analysis and routing
+ollama pull qwen2.5:14b     # heavy model — article writing (optional, 7B+ recommended)
+```
+
+> **Minimal setup:** pull only `gemma4:e4b` and set both `fast` and `heavy` to it in the wizard.
+
+### 3. Run the setup wizard
 
 ```bash
 olw setup
@@ -83,23 +93,13 @@ An interactive wizard configures your Ollama URL, fast and heavy models, and an 
 
   Step 2/4  Fast model (analysis · 3–8B recommended)
     #  Model           Size
-    1  gemma4:e4b      4.3 GB
-    2  llama3.2:3b     2.0 GB
+    1  gemma4:e4b      9.6 GB
+    2  phi4-mini       2.5 GB
     Select (number or name) [1]: _
   ...
 ```
 
 Settings are saved to `~/.config/olw/config.toml` (Mac/Linux) or `%APPDATA%\olw\config.toml` (Windows).
-
-### 3. Install and start Ollama
-
-```bash
-# Install Ollama: https://ollama.com/download
-ollama pull gemma4:e4b      # fast model — analysis and routing
-ollama pull qwen2.5:14b     # heavy model — article writing (optional, 7B+ recommended)
-```
-
-> **Minimal setup:** set both `fast` and `heavy` to `gemma4:e4b` in `wiki.toml` to use a single model.
 
 ### 4. Set up your vault
 
@@ -215,7 +215,7 @@ heavy = "qwen2.5:14b"     # article generation, Q&A answers
 
 [ollama]
 url = "http://localhost:11434"   # supports LAN: http://192.168.1.x:11434
-timeout = 900
+timeout = 600
 
 [pipeline]
 auto_approve = false             # true = skip draft review
