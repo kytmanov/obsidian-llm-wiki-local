@@ -214,6 +214,57 @@ def test_not_stale_when_hash_matches(vault, config, db):
     assert not stale
 
 
+# ── Invalid tags ─────────────────────────────────────────────────────────────
+
+
+def test_invalid_tag_detected(vault, config, db):
+    _write_page(
+        config,
+        "BadTags",
+        meta_override={"tags": ["bad tag", "C++"], "status": "published"},
+    )
+    result = run_lint(config, db)
+    tag_issues = [i for i in result.issues if i.issue_type == "invalid_tag"]
+    assert tag_issues
+    assert "bad tag" in tag_issues[0].description
+
+
+def test_valid_tags_no_issue(vault, config, db):
+    _write_page(
+        config,
+        "GoodTags",
+        meta_override={"tags": ["physics", "machine-learning"], "status": "published"},
+    )
+    result = run_lint(config, db)
+    tag_issues = [i for i in result.issues if i.issue_type == "invalid_tag"]
+    assert not tag_issues
+
+
+def test_fix_mode_sanitizes_tags(vault, config, db):
+    import frontmatter as fm
+
+    path = _write_page(
+        config,
+        "FixTags",
+        meta_override={"tags": ["bad tag", "physics"], "status": "published"},
+    )
+    run_lint(config, db, fix=True)
+    post = fm.load(str(path))
+    assert "bad-tag" in post.metadata["tags"]
+    assert "bad tag" not in post.metadata["tags"]
+
+
+def test_lint_checks_source_pages(vault, config, db):
+    """Tags in wiki/sources/ pages are also checked."""
+    sources_dir = config.wiki_dir / "sources"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    src_path = sources_dir / "MySource.md"
+    write_note(src_path, {"title": "MySource", "tags": ["bad tag"], "status": "published"}, "Body.")
+    result = run_lint(config, db)
+    tag_issues = [i for i in result.issues if i.issue_type == "invalid_tag"]
+    assert any("sources" in i.path for i in tag_issues)
+
+
 # ── Summary string ────────────────────────────────────────────────────────────
 
 

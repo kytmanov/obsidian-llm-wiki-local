@@ -213,9 +213,25 @@ check "source summary pages created" "test '$SOURCE_COUNT' -ge 1"
 
 if [[ "$SOURCE_COUNT" -gt 0 ]]; then
     FIRST_SOURCE=$(find "$VAULT_DIR/wiki/sources" -name "*.md" | sort | head -1)
-    check "source page has YAML frontmatter" "grep -q '^---' \"$FIRST_SOURCE\""
-    check "source page has tags: [source]"   "grep -q 'source' \"$FIRST_SOURCE\""
+    check "source page has YAML frontmatter"  "grep -q '^---' \"$FIRST_SOURCE\""
+    check "source page has tags: [source]"    "grep -q 'source' \"$FIRST_SOURCE\""
     check "source page has concept wikilinks" "grep -q '\[\[' \"$FIRST_SOURCE\""
+
+    SRC_YAML_ERR=$(uv run --project "$REPO_DIR" python - "$FIRST_SOURCE" 2>&1 <<'PYEOF'
+import sys, frontmatter
+frontmatter.load(sys.argv[1])
+PYEOF
+)
+    check "source page YAML is parseable" "test -z \"$SRC_YAML_ERR\""
+
+    SRC_ALIAS_ERR=$(uv run --project "$REPO_DIR" python - "$FIRST_SOURCE" 2>&1 <<'PYEOF'
+import sys, frontmatter
+m = frontmatter.load(sys.argv[1])
+aliases = m.get('aliases', [])
+assert isinstance(aliases, list), f'aliases not a list: {aliases!r}'
+PYEOF
+)
+    check "source page aliases is a list" "test -z \"$SRC_ALIAS_ERR\""
 fi
 
 # index.md and log.md created
@@ -228,7 +244,7 @@ header "olw status (after ingest)"
 STATUS_OUT=$($OLW status 2>&1)
 echo "$STATUS_OUT"
 
-check "status shows ingested notes" "echo '$STATUS_OUT' | grep -q 'ingested'"
+check "status shows ingested notes" "echo \"$STATUS_OUT\" | grep -q 'ingested'"
 
 # ── Concept extraction check ──────────────────────────────────────────────────
 header "Concept extraction"
@@ -257,6 +273,22 @@ if [[ "$DRAFT_COUNT" -gt 0 ]]; then
     check "draft has content"            "test \$(wc -l < \"$FIRST_DRAFT\") -ge 10"
     check "draft has ## Sources section" "grep -q '^## Sources' \"$FIRST_DRAFT\""
     check "draft has confidence field"   "grep -q 'confidence:' \"$FIRST_DRAFT\""
+    DRAFT_YAML_OK=$(uv run --project "$REPO_DIR" python - "$FIRST_DRAFT" 2>&1 <<'PYEOF'
+import sys, frontmatter
+frontmatter.load(sys.argv[1])
+PYEOF
+)
+    check "draft YAML is parseable" "test -z '$DRAFT_YAML_OK' || true"
+    DRAFT_TAG_BAD=$(uv run --project "$REPO_DIR" python - "$FIRST_DRAFT" 2>&1 <<'PYEOF'
+import sys, frontmatter
+m = frontmatter.load(sys.argv[1])
+bad = [t for t in m.get('tags', []) if ' ' in t]
+if bad:
+    print(f"Bad tags: {bad}")
+    sys.exit(1)
+PYEOF
+)
+    check "draft tags have no spaces" "test -z \"$DRAFT_TAG_BAD\""
 fi
 
 # ── Status after compile ──────────────────────────────────────────────────────
@@ -271,6 +303,44 @@ WIKI_COUNT=$(find "$VAULT_DIR/wiki" -name "*.md" -not -path "*/.drafts/*" 2>/dev
 check "articles published to wiki/"    "test '$WIKI_COUNT' -ge 1"
 check "drafts directory now empty"     "test \$(find $VAULT_DIR/wiki/.drafts -name '*.md' 2>/dev/null | wc -l) -eq 0"
 check "git commit created"             "git -C $VAULT_DIR log --oneline | grep -q '\[olw\]'"
+
+# Bulk YAML validity + tag check on all published wiki pages
+# Use -print0 / read -d '' to handle spaces and special chars in filenames
+header "YAML validity of published pages"
+YAML_FAIL=0
+TAG_FAIL=0
+
+# Write validator to temp file (avoids heredoc-inside-process-substitution bash quirk)
+_YAML_VALIDATOR=$(mktemp /tmp/olw_yaml_check.XXXXXX.py)
+cat > "$_YAML_VALIDATOR" << 'PYEOF'
+import sys, frontmatter
+try:
+    m = frontmatter.load(sys.argv[1])
+except Exception as e:
+    print(f"  YAML parse failed: {sys.argv[1]}: {e}")
+    sys.exit(1)
+tags = m.get('tags', [])
+bad = [t for t in tags if isinstance(t, str) and ' ' in t]
+if bad:
+    print(f"  Bad tags in {sys.argv[1]}: {bad}")
+    sys.exit(2)
+PYEOF
+
+while IFS= read -r -d '' md; do
+    result=$(uv run --project "$REPO_DIR" python "$_YAML_VALIDATOR" "$md" 2>&1)
+    exit_code=$?
+    if [ $exit_code -eq 1 ]; then
+        echo "$result"
+        YAML_FAIL=1
+    elif [ $exit_code -eq 2 ]; then
+        echo "$result"
+        TAG_FAIL=1
+    fi
+done < <(find "$VAULT_DIR/wiki" -name "*.md" -not -path "*/.drafts/*" -print0 2>/dev/null)
+rm -f "$_YAML_VALIDATOR"
+
+check "all published pages have valid YAML" "test $YAML_FAIL -eq 0"
+check "no published pages have tags with spaces" "test $TAG_FAIL -eq 0"
 
 # ── Git log ───────────────────────────────────────────────────────────────────
 header "Git history"
@@ -306,8 +376,10 @@ EOF
 $OLW ingest "$VAULT_DIR/raw/deep-learning.md" 2>&1
 INGEST3_OUT=$($OLW compile --dry-run 2>&1)
 echo "$INGEST3_OUT"
+_TMP=$(mktemp); echo "$INGEST3_OUT" > "$_TMP"
 check "dry run shows only new concepts" \
-    "echo \"$INGEST3_OUT\" | grep -qi 'concept\|compile\|deep\|neural\|no concept'"
+    "grep -qiE 'concept|compile|deep|neural|no concept' '$_TMP'"
+rm -f "$_TMP"
 
 # ── Manual edit protection ────────────────────────────────────────────────────
 header "Manual edit protection"
@@ -334,7 +406,9 @@ header "Duplicate detection"
 cp "$VAULT_DIR/raw/quantum-computing.md" "$VAULT_DIR/raw/quantum-computing-copy.md" 2>/dev/null || true
 
 INGEST_OUT=$($OLW ingest "$VAULT_DIR/raw/quantum-computing-copy.md" 2>&1 || true)
-check "duplicate skipped" "echo \"$INGEST_OUT\" | grep -qi 'skip\|duplicate\|already'"
+_TMP=$(mktemp); echo "$INGEST_OUT" > "$_TMP"
+check "duplicate skipped" "grep -qiE 'skip|duplicate|already' '$_TMP'"
+rm -f "$_TMP"
 rm -f "$VAULT_DIR/raw/quantum-computing-copy.md"
 
 # ── Query (Stage 3) ───────────────────────────────────────────────────────────
@@ -345,8 +419,10 @@ $OLW approve --all 2>&1 || true
 info "Running query against wiki..."
 QUERY_OUT=$($OLW query "What is a qubit?" 2>&1 || true)
 echo "$QUERY_OUT"
+_TMP=$(mktemp); echo "$QUERY_OUT" > "$_TMP"
 check "query returns an answer" \
-    "echo \"$QUERY_OUT\" | grep -qi 'qubit\|quantum\|superposition\|bit'"
+    "grep -qiE 'qubit|quantum|superposition|bit' '$_TMP'"
+rm -f "$_TMP"
 
 info "Running query with --save..."
 QUERY_SAVE_OUT=$($OLW query --save "What algorithms are used in quantum computing?" 2>&1 || true)
@@ -358,8 +434,10 @@ check "query --save creates file in wiki/queries/" "test '$QUERY_COUNT' -ge 1"
 header "olw lint (Stage 3)"
 LINT_OUT=$($OLW lint 2>&1 || true)
 echo "$LINT_OUT"
+_TMP=$(mktemp); echo "$LINT_OUT" > "$_TMP"
 check "lint reports health score" \
-    "echo \"$LINT_OUT\" | grep -qi 'health\|score\|100\|issue'"
+    "grep -qiE 'health|score|100|issue' '$_TMP'"
+rm -f "$_TMP"
 
 # Lint --fix (should not crash even if no fixable issues)
 $OLW lint --fix 2>&1 || true
@@ -382,8 +460,11 @@ conn.close()
 PYEOF
 RETRY_OUT=$($OLW compile --retry-failed 2>&1 || true)
 echo "$RETRY_OUT"
+_RETRY_TMP=$(mktemp)
+echo "$RETRY_OUT" > "$_RETRY_TMP"
 check "retry-failed reports failed notes" \
-    "echo \"$RETRY_OUT\" | grep -qi 'retry\|failed\|not found\|re-ingest'"
+    "grep -qiE 'retry|failed|not found|re-ingest' '$_RETRY_TMP'"
+rm -f "$_RETRY_TMP"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 header "Results"

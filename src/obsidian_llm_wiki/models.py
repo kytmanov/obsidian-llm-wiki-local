@@ -11,7 +11,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from .sanitize import sanitize_tags
 
 # ── LLM Output Models (keep schemas small and flat) ──────────────────────────
 
@@ -60,7 +62,17 @@ class SingleArticle(BaseModel):
     content: str = Field(
         description="Full markdown body with [[wikilinks]] inline (no frontmatter)"
     )
-    tags: list[str] = Field(description="Topic tags (max 6)")
+    tags: list[str] = Field(
+        description=(
+            "Topic tags, lowercase hyphen-separated, max 6 "
+            "(e.g. machine-learning, quantum-computing)"
+        )
+    )
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def clean_tags(cls, v: list[str]) -> list[str]:
+        return sanitize_tags(v)
 
 
 class PageSelection(BaseModel):
@@ -80,7 +92,9 @@ class QueryAnswer(BaseModel):
 
 class LintIssue(BaseModel):
     path: str
-    issue_type: Literal["orphan", "broken_link", "missing_frontmatter", "stale", "low_confidence"]
+    issue_type: Literal[
+        "orphan", "broken_link", "missing_frontmatter", "stale", "low_confidence", "invalid_tag"
+    ]
     description: str
     suggestion: str
     auto_fixable: bool = False

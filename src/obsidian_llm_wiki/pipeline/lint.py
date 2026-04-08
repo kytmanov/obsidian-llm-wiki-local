@@ -7,9 +7,10 @@ Checks:
   missing_frontmatter — required fields (title, status, tags) absent
   stale            — file hash on disk != DB content_hash (manually edited)
   low_confidence   — confidence < LOW_CONFIDENCE_THRESHOLD
+  invalid_tag      — tag that is not a valid Obsidian tag name
 
 Fix mode (--fix):
-  Auto-fixes missing_frontmatter fields by inserting sensible defaults.
+  Auto-fixes missing_frontmatter and invalid_tag fields.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from ..config import Config
 from ..models import LintIssue, LintResult
+from ..sanitize import sanitize_tag, sanitize_tags
 from ..state import StateDB
 from ..vault import extract_wikilinks, parse_note, write_note
 
@@ -81,6 +83,20 @@ def _concept_pages(config: Config) -> list[Path]:
     return pages
 
 
+def _all_wiki_pages(config: Config) -> list[Path]:
+    """All wiki pages including sources/ and queries/ (excluded: drafts, system stems)."""
+    if not config.wiki_dir.exists():
+        return []
+    pages = []
+    for md in sorted(config.wiki_dir.rglob("*.md")):
+        if ".drafts" in md.parts:
+            continue
+        if md.parent == config.wiki_dir and md.stem.lower() in _SYSTEM_STEMS:
+            continue
+        pages.append(md)
+    return pages
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
@@ -94,6 +110,7 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
     db_articles = {a.path: a for a in db.list_articles(drafts_only=False) if not a.is_draft}
 
     pages = _concept_pages(config)
+    all_pages = _all_wiki_pages(config)
 
     for page in pages:
         rel_path = str(page.relative_to(config.vault))
@@ -135,6 +152,24 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
                     elif field == "tags":
                         meta["tags"] = []
                 write_note(page, meta, body)
+
+        # ── Invalid tags ──────────────────────────────────────────────────────
+        tags = meta.get("tags", [])
+        if isinstance(tags, list):
+            invalid = [t for t in tags if isinstance(t, str) and t != sanitize_tag(t)]
+            if invalid:
+                issues.append(
+                    LintIssue(
+                        path=rel_path,
+                        issue_type="invalid_tag",
+                        description=f"Invalid tags: {', '.join(invalid)}",
+                        suggestion=f"Sanitized: {', '.join(sanitize_tag(t) for t in invalid)}",
+                        auto_fixable=True,
+                    )
+                )
+                if fix:
+                    meta["tags"] = sanitize_tags(tags)
+                    write_note(page, meta, body)
 
         # ── Low confidence ────────────────────────────────────────────────────
         confidence = meta.get("confidence")
@@ -204,6 +239,57 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
                     auto_fixable=False,
                 )
             )
+
+    # ── Tag + frontmatter checks for sources/ and queries/ ────────────────────
+    concept_page_paths = {p for p in pages}
+    for page in all_pages:
+        if page in concept_page_paths:
+            continue  # already checked above
+        rel_path = str(page.relative_to(config.vault))
+        try:
+            meta, body = parse_note(page)
+        except Exception:
+            continue
+
+        # Invalid tags
+        tags = meta.get("tags", [])
+        if isinstance(tags, list):
+            invalid = [t for t in tags if isinstance(t, str) and t != sanitize_tag(t)]
+            if invalid:
+                issues.append(
+                    LintIssue(
+                        path=rel_path,
+                        issue_type="invalid_tag",
+                        description=f"Invalid tags: {', '.join(invalid)}",
+                        suggestion=f"Sanitized: {', '.join(sanitize_tag(t) for t in invalid)}",
+                        auto_fixable=True,
+                    )
+                )
+                if fix:
+                    meta["tags"] = sanitize_tags(tags)
+                    write_note(page, meta, body)
+
+        # Missing required frontmatter
+        missing = _REQUIRED_FIELDS - set(meta.keys())
+        if missing:
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="missing_frontmatter",
+                    description=f"Missing fields: {', '.join(sorted(missing))}",
+                    suggestion=f"Add: {', '.join(f'{f}: ...' for f in sorted(missing))}",
+                    auto_fixable=True,
+                )
+            )
+            if fix:
+                for field in sorted(missing):
+                    if field == "title":
+                        meta["title"] = page.stem
+                    elif field == "status":
+                        meta["status"] = "published"
+                    elif field == "tags":
+                        meta["tags"] = []
+                write_note(page, meta, body)
 
     # ── Health score ──────────────────────────────────────────────────────────
     # Score based on % of clean pages (multiple issues on one page count once)

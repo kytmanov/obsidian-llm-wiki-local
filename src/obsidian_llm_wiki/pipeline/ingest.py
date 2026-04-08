@@ -17,7 +17,14 @@ from ..models import AnalysisResult, RawNoteRecord
 from ..ollama_client import OllamaClient
 from ..state import StateDB
 from ..structured_output import request_structured
-from ..vault import atomic_write, chunk_text, generate_aliases, parse_note, sanitize_filename
+from ..vault import (
+    chunk_text,
+    generate_aliases,
+    parse_note,
+    sanitize_filename,
+    sanitize_wikilink_target,
+    write_note,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,30 +81,49 @@ def _normalize_concept_names(raw_names: list[str], db: StateDB) -> list[str]:
 
 _HEADER_SCAN_LINES = 30  # only strip short lines from the opening section
 
+# Media reference patterns for source page preservation
+_OBSIDIAN_EMBED_RE = re.compile(
+    r"!\[\[([^\]]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp|tiff|avif|pdf|mp4|webm|mov|mp3|wav|ogg))\]\]",
+    re.IGNORECASE,
+)
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
 
 def _preprocess_web_clip(content: str) -> str:
     """Clean common Obsidian Web Clipper artifacts (nav bars, cookie banners, HTML tags).
 
-    Only the first _HEADER_SCAN_LINES are filtered — body content is preserved as-is.
+    HTML stripping is scoped to the first _HEADER_SCAN_LINES only — body HTML
+    (<details>, <kbd>, <sup>, etc.) is intentional and preserved.
     """
-    # Remove residual HTML tags throughout
-    content = re.sub(r"<[^>]+>", "", content)
-    lines = content.splitlines()
     _MD_STARTS = ("#", "-", "*", ">", "[", "!")  # markdown structural chars — always keep
+    lines = content.splitlines()
 
     cleaned = []
     for i, line in enumerate(lines):
-        stripped = line.strip()
-        # In the header region: skip short non-empty non-markdown lines (nav/banner heuristic)
-        if (
-            i < _HEADER_SCAN_LINES
-            and stripped
-            and len(stripped.split()) <= 5
-            and not stripped.startswith(_MD_STARTS)
-        ):
-            continue
+        if i < _HEADER_SCAN_LINES:
+            # Strip HTML only in header region (nav/banner cleanup)
+            line = re.sub(r"<[^>]+>", "", line)
+            stripped = line.strip()
+            # Skip short non-empty non-markdown lines (nav/banner heuristic)
+            if (
+                stripped
+                and len(stripped.split()) <= 5
+                and not stripped.startswith(_MD_STARTS)
+            ):
+                continue
         cleaned.append(line)
     return "\n".join(cleaned)
+
+
+def _collect_media_refs(body: str) -> list[str]:
+    """Extract media references from note body for preservation in source pages."""
+    refs: list[str] = []
+    for m in _OBSIDIAN_EMBED_RE.finditer(body):
+        refs.append(f"- ![[{m.group(1)}]]")
+    for m in _MD_IMAGE_RE.finditer(body):
+        alt, url = m.group(1), m.group(2)
+        refs.append(f"- ![{alt}]({url})")
+    return refs
 
 
 def _create_source_summary_page(
@@ -105,6 +131,7 @@ def _create_source_summary_page(
     meta: dict,
     result: AnalysisResult,
     config: Config,
+    body: str = "",
 ) -> Path:
     """
     Generate wiki/sources/{Title}.md from AnalysisResult. No extra LLM call.
@@ -122,23 +149,23 @@ def _create_source_summary_page(
     aliases = generate_aliases(title, "")  # source pages rarely have abbreviations
 
     # Build concept list as [[wikilinks]]
-    concept_lines = "\n".join(f"- [[{c}]]" for c in result.key_concepts[:8] if c.strip())
+    concept_lines = "\n".join(
+        f"- [[{sanitize_wikilink_target(c)}]]" for c in result.key_concepts[:8] if c.strip()
+    )
 
-    fm_lines = [
-        "---",
-        f"title: {title}",
-        f"aliases: {aliases!r}",
-        "tags: [source]",
-        "status: published",
-        f"source_file: {rel_raw}",
-    ]
+    meta: dict = {
+        "title": title,
+        "aliases": aliases,
+        "tags": ["source"],
+        "status": "published",
+        "source_file": rel_raw,
+        "quality": result.quality,
+        "created": now,
+    }
     if source_url:
-        fm_lines.append(f"source_url: {source_url}")
-    fm_lines += [
-        f"quality: {result.quality}",
-        f"created: {now}",
-        "---",
-        "",
+        meta["source_url"] = source_url
+
+    body_parts = [
         f"# {title}",
         "",
         "## Summary",
@@ -153,9 +180,13 @@ def _create_source_summary_page(
         f"- **Ingested:** {now}",
     ]
     if source_url:
-        fm_lines.append(f"- **URL:** {source_url}")
+        body_parts.append(f"- **URL:** {source_url}")
 
-    atomic_write(out_path, "\n".join(fm_lines) + "\n")
+    media_refs = _collect_media_refs(body)
+    if media_refs:
+        body_parts += ["", "## Media"] + media_refs
+
+    write_note(out_path, meta, "\n".join(body_parts))
     log.info("Source summary written: %s", out_path.name)
     return out_path
 
@@ -258,7 +289,7 @@ def ingest_note(
 
     # Create source summary page in wiki/sources/ (no extra LLM call)
     try:
-        _create_source_summary_page(path, meta, result, config)
+        _create_source_summary_page(path, meta, result, config, body=body)
     except Exception as e:
         log.warning("Source summary page failed for %s: %s", path.name, e)
 

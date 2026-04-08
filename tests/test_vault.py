@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from obsidian_llm_wiki.vault import (
     atomic_write,
+    build_wiki_frontmatter,
     chunk_text,
     ensure_wikilinks,
     extract_wikilinks,
     generate_aliases,
     parse_note,
     sanitize_filename,
+    sanitize_wikilink_target,
     write_note,
 )
 
@@ -58,6 +60,40 @@ def test_extract_wikilinks():
     links = extract_wikilinks(content)
     assert "Quantum Entanglement" in links
     assert "Bell States" in links
+
+
+def test_extract_wikilinks_excludes_image_embeds():
+    content = "![[photo.png]] and [[Real Link]]"
+    assert extract_wikilinks(content) == ["Real Link"]
+
+
+def test_extract_wikilinks_excludes_pdf():
+    assert extract_wikilinks("![[doc.pdf]]") == []
+
+
+def test_extract_wikilinks_keeps_note_transclusion():
+    """![[other-note]] (no media extension) = note transclusion, keep it."""
+    assert extract_wikilinks("![[other-note]]") == ["other-note"]
+
+
+def test_extract_wikilinks_excludes_jpg():
+    assert extract_wikilinks("![[image.jpg]]") == []
+
+
+def test_ensure_wikilinks_no_mangle_image_alt():
+    """![Quantum Computing](img.png) must not become ![[[ Quantum Computing]]](img.png)."""
+    content = "See ![Quantum Computing](img.png) for details."
+    result = ensure_wikilinks(content, ["Quantum Computing"])
+    assert "![Quantum Computing](img.png)" in result
+    assert "![[[" not in result
+
+
+def test_ensure_wikilinks_no_mangle_obsidian_embed():
+    """![[Quantum Computing]] must not become ![[[[Quantum Computing]]]]."""
+    content = "See ![[Quantum Computing]] for details."
+    result = ensure_wikilinks(content, ["Quantum Computing"])
+    assert "![[Quantum Computing]]" in result
+    assert "![[[[" not in result
 
 
 def test_ensure_wikilinks_basic():
@@ -170,6 +206,67 @@ def test_generate_aliases_multiple_abbreviations():
     aliases = generate_aliases("Machine Learning", text)
     assert "ML" in aliases
     assert "DL" not in aliases  # only matches "Machine Learning (..."
+
+
+# ── sanitize_wikilink_target ──────────────────────────────────────────────────
+
+
+def test_sanitize_wikilink_target_strips_closing_bracket():
+    assert sanitize_wikilink_target("foo]bar") == "foobar"
+
+
+def test_sanitize_wikilink_target_strips_opening_bracket():
+    assert sanitize_wikilink_target("foo[bar") == "foobar"
+
+
+def test_sanitize_wikilink_target_strips_pipe():
+    assert sanitize_wikilink_target("A|B") == "AB"
+
+
+def test_sanitize_wikilink_target_strips_hash():
+    assert sanitize_wikilink_target("title#section") == "titlesection"
+
+
+def test_sanitize_wikilink_target_passthrough():
+    assert sanitize_wikilink_target("Normal Title") == "Normal Title"
+
+
+def test_sanitize_wikilink_target_preserves_colon():
+    # Colons are fine inside wikilinks
+    assert sanitize_wikilink_target("Python: Guide") == "Python: Guide"
+
+
+# ── build_wiki_frontmatter ────────────────────────────────────────────────────
+
+
+def test_build_wiki_frontmatter_sanitizes_tags():
+    meta = build_wiki_frontmatter(
+        title="Test",
+        tags=["quantum computing", "C++ stuff"],
+        sources=[],
+        confidence=0.8,
+    )
+    assert meta["tags"] == ["quantum-computing", "c-stuff"]
+
+
+def test_build_wiki_frontmatter_preserves_valid_tags():
+    meta = build_wiki_frontmatter(
+        title="Test",
+        tags=["physics", "ai"],
+        sources=[],
+        confidence=0.8,
+    )
+    assert meta["tags"] == ["physics", "ai"]
+
+
+def test_build_wiki_frontmatter_deduplicates_tags():
+    meta = build_wiki_frontmatter(
+        title="Test",
+        tags=["AI", "ai", "machine learning", "machine-learning"],
+        sources=[],
+        confidence=0.5,
+    )
+    assert meta["tags"] == ["ai", "machine-learning"]
 
 
 def test_chunk_text_heading_split():

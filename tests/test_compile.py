@@ -9,6 +9,8 @@ import pytest
 from obsidian_llm_wiki.config import Config
 from obsidian_llm_wiki.models import RawNoteRecord
 from obsidian_llm_wiki.pipeline.compile import (
+    _write_concept_prompt,
+    _write_prompt_legacy,
     approve_drafts,
     compile_concepts,
     compile_notes,
@@ -291,6 +293,26 @@ def test_compile_concepts_force_overrides_edit_protection(vault, config, db, fix
     drafts, failed = compile_concepts(config=config, client=client, db=db, force=True)
 
     assert len(drafts) == 1
+
+
+def test_write_concept_prompt_has_tag_instructions():
+    prompt = _write_concept_prompt("Quantum Computing", "source text", [])
+    assert "hyphen-separated" in prompt
+    assert "machine-learning" in prompt
+
+
+def test_write_prompt_legacy_has_tag_instructions():
+    from obsidian_llm_wiki.models import ArticlePlan
+
+    plan = ArticlePlan(
+        title="Test",
+        action="create",
+        path="test.md",
+        reasoning="needed",
+        source_paths=[],
+    )
+    prompt = _write_prompt_legacy(plan, "source text", [])
+    assert "hyphen-separated" in prompt
 
 
 def test_compile_concepts_marks_sources_compiled(vault, config, db, fixtures_dir):

@@ -148,6 +148,17 @@ def test_schema_validation_failure():
         )
 
 
+def test_single_article_sanitizes_tags():
+    """SingleArticle validator cleans tags at parse time."""
+    article = SingleArticle(title="X", content="Y", tags=["bad tag", "C++", "physics"])
+    assert "bad-tag" in article.tags
+    assert "c" in article.tags
+    assert "physics" in article.tags
+    # Original dirty values gone
+    assert "bad tag" not in article.tags
+    assert "C++" not in article.tags
+
+
 def test_single_article_missing_required_field():
     # Missing required 'content' field should fail validation
     bad = json.dumps(

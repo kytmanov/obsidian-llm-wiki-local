@@ -95,6 +95,29 @@ def test_preprocess_preserves_short_body_lines():
     assert "Another bullet" in result
 
 
+def test_preprocess_preserves_body_html():
+    """HTML after line 30 (body content) must be preserved."""
+    header = ["Nav item"] * 31  # push past the 30-line scan window
+    body = [
+        "<details><summary>Collapse me</summary>",
+        "Hidden content here.",
+        "</details>",
+        "Use <kbd>Ctrl+C</kbd> to copy.",
+    ]
+    content = "\n".join(header + body)
+    result = _preprocess_web_clip(content)
+    assert "<details>" in result
+    assert "<kbd>Ctrl+C</kbd>" in result
+
+
+def test_preprocess_strips_header_html():
+    """HTML tags in first 30 lines must be stripped."""
+    content = "<nav>Skip Navigation</nav>\n\n# Real Title\n\nBody content here."
+    result = _preprocess_web_clip(content)
+    assert "<nav>" not in result
+    assert "Real Title" in result
+
+
 def test_preprocess_preserves_blank_lines():
     content = "Home\n\n# Title\n\nContent."
     result = _preprocess_web_clip(content)
@@ -253,6 +276,76 @@ def test_ingest_note_creates_source_summary_page(vault, config, db):
     ingest_note(path, config, client, db)
     sources = list((vault / "wiki" / "sources").glob("*.md"))
     assert sources, "Source summary page should be created"
+
+
+def test_source_page_yaml_with_colon_title(vault, config, db):
+    """Source page title containing ':' must not break YAML parsing."""
+    # Raw note uses quoted title (valid YAML) — the colon in title flows to source page
+    path = _write_raw(vault, "guide.md", "---\ntitle: 'Python: A Guide'\n---\n\nContent here.")
+    client = _make_client(_analysis_json(concepts=["Python"]))
+    ingest_note(path, config, client, db)
+    sources = list((vault / "wiki" / "sources").glob("*.md"))
+    assert sources
+    from obsidian_llm_wiki.vault import parse_note
+    meta, _ = parse_note(sources[0])
+    assert meta["title"] == "Python: A Guide"
+
+
+def test_source_page_aliases_are_list(vault, config, db):
+    """Aliases must be a proper YAML list, not Python repr string."""
+    path = _write_raw(vault, "ml.md", "# ML\n\nMachine Learning (ML) basics.")
+    client = _make_client(_analysis_json(concepts=["Machine Learning"]))
+    ingest_note(path, config, client, db)
+    sources = list((vault / "wiki" / "sources").glob("*.md"))
+    assert sources
+    from obsidian_llm_wiki.vault import parse_note
+    meta, _ = parse_note(sources[0])
+    assert isinstance(meta.get("aliases", []), list)
+
+
+def test_source_page_roundtrip(vault, config, db):
+    """Source page has all required fields with correct types."""
+    path = _write_raw(vault, "q.md", "# Quantum\n\nContent.")
+    client = _make_client(_analysis_json(concepts=["Qubits"]))
+    ingest_note(path, config, client, db)
+    sources = list((vault / "wiki" / "sources").glob("*.md"))
+    assert sources
+    from obsidian_llm_wiki.vault import parse_note
+    meta, body = parse_note(sources[0])
+    assert "title" in meta
+    assert meta["status"] == "published"
+    assert meta["tags"] == ["source"]
+    assert isinstance(meta["aliases"], list)
+    assert "## Summary" in body
+    assert "## Concepts" in body
+
+
+def test_source_page_media_section(vault, config, db):
+    """Raw note with images produces ## Media section in source page."""
+    content = (
+        "# Note\n\nSee ![[diagram.png]] for the architecture.\n"
+        "Also ![Photo](http://example.com/photo.jpg) is relevant."
+    )
+    path = _write_raw(vault, "media-note.md", content)
+    client = _make_client(_analysis_json(concepts=["Architecture"]))
+    ingest_note(path, config, client, db)
+    sources = list((vault / "wiki" / "sources").glob("*.md"))
+    assert sources
+    source_text = sources[0].read_text()
+    assert "## Media" in source_text
+    assert "diagram.png" in source_text
+    assert "photo.jpg" in source_text
+
+
+def test_source_page_no_media_section_when_none(vault, config, db):
+    """Raw note without media produces no ## Media section."""
+    path = _write_raw(vault, "text-only.md", "# Note\n\nJust text, no images.")
+    client = _make_client(_analysis_json(concepts=["Text"]))
+    ingest_note(path, config, client, db)
+    sources = list((vault / "wiki" / "sources").glob("*.md"))
+    assert sources
+    source_text = sources[0].read_text()
+    assert "## Media" not in source_text
 
 
 def test_ingest_note_respects_max_concepts_per_source(vault, config, db):

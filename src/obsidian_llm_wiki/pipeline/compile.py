@@ -36,6 +36,7 @@ from ..vault import (
     list_wiki_articles,
     parse_note,
     sanitize_filename,
+    sanitize_wikilink_target,
     write_note,
 )
 
@@ -156,7 +157,7 @@ def _inject_body_sections(body: str, source_paths: list[str], config: Config) ->
                 src_title = Path(sp).stem.replace("-", " ").title()
         else:
             src_title = Path(sp).stem.replace("-", " ").title()
-        source_lines.append(f"- [[{src_title}]]")
+        source_lines.append(f"- [[{sanitize_wikilink_target(src_title)}]]")
 
     # ## See Also: wikilinks already in body (sorted, deduplicated)
     linked = sorted(set(extract_wikilinks(body)))
@@ -229,6 +230,10 @@ def _write_concept_prompt(
         prompt += f"\nVAULT CONVENTIONS:\n{vault_schema}\n"
     prompt += (
         f"\nIMPORTANT: Keep the content field under 800 words. Be concise.\n"
+        f"Tags must be lowercase, hyphen-separated, no spaces or special characters. "
+        f"Good: machine-learning, quantum-computing. Bad: Machine Learning, C++.\n"
+        f"If source material references images or diagrams, mention their filenames "
+        f"so they can be embedded later (e.g. ![[diagram.png]]).\n"
         f"Use [[wikilinks]] inline in prose to link to related concepts.\n\n"
         f"Existing wiki articles to link to: {titles_str}\n\n"
         f"SOURCE MATERIAL:\n{sources}"
@@ -378,7 +383,9 @@ def _write_prompt_legacy(article: ArticlePlan, sources: str, existing_titles: li
         f'Write the wiki article: "{article.title}"\n'
         f"Action: {article.action}\n"
         f"Reasoning: {article.reasoning}\n"
-        f"IMPORTANT: Keep the content field under 800 words. Be concise.\n\n"
+        f"IMPORTANT: Keep the content field under 800 words. Be concise.\n"
+        f"Tags must be lowercase, hyphen-separated, no spaces or special characters. "
+        f"Good: machine-learning, quantum-computing. Bad: Machine Learning, C++.\n\n"
         f"Existing wiki articles to link to: {titles_str}\n\n"
         f"SOURCE MATERIAL:\n{sources}"
     )
