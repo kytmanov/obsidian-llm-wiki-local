@@ -25,6 +25,30 @@ max_concepts_per_source = 8
 """
 
 
+def default_wiki_toml(
+    fast_model: str = "gemma4:e4b",
+    heavy_model: str = "qwen2.5:14b",
+    ollama_url: str = "http://localhost:11434",
+) -> str:
+    """Generate wiki.toml content, optionally pre-filled from global config."""
+    return (
+        f'[models]\n'
+        f'fast = "{fast_model}"\n'
+        f'heavy = "{heavy_model}"\n'
+        f'# Optional: set heavy = fast to use a single model for everything\n\n'
+        f'[ollama]\n'
+        f'url = "{ollama_url}"\n'
+        f'timeout = 600\n'
+        f'fast_ctx = 8192\n'
+        f'heavy_ctx = 16384\n\n'
+        f'[pipeline]\n'
+        f'auto_approve = false\n'
+        f'auto_commit = true\n'
+        f'watch_debounce = 3.0\n'
+        f'max_concepts_per_source = 8\n'
+    )
+
+
 class ModelsConfig(BaseModel):
     fast: str = "gemma4:e4b"
     heavy: str = "qwen2.5:14b"

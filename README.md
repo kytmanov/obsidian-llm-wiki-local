@@ -47,35 +47,69 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 
 ### 1. Install
 
+**From PyPI** (recommended for most users):
+
 ```bash
 pip install obsidian-llm-wiki
-```
-
-Or with [uv](https://docs.astral.sh/uv/) (recommended):
-
-```bash
+# or with uv (faster):
 uv tool install obsidian-llm-wiki
 ```
 
-### 2. Install and start Ollama
+**From source** (clone and install with one command):
+
+```bash
+git clone https://github.com/kytmanov/obsidian-llm-wiki
+cd obsidian-llm-wiki
+python install.py
+```
+
+`install.py` detects `uv` or falls back to `pip`, verifies the install, and tells you to run the next step.
+
+### 2. Run the setup wizard
+
+```bash
+olw setup
+```
+
+An interactive wizard configures your Ollama URL, fast and heavy models, and an optional default vault path. Takes ~30 seconds.
+
+```
+╭──────────────────────────────────────────────────╮
+│      obsidian-llm-wiki  ·  first run setup       │
+╰──────────────────────────────────────────────────╯
+
+  Step 1/4  Ollama connection
+    Trying http://localhost:11434 …  ✓ connected
+
+  Step 2/4  Fast model (analysis · 3–8B recommended)
+    #  Model           Size
+    1  gemma4:e4b      4.3 GB
+    2  llama3.2:3b     2.0 GB
+    Select (number or name) [1]: _
+  ...
+```
+
+Settings are saved to `~/.config/olw/config.toml` (Mac/Linux) or `%APPDATA%\olw\config.toml` (Windows).
+
+### 3. Install and start Ollama
 
 ```bash
 # Install Ollama: https://ollama.com/download
-ollama pull gemma3:4b       # fast model — analysis and routing
+ollama pull gemma4:e4b      # fast model — analysis and routing
 ollama pull qwen2.5:14b     # heavy model — article writing (optional, 7B+ recommended)
 ```
 
-> **Minimal setup:** set both `fast` and `heavy` to `gemma3:4b` in `wiki.toml` to use a single model.
+> **Minimal setup:** set both `fast` and `heavy` to `gemma4:e4b` in `wiki.toml` to use a single model.
 
-### 3. Set up your vault
+### 4. Set up your vault
 
 ```bash
 olw init ~/my-wiki
 ```
 
-This creates the folder structure and a `wiki.toml` config file.
+This creates the folder structure and a `wiki.toml` pre-filled with your setup wizard choices.
 
-### 4. Add some notes
+### 5. Add some notes
 
 Drop any `.md` files into `~/my-wiki/raw/`. Web clips, book notes, meeting notes, anything.
 
@@ -86,25 +120,27 @@ Drop any `.md` files into `~/my-wiki/raw/`. Web clips, book notes, meeting notes
   physics-lecture.md
 ```
 
-### 5. Run the pipeline
+### 6. Run the pipeline
 
 ```bash
 # Analyze notes, extract concepts
-olw ingest --vault ~/my-wiki --all
+olw ingest --all
 
 # Generate wiki articles (lands in .drafts/)
-olw compile --vault ~/my-wiki
+olw compile
 
 # Review drafts, then publish
-olw approve --vault ~/my-wiki --all
+olw approve --all
 ```
+
+If you set a default vault in `olw setup`, the `--vault` flag is optional. Otherwise use `--vault ~/my-wiki` or `export OLW_VAULT=~/my-wiki`.
 
 Open `~/my-wiki` as an Obsidian vault. The graph view shows your connected wiki.
 
-### 6. Keep it running (optional)
+### 7. Keep it running (optional)
 
 ```bash
-olw watch --vault ~/my-wiki
+olw watch
 # Drop a file in raw/ → ingest + compile happen automatically
 ```
 
@@ -173,7 +209,7 @@ my-wiki/
 
 ```toml
 [models]
-fast = "gemma3:4b"        # extraction, analysis, query routing
+fast = "gemma4:e4b"        # extraction, analysis, query routing
 heavy = "qwen2.5:14b"     # article generation, Q&A answers
 # Single-model: set heavy = fast
 
@@ -194,6 +230,7 @@ watch_debounce = 3.0             # seconds after last file event before processi
 
 | Command | Description |
 |---------|-------------|
+| `olw setup` | Interactive setup wizard (first run) |
 | `olw init PATH` | Create vault structure and git repo |
 | `olw init PATH --existing` | Adopt an existing Obsidian vault |
 | `olw doctor` | Check Ollama, models, vault structure |
@@ -223,7 +260,7 @@ All commands accept `--vault PATH` or the env var `OLW_VAULT`.
 
 | Role | Recommended | Minimum |
 |------|-------------|---------|
-| Fast (analysis + routing) | `gemma3:4b`, `llama3.2:3b` | any 3B with JSON format |
+| Fast (analysis + routing) | `gemma4:e4b`, `llama3.2:3b` | any 3B with JSON format |
 | Heavy (article writing) | `qwen2.5:14b`, `llama3.1:8b` | any 7B |
 | Single model (everything) | `llama3.1:8b`, `mistral:7b` | any 7B |
 
