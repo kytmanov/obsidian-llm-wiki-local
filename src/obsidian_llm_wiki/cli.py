@@ -358,7 +358,7 @@ def setup(non_interactive: bool, reset: bool):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--all", "ingest_all", is_flag=True, help="Ingest all files in raw/")
 @click.option("--force", is_flag=True, help="Re-ingest already-processed notes")
 @click.argument("paths", nargs=-1, type=click.Path(exists=True))
@@ -445,7 +445,7 @@ def ingest(vault_str, ingest_all, force, paths):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--dry-run", is_flag=True, help="Show plan, write nothing")
 @click.option("--auto-approve", is_flag=True, help="Publish immediately (skip draft review)")
 @click.option("--force", is_flag=True, help="Recompile even manually-edited articles")
@@ -561,7 +561,7 @@ def compile(vault_str, dry_run, auto_approve, force, legacy, retry_failed):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--all", "approve_all", is_flag=True)
 @click.argument("files", nargs=-1, type=click.Path())
 def approve(vault_str, approve_all, files):
@@ -604,7 +604,7 @@ def approve(vault_str, approve_all, files):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--feedback", default="", help="Reason for rejection (logged)")
 @click.argument("file", type=click.Path(exists=True))
 def reject(vault_str, feedback, file):
@@ -621,7 +621,7 @@ def reject(vault_str, feedback, file):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--failed", "show_failed", is_flag=True, help="List failed notes with error messages")
 def status(vault_str, show_failed):
     """Show vault health, pending drafts, and pipeline stats."""
@@ -669,7 +669,7 @@ def status(vault_str, show_failed):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--steps", default=1, show_default=True)
 def undo(vault_str, steps):
     """Revert last N [olw] auto-commits (uses git revert — safe)."""
@@ -689,7 +689,7 @@ def undo(vault_str, steps):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
 def clean(vault_str, yes):
     """Clear state DB, wiki/, and drafts — raw/ notes are kept.
@@ -734,7 +734,7 @@ def clean(vault_str, yes):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 def doctor(vault_str):
     """Check Ollama connection, model availability, and vault health."""
     from .ollama_client import OllamaClient, OllamaError
@@ -817,7 +817,7 @@ def doctor(vault_str):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--save", is_flag=True, help="Save answer to wiki/queries/")
 @click.argument("question")
 def query(vault_str, question, save):
@@ -844,7 +844,7 @@ def query(vault_str, question, save):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option("--fix", is_flag=True, help="Auto-fix simple issues (missing frontmatter fields)")
 def lint(vault_str, fix):
     """Check wiki health: orphans, broken links, missing frontmatter, low confidence."""
@@ -887,7 +887,7 @@ def lint(vault_str, fix):
 
 
 @cli.command()
-@click.option("--vault", "vault_str", envvar="OLW_VAULT", required=True)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @click.option(
     "--auto-approve", is_flag=True, help="Publish drafts immediately without manual review"
 )
