@@ -111,7 +111,9 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
             default_wiki_toml(
                 fast_model=gcfg.fast_model if gcfg and gcfg.fast_model else "gemma4:e4b",
                 heavy_model=gcfg.heavy_model if gcfg and gcfg.heavy_model else "qwen2.5:14b",
-                ollama_url=gcfg.ollama_url if gcfg and gcfg.ollama_url else "http://localhost:11434",
+                ollama_url=gcfg.ollama_url
+                if gcfg and gcfg.ollama_url
+                else "http://localhost:11434",
             )
         )
 
@@ -240,7 +242,9 @@ def setup(non_interactive: bool, reset: bool):
     if non_interactive:
         gcfg = load_global_config()
         if not gcfg:
-            console.print("[dim]No global config found. Run [bold]olw setup[/bold] to configure.[/dim]")
+            console.print(
+                "[dim]No global config found. Run [bold]olw setup[/bold] to configure.[/dim]"
+            )
             return
         table = Table(title="Global config", show_header=False, box=None, padding=(0, 2))
         table.add_column("Key", style="bold")
@@ -281,7 +285,9 @@ def setup(non_interactive: bool, reset: bool):
             console.print(f"    Trying {DEFAULT_URL} …  [green]✓ connected[/green]")
         else:
             console.print(f"    [yellow]Warning:[/yellow] Could not reach {DEFAULT_URL}")
-            console.print("    You can still configure manually — run [bold]olw doctor[/bold] later.")
+            console.print(
+                "    You can still configure manually — run [bold]olw doctor[/bold] later."
+            )
 
         ollama_url = Prompt.ask("    Ollama URL", default=DEFAULT_URL, console=console)
 
@@ -315,7 +321,9 @@ def setup(non_interactive: bool, reset: bool):
 
         # ── Step 4/4 — Default vault ──────────────────────────────────────────
         console.print()
-        console.print("  [bold]Step 4/4[/bold]  Default vault path  [dim](press Enter to skip)[/dim]")
+        console.print(
+            "  [bold]Step 4/4[/bold]  Default vault path  [dim](press Enter to skip)[/dim]"
+        )
         vault_input = Prompt.ask("    Vault path", default="", console=console)
         vault_path: str | None = None
         if vault_input.strip():
@@ -347,7 +355,9 @@ def setup(non_interactive: bool, reset: bool):
             "    [bold]olw ingest --all && olw compile[/bold]",
         ]
         console.print()
-        console.print(Panel("\n".join(summary_lines), border_style="green", expand=False, padding=(0, 2)))
+        console.print(
+            Panel("\n".join(summary_lines), border_style="green", expand=False, padding=(0, 2))
+        )
 
     except (EOFError, KeyboardInterrupt):
         console.print("\n[yellow]Setup interrupted.[/yellow]")
