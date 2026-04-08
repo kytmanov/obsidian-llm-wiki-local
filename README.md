@@ -313,6 +313,67 @@ OLLAMA_URL=http://localhost:11434 bash scripts/smoke_test.sh
 
 ---
 
+## FAQ
+
+**Q: I ran `olw compile` but nothing appears in Obsidian.**
+
+Drafts land in `wiki/.drafts/` — Obsidian hides dotfolders by default so they won't show in the graph yet. Run:
+
+```bash
+olw approve --all
+```
+
+Articles move to `wiki/` and become fully visible. Open `~/my-wiki` as an Obsidian vault (**File → Open vault**) if you haven't already.
+
+---
+
+**Q: Compile says "2 article(s) failed: Methodology, Sprints" — what do I do?**
+
+Failed concepts are not recorded in the DB, so simply re-running compile retries them automatically:
+
+```bash
+olw compile
+```
+
+If the same concepts keep failing, the LLM is likely struggling with JSON output for those specific titles. Try:
+
+```bash
+# More room for the model to produce clean output
+# Edit wiki.toml: heavy_ctx = 32768, then:
+olw compile
+```
+
+See [Tuning context windows](#tuning-context-windows) for the `heavy_ctx` table.
+
+---
+
+**Q: I see `structured_output attempt N failed` messages during compile — is something broken?**
+
+No. This is the built-in 3-tier retry system working as designed. The model occasionally echoes the JSON schema structure instead of flat output — the retry corrects it. Articles are still generated. These messages are debug-level noise; a real failure surfaces as `article(s) failed: ...` in the summary line.
+
+---
+
+**Q: `olw ingest --all && olw compile` gives "Missing option '--vault'".**
+
+Run `olw setup` first to configure a default vault, or pass it explicitly:
+
+```bash
+export OLW_VAULT=~/my-wiki
+olw ingest --all && olw compile
+```
+
+---
+
+**Q: I changed models in `olw setup` but `olw compile` still uses the old model.**
+
+Re-run `olw init` on your vault — it now syncs the model settings from your global config into `wiki.toml`:
+
+```bash
+olw init ~/my-wiki
+```
+
+---
+
 ## Why not just use a chatbot?
 
 Chatbots forget. Every conversation starts fresh. This tool builds a **persistent artifact** — a wiki that grows with every note you add, that you can open in Obsidian, search, query, and edit by hand.
