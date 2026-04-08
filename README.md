@@ -19,7 +19,7 @@ The key insight: treat your notes as **source material**, not as the final artif
 ```
 You write raw notes  →  LLM extracts concepts  →  Wiki articles created/updated
      raw/                    (automatic)                    wiki/
-  quantum.md          "Qubit", "Superposition"       Qubit.md  ←──┐
+  quantum.md          "Qubit", "Superposition"       Qubit.md   ←──┐
   ml-basics.md        "Neural Network", "SGD"    Superposition.md  │
   physics.md          "Qubit" (again!)           Neural Network.md │
                                                       ↑  linked via [[wikilinks]]
@@ -46,14 +46,6 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 ## Quick start
 
 ### 1. Install
-
-**From PyPI** (recommended for most users):
-
-```bash
-pip install obsidian-llm-wiki
-# or with uv (faster):
-uv tool install obsidian-llm-wiki
-```
 
 **From source** (clone and install with one command):
 
