@@ -45,12 +45,34 @@ def update_frontmatter(path: Path, updates: dict[str, Any]) -> None:
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(?:[|#][^\]]*)?\]\]")
 _CODE_BLOCK_RE = re.compile(r"```[\s\S]*?```|`[^`]+`")
 # Images/media embedded via ![[file.ext]] — filter these from link extraction
-_MEDIA_EXTENSIONS = frozenset({
-    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".bmp", ".tiff", ".avif",
-    ".mp4", ".webm", ".ogv", ".mov", ".mkv", ".avi",
-    ".mp3", ".wav", ".ogg", ".flac", ".m4a",
-    ".pdf", ".csv", ".xlsx", ".docx",
-})
+_MEDIA_EXTENSIONS = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".webp",
+        ".bmp",
+        ".tiff",
+        ".avif",
+        ".mp4",
+        ".webm",
+        ".ogv",
+        ".mov",
+        ".mkv",
+        ".avi",
+        ".mp3",
+        ".wav",
+        ".ogg",
+        ".flac",
+        ".m4a",
+        ".pdf",
+        ".csv",
+        ".xlsx",
+        ".docx",
+    }
+)
 # Embeds and markdown images — mask before wikilink insertion to protect alt text
 _EMBED_RE = re.compile(r"!\[\[[^\]]+\]\]|!\[[^\]]*\]\([^)]*\)")
 
@@ -67,9 +89,7 @@ def _mask_code_blocks(content: str) -> tuple[str, list[tuple[int, int, str]]]:
     Protects: ```...```, `...`, ![[embed]], ![alt](url) from wikilink insertion.
     """
     # Combine: code blocks + embed/image patterns
-    combined_re = re.compile(
-        r"```[\s\S]*?```|`[^`]+`|!\[\[[^\]]+\]\]|!\[[^\]]*\]\([^)]*\)"
-    )
+    combined_re = re.compile(r"```[\s\S]*?```|`[^`]+`|!\[\[[^\]]+\]\]|!\[[^\]]*\]\([^)]*\)")
     spans: list[tuple[int, int, str]] = []
     masked = content
     offset = 0

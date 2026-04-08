@@ -105,11 +105,7 @@ def _preprocess_web_clip(content: str) -> str:
             line = re.sub(r"<[^>]+>", "", line)
             stripped = line.strip()
             # Skip short non-empty non-markdown lines (nav/banner heuristic)
-            if (
-                stripped
-                and len(stripped.split()) <= 5
-                and not stripped.startswith(_MD_STARTS)
-            ):
+            if stripped and len(stripped.split()) <= 5 and not stripped.startswith(_MD_STARTS):
                 continue
         cleaned.append(line)
     return "\n".join(cleaned)

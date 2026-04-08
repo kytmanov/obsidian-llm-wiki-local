@@ -287,6 +287,7 @@ def test_source_page_yaml_with_colon_title(vault, config, db):
     sources = list((vault / "wiki" / "sources").glob("*.md"))
     assert sources
     from obsidian_llm_wiki.vault import parse_note
+
     meta, _ = parse_note(sources[0])
     assert meta["title"] == "Python: A Guide"
 
@@ -299,6 +300,7 @@ def test_source_page_aliases_are_list(vault, config, db):
     sources = list((vault / "wiki" / "sources").glob("*.md"))
     assert sources
     from obsidian_llm_wiki.vault import parse_note
+
     meta, _ = parse_note(sources[0])
     assert isinstance(meta.get("aliases", []), list)
 
@@ -311,6 +313,7 @@ def test_source_page_roundtrip(vault, config, db):
     sources = list((vault / "wiki" / "sources").glob("*.md"))
     assert sources
     from obsidian_llm_wiki.vault import parse_note
+
     meta, body = parse_note(sources[0])
     assert "title" in meta
     assert meta["status"] == "published"
