@@ -341,3 +341,57 @@ def test_schema_version_idempotent(tmp_path):
     db2 = StateDB(path)
     row = db2._conn.execute("SELECT version FROM schema_version").fetchone()
     assert row[0] == 2
+
+
+def test_legacy_migration_from_v0(tmp_path):
+    """DB with no schema_version row and no approved_at column → migrates to v2."""
+    import sqlite3
+
+    path = tmp_path / ".olw" / "state.db"
+    path.parent.mkdir(parents=True)
+
+    # Simulate a v0.1 DB: tables exist but no schema_version row, no approved_at
+    conn = sqlite3.connect(str(path))
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS raw_notes (
+            path TEXT PRIMARY KEY, content_hash TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'new', summary TEXT, quality TEXT,
+            ingested_at TEXT, compiled_at TEXT, error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS wiki_articles (
+            path TEXT PRIMARY KEY, title TEXT NOT NULL,
+            sources TEXT NOT NULL, content_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            is_draft INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS concepts (
+            name TEXT NOT NULL, source_path TEXT NOT NULL,
+            PRIMARY KEY (name, source_path)
+        );
+        CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+    """)
+    # Insert version=0 to trigger migration (no approved_at column present)
+    conn.execute("INSERT INTO schema_version VALUES (0)")
+    conn.commit()
+    conn.close()
+
+    # Opening via StateDB should apply v1 + v2 migrations
+    db = StateDB(path)
+    row = db._conn.execute("SELECT version FROM schema_version").fetchone()
+    assert row[0] == 2
+
+    # Verify v0.2 tables exist after migration
+    tables = {
+        r[0]
+        for r in db._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    assert "rejections" in tables
+    assert "stubs" in tables
+    assert "blocked_concepts" in tables
+
+    # Verify approved_at column added to wiki_articles
+    cols = {r[1] for r in db._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()}
+    assert "approved_at" in cols
+    assert "approval_notes" in cols

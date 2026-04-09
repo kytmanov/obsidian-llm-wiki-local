@@ -178,6 +178,13 @@ def test_create_stubs_empty_issues(config, db):
     assert created == []
 
 
+def test_create_stubs_none_runs_lint_internally(config, db):
+    """broken_link_issues=None → lint runs internally, no crash on empty wiki."""
+    # Empty wiki → lint finds no broken links → no stubs created
+    created = create_stubs(config, db, broken_link_issues=None)
+    assert created == []
+
+
 # ── suggest_orphan_links ──────────────────────────────────────────────────────
 
 

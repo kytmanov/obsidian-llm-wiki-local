@@ -12,6 +12,7 @@ from obsidian_llm_wiki.models import RawNoteRecord, WikiArticleRecord
 from obsidian_llm_wiki.ollama_client import OllamaClient
 from obsidian_llm_wiki.pipeline.compile import (
     _build_olw_annotations,
+    _gather_sources,
     _strip_olw_annotations,
     _write_concept_prompt,
     approve_drafts,
@@ -307,3 +308,70 @@ def test_approve_drafts_sets_approved_at(config, db):
     art = db.get_article(str(published[0].relative_to(config.vault)))
     assert art is not None
     assert art.approved_at is not None
+
+
+# ── _gather_sources ───────────────────────────────────────────────────────────
+
+
+def test_gather_sources_missing_file_skipped(vault):
+    """Source path that doesn't exist → skipped, no crash."""
+    text, resolved = _gather_sources(["raw/nonexistent.md"], vault)
+    assert text == ""
+    assert resolved == []
+
+
+def test_gather_sources_unreadable_file_skipped(vault):
+    """Source file that can't be parsed → skipped, no crash."""
+    bad = vault / "raw" / "bad.md"
+    bad.write_bytes(b"\xff\xfe")  # invalid UTF-8 triggers parse error
+    text, resolved = _gather_sources(["raw/bad.md"], vault)
+    # May or may not resolve depending on parse_note tolerance — just no exception
+    assert isinstance(text, str)
+    assert isinstance(resolved, list)
+
+
+def test_gather_sources_combines_multiple(vault):
+    (vault / "raw" / "a.md").write_text("---\ntitle: A\n---\nContent A.")
+    (vault / "raw" / "b.md").write_text("---\ntitle: B\n---\nContent B.")
+    text, resolved = _gather_sources(["raw/a.md", "raw/b.md"], vault)
+    assert "Content A." in text
+    assert "Content B." in text
+    assert len(resolved) == 2
+
+
+def test_gather_sources_bare_filename_resolved(vault):
+    """Model sometimes returns bare filename without raw/ prefix."""
+    (vault / "raw" / "note.md").write_text("---\ntitle: Note\n---\nBody.")
+    text, resolved = _gather_sources(["note.md"], vault)
+    assert "Body." in text
+    assert len(resolved) == 1
+
+
+# ── Stub compile path ─────────────────────────────────────────────────────────
+
+
+def test_compile_concepts_stub_produces_draft(config, db):
+    """Stub concept → fast model called → draft created → stub removed from DB."""
+    import json
+
+    db.add_stub("Orphan Topic")
+    mock_response = json.dumps({"title": "Orphan Topic", "content": "Stub content.", "tags": []})
+    client = make_mock_client(mock_response)
+
+    drafts, failed = compile_concepts(config, client, db)
+    assert len(drafts) == 1
+    assert not db.has_stub("Orphan Topic")
+    assert "Orphan" in drafts[0].name or "orphan" in drafts[0].name.lower()
+
+
+def test_compile_concepts_stub_failure_adds_to_failed(config, db):
+    """StructuredOutputError during stub compile → concept added to failed."""
+
+    db.add_stub("Bad Stub")
+    client = make_mock_client("not valid json at all {{{")
+    # structured_output will exhaust retries and raise StructuredOutputError
+    # Mock client to always return garbage
+    client.generate.return_value = "garbage"
+
+    drafts, failed = compile_concepts(config, client, db)
+    assert "Bad Stub" in failed

@@ -215,3 +215,82 @@ def test_orchestrator_auto_approve(config, db):
     report = orch.run(paths=[], auto_approve=True)
 
     assert report.published >= 0  # may be 0 if compile skipped but no crash
+
+
+def test_orchestrator_ingest_exception_logged_not_raised(config, db):
+    """Exception during ingest of one file is caught; run() returns normally."""
+    import obsidian_llm_wiki.pipeline.ingest as ingest_mod
+
+    raw_file = config.vault / "raw" / "note.md"
+    raw_file.write_text("---\ntitle: Note\n---\nContent.")
+
+    original = ingest_mod.ingest_note
+
+    def boom(**kwargs):
+        raise RuntimeError("ingest boom")
+
+    ingest_mod.ingest_note = boom
+    try:
+        orch = PipelineOrchestrator(config, make_mock_client(), db)
+        report = orch.run(paths=[str(raw_file)])
+    finally:
+        ingest_mod.ingest_note = original
+
+    assert report.ingested == 0  # exception swallowed, not counted
+
+
+def test_orchestrator_fix_creates_stubs(config, db):
+    """fix=True + broken link issues in lint → create_stubs called."""
+    from pathlib import Path
+
+    import obsidian_llm_wiki.pipeline.lint as lint_mod
+    import obsidian_llm_wiki.pipeline.maintain as maintain_mod
+    from obsidian_llm_wiki.models import LintIssue, LintResult
+
+    fake_lint = LintResult(
+        issues=[
+            LintIssue(
+                path="wiki/Article.md",
+                issue_type="broken_link",
+                description="[[Missing Stub]] not found",
+                suggestion="Create stub for Missing Stub",
+            )
+        ],
+        health_score=80.0,
+        summary="1 issue",
+    )
+    fake_draft = config.drafts_dir / "Something.md"
+    fake_draft.write_text("stub")
+
+    stubs_called_with = {}
+
+    original_lint = lint_mod.run_lint
+    original_stubs = maintain_mod.create_stubs
+
+    import obsidian_llm_wiki.pipeline.compile as compile_mod
+
+    original_compile_fn = compile_mod.compile_concepts
+
+    def fake_compile(**kwargs):
+        return ([fake_draft], [])
+
+    def fake_lint_fn(config, db):
+        return fake_lint
+
+    def fake_stubs(config, db, broken_link_issues=None, max_stubs=5):
+        stubs_called_with["issues"] = broken_link_issues
+        return [Path("wiki/.drafts/Missing_Stub.md")]
+
+    compile_mod.compile_concepts = fake_compile
+    lint_mod.run_lint = fake_lint_fn
+    maintain_mod.create_stubs = fake_stubs
+    try:
+        orch = PipelineOrchestrator(config, make_mock_client(), db)
+        report = orch.run(paths=[], fix=True)
+    finally:
+        compile_mod.compile_concepts = original_compile_fn
+        lint_mod.run_lint = original_lint
+        maintain_mod.create_stubs = original_stubs
+
+    assert "issues" in stubs_called_with  # create_stubs was called
+    assert report.stubs_created == 1

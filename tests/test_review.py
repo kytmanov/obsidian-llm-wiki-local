@@ -218,3 +218,25 @@ def test_compute_rejection_diff_with_body(config, db):
     assert result is not None
     # Should contain diff markers
     assert "---" in result or "@@ " in result or "no differences" in result
+
+
+# ── compute_diff exception path ───────────────────────────────────────────────
+
+
+def test_compute_diff_unreadable_draft_returns_none(config, db):
+    """parse_note failure on draft → returns None, no exception raised."""
+    import frontmatter as fm_lib
+
+    from obsidian_llm_wiki.vault import atomic_write
+
+    # Write published version (valid)
+    wiki_path = config.wiki_dir / "Broken.md"
+    post = fm_lib.Post("body", title="Broken", status="published", tags=[], sources=[])
+    atomic_write(wiki_path, fm_lib.dumps(post))
+
+    # Draft path that doesn't exist → parse_note will fail
+    draft_path = config.drafts_dir / "Broken.md"
+    # Don't create it — file missing triggers exception inside compute_diff
+
+    result = compute_diff(draft_path, wiki_path)
+    assert result is None
