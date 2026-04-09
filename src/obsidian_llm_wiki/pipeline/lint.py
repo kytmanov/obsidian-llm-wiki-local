@@ -303,12 +303,12 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
 
     # Summary
     if not issues:
-        summary = f"Wiki healthy. {len(pages)} concept pages, no issues."
+        summary = f"Wiki healthy. {len(all_pages)} pages checked, no issues."
     else:
         counts: dict[str, int] = {}
         for iss in issues:
             counts[iss.issue_type] = counts.get(iss.issue_type, 0) + 1
         parts = [f"{v} {k}" for k, v in sorted(counts.items())]
-        summary = f"{len(issues)} issue(s): {', '.join(parts)}. {len(pages)} pages checked."
+        summary = f"{len(issues)} issue(s): {', '.join(parts)}. {len(all_pages)} pages checked."
 
     return LintResult(issues=issues, health_score=round(score, 1), summary=summary)
