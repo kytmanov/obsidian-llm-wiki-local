@@ -198,7 +198,10 @@ def test_not_stale_when_hash_matches(vault, config, db):
 
     path = _write_page(config, "Fresh")
     rel = str(path.relative_to(vault))
-    correct_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+    from obsidian_llm_wiki.vault import parse_note
+
+    _, body = parse_note(path)
+    correct_hash = hashlib.sha256(body.encode()).hexdigest()
     db.upsert_article(
         WikiArticleRecord(
             path=rel,

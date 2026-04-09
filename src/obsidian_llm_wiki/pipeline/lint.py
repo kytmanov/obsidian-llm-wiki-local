@@ -81,8 +81,9 @@ def _check_tags(
                 write_note(page, meta, body)
 
 
-def _file_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _body_hash(body: str) -> str:
+    """Hash page body only (matches compile._content_hash — excludes frontmatter)."""
+    return hashlib.sha256(body.encode()).hexdigest()
 
 
 def _build_title_index(config: Config) -> dict[str, Path]:
@@ -227,7 +228,7 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
         # ── Manually edited (stale hash) ──────────────────────────────────────
         db_rec = db_articles.get(rel_path)
         if db_rec:
-            if _file_hash(page) != db_rec.content_hash:
+            if _body_hash(body) != db_rec.content_hash:
                 issues.append(
                     LintIssue(
                         path=rel_path,
@@ -242,17 +243,26 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
                 )
 
         # ── Broken wikilinks ──────────────────────────────────────────────────
+        seen_broken: set[str] = set()
         for link in extract_wikilinks(body):
-            if link.lower() not in title_index:
-                issues.append(
-                    LintIssue(
-                        path=rel_path,
-                        issue_type="broken_link",
-                        description=f"[[{link}]] has no matching wiki page",
-                        suggestion=f"Create a page for '{link}' or remove the link.",
-                        auto_fixable=False,
-                    )
+            if link.lower() in title_index or link.lower() in seen_broken:
+                continue
+            # Skip bare URLs accidentally wrapped in [[...]]
+            is_url = link.startswith(("http://", "https://")) or (
+                "/" in link and "." in link.split("/")[0]
+            )
+            if is_url:
+                continue
+            seen_broken.add(link.lower())
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="broken_link",
+                    description=f"[[{link}]] has no matching wiki page",
+                    suggestion=f"Create a page for '{link}' or remove the link.",
+                    auto_fixable=False,
                 )
+            )
 
         # ── Inline hashtags ───────────────────────────────────────────────────
         inline_tags = _INLINE_TAG_RE.findall(body)
