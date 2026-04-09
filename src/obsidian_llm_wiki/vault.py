@@ -27,10 +27,9 @@ def parse_note(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def write_note(path: Path, metadata: dict[str, Any], body: str) -> None:
-    """Write markdown file with YAML frontmatter."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Write markdown file with YAML frontmatter atomically (crash-safe)."""
     post = frontmatter.Post(body, **metadata)
-    path.write_text(frontmatter.dumps(post), encoding="utf-8")
+    atomic_write(path, frontmatter.dumps(post))
 
 
 def update_frontmatter(path: Path, updates: dict[str, Any]) -> None:

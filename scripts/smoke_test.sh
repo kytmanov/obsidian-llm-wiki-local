@@ -311,7 +311,7 @@ YAML_FAIL=0
 TAG_FAIL=0
 
 # Write validator to temp file (avoids heredoc-inside-process-substitution bash quirk)
-_YAML_VALIDATOR=$(mktemp /tmp/olw_yaml_check.XXXXXX.py)
+_YAML_VALIDATOR=$(mktemp /tmp/olw_yaml_check.XXXXXX)
 cat > "$_YAML_VALIDATOR" << 'PYEOF'
 import sys, frontmatter
 try:

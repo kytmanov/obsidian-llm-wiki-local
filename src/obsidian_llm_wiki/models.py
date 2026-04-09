@@ -9,7 +9,7 @@ reliably produce valid JSON for them.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -71,8 +71,14 @@ class SingleArticle(BaseModel):
 
     @field_validator("tags", mode="before")
     @classmethod
-    def clean_tags(cls, v: list[str]) -> list[str]:
-        return sanitize_tags(v)
+    def clean_tags(cls, v: Any) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = [v]
+        if not isinstance(v, list):
+            raise ValueError(f"tags must be a list, got {type(v).__name__}")
+        return sanitize_tags([str(item) for item in v if item is not None])
 
 
 class PageSelection(BaseModel):

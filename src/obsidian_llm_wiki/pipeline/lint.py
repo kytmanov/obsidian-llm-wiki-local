@@ -34,6 +34,48 @@ _SYSTEM_STEMS = frozenset({"index", "log"})
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
+def _check_tags(
+    rel_path: str,
+    meta: dict,
+    issues: list[LintIssue],
+    fix: bool,
+    page: Path,
+    body: str,
+) -> None:
+    """Emit invalid_tag issues and optionally fix them. Shared by all page loops."""
+    tags = meta.get("tags", [])
+    if not isinstance(tags, list):
+        issues.append(
+            LintIssue(
+                path=rel_path,
+                issue_type="invalid_tag",
+                description=f"tags field is not a list: {tags!r}",
+                suggestion="Convert tags to a YAML list.",
+                auto_fixable=True,
+            )
+        )
+        if fix:
+            meta["tags"] = sanitize_tags([str(tags)])
+            write_note(page, meta, body)
+    else:
+        non_str = [t for t in tags if not isinstance(t, str)]
+        str_tags = [t for t in tags if isinstance(t, str)]
+        invalid = non_str + [t for t in str_tags if t != sanitize_tag(t)]
+        if invalid:
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="invalid_tag",
+                    description=f"Invalid tags: {', '.join(str(t) for t in invalid)}",
+                    suggestion=f"Sanitized: {', '.join(sanitize_tag(str(t)) for t in invalid)}",
+                    auto_fixable=True,
+                )
+            )
+            if fix:
+                meta["tags"] = sanitize_tags([str(t) for t in tags])
+                write_note(page, meta, body)
+
+
 def _file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -154,37 +196,7 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
                 write_note(page, meta, body)
 
         # ── Invalid tags ──────────────────────────────────────────────────────
-        tags = meta.get("tags", [])
-        if not isinstance(tags, list):
-            issues.append(
-                LintIssue(
-                    path=rel_path,
-                    issue_type="invalid_tag",
-                    description=f"tags field is not a list: {tags!r}",
-                    suggestion="Convert tags to a YAML list.",
-                    auto_fixable=True,
-                )
-            )
-            if fix:
-                meta["tags"] = sanitize_tags([str(tags)])
-                write_note(page, meta, body)
-        else:
-            non_str = [t for t in tags if not isinstance(t, str)]
-            str_tags = [t for t in tags if isinstance(t, str)]
-            invalid = non_str + [t for t in str_tags if t != sanitize_tag(t)]
-            if invalid:
-                issues.append(
-                    LintIssue(
-                        path=rel_path,
-                        issue_type="invalid_tag",
-                        description=f"Invalid tags: {', '.join(str(t) for t in invalid)}",
-                        suggestion=f"Sanitized: {', '.join(sanitize_tag(str(t)) for t in invalid)}",
-                        auto_fixable=True,
-                    )
-                )
-                if fix:
-                    meta["tags"] = sanitize_tags([str(t) for t in tags])
-                    write_note(page, meta, body)
+        _check_tags(rel_path, meta, issues, fix, page, body)
 
         # ── Low confidence ────────────────────────────────────────────────────
         confidence = meta.get("confidence")
@@ -276,37 +288,7 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
             continue
 
         # Invalid tags
-        tags = meta.get("tags", [])
-        if not isinstance(tags, list):
-            issues.append(
-                LintIssue(
-                    path=rel_path,
-                    issue_type="invalid_tag",
-                    description=f"tags field is not a list: {tags!r}",
-                    suggestion="Convert tags to a YAML list.",
-                    auto_fixable=True,
-                )
-            )
-            if fix:
-                meta["tags"] = sanitize_tags([str(tags)])
-                write_note(page, meta, body)
-        else:
-            non_str = [t for t in tags if not isinstance(t, str)]
-            str_tags = [t for t in tags if isinstance(t, str)]
-            invalid = non_str + [t for t in str_tags if t != sanitize_tag(t)]
-            if invalid:
-                issues.append(
-                    LintIssue(
-                        path=rel_path,
-                        issue_type="invalid_tag",
-                        description=f"Invalid tags: {', '.join(str(t) for t in invalid)}",
-                        suggestion=f"Sanitized: {', '.join(sanitize_tag(str(t)) for t in invalid)}",
-                        auto_fixable=True,
-                    )
-                )
-                if fix:
-                    meta["tags"] = sanitize_tags([str(t) for t in tags])
-                    write_note(page, meta, body)
+        _check_tags(rel_path, meta, issues, fix, page, body)
 
         # Missing required frontmatter
         missing = _REQUIRED_FIELDS - set(meta.keys())
