@@ -223,6 +223,19 @@ def test_compute_rejection_diff_with_body(config, db):
 # ── compute_diff exception path ───────────────────────────────────────────────
 
 
+def test_review_menu_uses_v_not_R_for_rejection_diff():
+    """Menu string must use [v]iew not [R] — [R] was dead code (lowercased input)."""
+    import inspect
+
+    from obsidian_llm_wiki import cli as cli_mod
+
+    src = inspect.getsource(cli_mod)
+    assert "[v]iew rejection diff" in src or 'action == "v"' in src
+    # The old dead branch must be gone
+    assert '"R", "shift+r"' not in src
+    assert "shift+r" not in src
+
+
 def test_compute_diff_unreadable_draft_returns_none(config, db):
     """parse_note failure on draft → returns None, no exception raised."""
     import frontmatter as fm_lib

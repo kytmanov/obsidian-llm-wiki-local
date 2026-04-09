@@ -248,6 +248,31 @@ def test_orchestrator_auto_approve(config, db):
     assert report.published >= 0  # may be 0 if compile skipped but no crash
 
 
+def test_orchestrator_lint_runs_when_no_drafts_produced(config, db):
+    """lint must run even when compile produces no new drafts."""
+    import obsidian_llm_wiki.pipeline.lint as lint_mod
+
+    lint_called = []
+    original_lint = lint_mod.run_lint
+
+    def fake_lint(config, db):
+        lint_called.append(True)
+        from obsidian_llm_wiki.models import LintResult
+
+        return LintResult(issues=[], health_score=100.0, summary="ok")
+
+    lint_mod.run_lint = fake_lint
+    try:
+        with patch("obsidian_llm_wiki.pipeline.orchestrator._run_compile") as mock_compile:
+            mock_compile.return_value = ([], [])  # no drafts produced
+            orch = PipelineOrchestrator(config, make_mock_client(), db)
+            orch.run(paths=[])
+    finally:
+        lint_mod.run_lint = original_lint
+
+    assert len(lint_called) == 1  # lint ran despite zero new drafts
+
+
 def test_orchestrator_ingest_exception_logged_not_raised(config, db):
     """Exception during ingest of one file is caught; run() returns normally."""
     import obsidian_llm_wiki.pipeline.ingest as ingest_mod

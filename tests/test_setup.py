@@ -392,3 +392,17 @@ def test_init_syncs_models_into_existing_wiki_toml(
     assert 'heavy = "gemma4:e4b"' in content
     # pipeline settings must be preserved
     assert "auto_approve = false" in content
+
+
+# ── default_wiki_toml pipeline fields ────────────────────────────────────────
+
+
+def test_default_wiki_toml_contains_auto_maintain():
+    """auto_maintain must appear in generated wiki.toml so olw init exposes it."""
+    from obsidian_llm_wiki.config import default_wiki_toml
+
+    content = default_wiki_toml()
+    assert "auto_maintain" in content
+    # Must be valid TOML
+    parsed = tomllib.loads(content)
+    assert parsed["pipeline"]["auto_maintain"] is False
