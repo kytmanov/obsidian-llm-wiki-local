@@ -911,12 +911,14 @@ def lint(vault_str, fix):
             "stale": "✎",
             "low_confidence": "↓",
         }
+        from rich.markup import escape
+
         for iss in result.issues:
             icon = _TYPE_ICON.get(iss.issue_type, "!")
             fix_tag = " [dim][auto-fixable][/dim]" if iss.auto_fixable else ""
-            console.print(f"  {icon} [bold]{iss.issue_type}[/bold]{fix_tag}  {iss.path}")
-            console.print(f"     {iss.description}")
-            console.print(f"     [dim]→ {iss.suggestion}[/dim]")
+            console.print(f"  {icon} [bold]{iss.issue_type}[/bold]{fix_tag}  {escape(iss.path)}")
+            console.print(f"     {escape(iss.description)}")
+            console.print(f"     [dim]→ {escape(iss.suggestion)}[/dim]")
         console.print()
 
     if fix:

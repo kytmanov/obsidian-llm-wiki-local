@@ -34,6 +34,9 @@ _SYSTEM_STEMS = frozenset({"index", "log"})
 # Inline hashtag pattern — Obsidian indexes these as tags
 _INLINE_TAG_RE = re.compile(r"(?<![/\w])#([a-zA-Z][^\s#\]]*)")
 
+# Vault-internal directory names that LLMs sometimes write as wikilinks
+_VAULT_DIRS = frozenset({"wiki", "raw", "source", "sources", "queries", ".drafts", ".olw"})
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -247,11 +250,14 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
         for link in extract_wikilinks(body):
             if link.lower() in title_index or link.lower() in seen_broken:
                 continue
-            # Skip bare URLs accidentally wrapped in [[...]]
+            # Skip bare URLs and vault path fragments accidentally wrapped in [[...]]
             is_url = link.startswith(("http://", "https://")) or (
                 "/" in link and "." in link.split("/")[0]
             )
-            if is_url:
+            is_path_fragment = link.rstrip("/") in _VAULT_DIRS or link.startswith(
+                tuple(d + "/" for d in _VAULT_DIRS)
+            )
+            if is_url or is_path_fragment:
                 continue
             seen_broken.add(link.lower())
             issues.append(
