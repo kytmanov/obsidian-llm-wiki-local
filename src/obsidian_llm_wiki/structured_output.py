@@ -96,22 +96,26 @@ def _unwrap(data: dict, model_class: type[T]) -> dict:
     return data
 
 
-def _try_parse(raw: str, model_class: type[T]) -> T | None:
-    """Try direct JSON parse + Pydantic validation. Returns None on any failure."""
+def _try_parse(raw: str, model_class: type[T]) -> tuple[T | None, str]:
+    """Try direct JSON parse + Pydantic validation. Returns (result, error_str)."""
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
-        return None
+    except json.JSONDecodeError as e:
+        return None, f"Invalid JSON: {e}"
     # Try direct validation first
+    last_err = ""
     try:
-        return model_class.model_validate(data)
-    except ValidationError:
-        pass
+        return model_class.model_validate(data), ""
+    except ValidationError as e:
+        last_err = str(e)
     # Try unwrapping single-key container ({"ClassName": {...}})
     try:
-        return model_class.model_validate(_unwrap(data, model_class))
-    except (ValidationError, Exception):
-        return None
+        return model_class.model_validate(_unwrap(data, model_class)), ""
+    except ValidationError as e:
+        last_err = str(e)
+    except Exception:
+        pass
+    return None, last_err
 
 
 def request_structured(
@@ -157,24 +161,20 @@ def request_structured(
         )
 
         # Try direct parse
-        result = _try_parse(raw, model_class)
+        result, parse_err = _try_parse(raw, model_class)
         if result is not None:
             return result
+        last_error = parse_err
         log.debug("Tier 1 parse failed, trying extraction")
 
         # Tier 2: extract from text
         extracted = _extract_json(raw)
         if extracted:
-            result = _try_parse(extracted, model_class)
+            result, parse_err = _try_parse(extracted, model_class)
             if result is not None:
                 return result
-
-        # Prepare retry prompt with error context
-        try:
-            json.loads(raw)
-            last_error = f"JSON was valid but didn't match schema for {model_class.__name__}"
-        except json.JSONDecodeError as e:
-            last_error = f"Invalid JSON: {e}"
+            if parse_err:
+                last_error = parse_err
 
         log.debug(
             "structured_output attempt %d failed: %s. Raw (first 300): %s",

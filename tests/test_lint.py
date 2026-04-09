@@ -148,7 +148,8 @@ def test_valid_wikilink_not_broken(vault, config, db):
 
 def test_url_wikilinks_not_broken(vault, config, db):
     """[[https://example.com]] and domain/path links must not trigger broken_link."""
-    _write_page(config, "Alpha", "See [[https://example.com/page]] and [[scrummasters.com.ua/book]].")
+    body = "See [[https://example.com/page]] and [[scrummasters.com.ua/book]]."
+    _write_page(config, "Alpha", body)
     result = run_lint(config, db)
     broken = [i for i in result.issues if i.issue_type == "broken_link"]
     assert not broken
