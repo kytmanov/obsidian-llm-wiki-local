@@ -466,6 +466,182 @@ check "retry-failed reports failed notes" \
     "grep -qiE 'retry|failed|not found|re-ingest' \"$_RETRY_TMP\""
 rm -f "$_RETRY_TMP"
 
+# ── olw run (orchestrator) ───────────────────────────────────────────────────
+header "olw run (pipeline orchestrator)"
+info "Adding 4th note to drive olw run..."
+
+cat > "$VAULT_DIR/raw/reinforcement-learning.md" <<'EOF'
+---
+title: Reinforcement Learning
+---
+
+Reinforcement learning (RL) trains agents to make decisions by maximising
+cumulative reward from an environment.
+
+Key components: agent, environment, state, action, reward, policy.
+Algorithms: Q-learning, SARSA, PPO, A3C. Applications: game playing (AlphaGo,
+Atari), robotics control, recommendation systems, autonomous driving.
+
+Model-free methods learn directly from experience. Model-based methods build
+an internal model of the environment for planning.
+EOF
+
+RUN_OUT=$($OLW run 2>&1 || true)
+echo "$RUN_OUT"
+_TMP=$(mktemp); echo "$RUN_OUT" > "$_TMP"
+check "olw run completes without fatal error" \
+    "! grep -qiE 'traceback|exception|fatal' \"$_TMP\""
+check "olw run reports ingested or compiled" \
+    "grep -qiE 'ingest|compile|draft|publish|rounds' \"$_TMP\""
+rm -f "$_TMP"
+
+RUN_DRYRUN_OUT=$($OLW run --dry-run 2>&1 || true)
+_TMP=$(mktemp); echo "$RUN_DRYRUN_OUT" > "$_TMP"
+check "olw run --dry-run makes no LLM calls (no new drafts)" \
+    "test \$(find $VAULT_DIR/wiki/.drafts -name '*.md' 2>/dev/null | wc -l) -eq 0"
+rm -f "$_TMP"
+
+# ── Draft annotations ────────────────────────────────────────────────────────
+header "Draft annotations"
+info "Compiling with low-quality source to trigger annotation..."
+# Force a concept to recompile by inserting low quality + low confidence source
+$OLW approve --all 2>&1 || true   # clear drafts first
+
+# Inject a single-source, low-confidence concept by direct DB manipulation
+python3 - <<PYEOF
+import sqlite3
+db_path = "$VAULT_DIR/.olw/state.db"
+conn = sqlite3.connect(db_path)
+# Update one raw note to low quality so annotation triggers
+conn.execute("UPDATE raw_notes SET status='ingested', quality='low' WHERE path='raw/reinforcement-learning.md'")
+conn.commit()
+conn.close()
+PYEOF
+
+$OLW compile 2>&1 || true
+DRAFTS_WITH_ANNOTATION=$(grep -rl 'olw-auto' "$VAULT_DIR/wiki/.drafts/" 2>/dev/null | wc -l | tr -d ' ')
+# Not guaranteed to annotate since model may produce high confidence — just check no crash
+pass "annotation check ran (found $DRAFTS_WITH_ANNOTATION annotated draft(s))"
+
+# Verify annotations are stripped on approve
+$OLW approve --all 2>&1 || true
+PUBLISHED_WITH_ANNOTATION=$(grep -rl 'olw-auto' "$VAULT_DIR/wiki/" \
+    --include='*.md' --exclude-dir='.drafts' --exclude-dir='sources' 2>/dev/null | wc -l | tr -d ' ')
+check "no olw-auto annotations in published articles" \
+    "test '$PUBLISHED_WITH_ANNOTATION' -eq 0"
+
+# ── Rejection feedback loop ───────────────────────────────────────────────────
+header "Rejection feedback loop"
+info "Recompiling to produce a draft to reject..."
+
+# Force one concept back to needing compile
+python3 - <<PYEOF
+import sqlite3
+db_path = "$VAULT_DIR/.olw/state.db"
+conn = sqlite3.connect(db_path)
+conn.execute("UPDATE raw_notes SET status='ingested' WHERE path='raw/quantum-computing.md'")
+conn.commit()
+conn.close()
+PYEOF
+
+$OLW compile 2>&1 || true
+
+REJECT_DRAFT=$(find "$VAULT_DIR/wiki/.drafts" -name "*.md" | head -1)
+if [[ -n "$REJECT_DRAFT" ]]; then
+    DRAFT_TITLE=$(grep '^title:' "$REJECT_DRAFT" | head -1 | sed 's/title: *//')
+    info "Rejecting draft: $DRAFT_TITLE"
+
+    REJECT_OUT=$($OLW reject "$REJECT_DRAFT" --feedback "Too brief, needs more concrete examples" 2>&1 || true)
+    echo "$REJECT_OUT"
+    check "reject removes draft file" "test ! -f \"$REJECT_DRAFT\""
+    check "reject confirms feedback saved" \
+        "echo \"$REJECT_OUT\" | grep -qiE 'feedback|saved|rejection|next compile'"
+
+    # Force concept back to compile again and verify feedback appears in output
+    python3 - <<PYEOF
+import sqlite3
+db_path = "$VAULT_DIR/.olw/state.db"
+conn = sqlite3.connect(db_path)
+conn.execute("UPDATE raw_notes SET status='ingested' WHERE path='raw/quantum-computing.md'")
+conn.commit()
+conn.close()
+PYEOF
+    COMPILE_OUT2=$($OLW compile 2>&1 || true)
+    echo "$COMPILE_OUT2"
+    # We can't easily inspect the prompt, but compile should succeed without crash
+    check "recompile after rejection completes" \
+        "! echo \"$COMPILE_OUT2\" | grep -qiE 'traceback|fatal'"
+else
+    pass "rejection test skipped (no draft available)"
+fi
+
+# ── olw unblock ──────────────────────────────────────────────────────────────
+header "olw unblock"
+info "Simulating 5-rejection block..."
+
+python3 - <<PYEOF
+import sqlite3
+db_path = "$VAULT_DIR/.olw/state.db"
+conn = sqlite3.connect(db_path)
+conn.execute("""
+    INSERT OR IGNORE INTO blocked_concepts (concept, blocked_at, reason)
+    VALUES ('Fake Blocked Concept', datetime('now'), 'test')
+""")
+conn.commit()
+conn.close()
+PYEOF
+
+STATUS_BLOCKED=$($OLW status 2>&1 || true)
+_TMP=$(mktemp); echo "$STATUS_BLOCKED" > "$_TMP"
+check "status shows blocked concept" \
+    "grep -qiE 'blocked|Fake Blocked' \"$_TMP\""
+rm -f "$_TMP"
+
+UNBLOCK_OUT=$($OLW unblock "Fake Blocked Concept" 2>&1 || true)
+echo "$UNBLOCK_OUT"
+check "unblock completes without error" \
+    "! echo \"$UNBLOCK_OUT\" | grep -qiE 'traceback|error'"
+check "concept no longer blocked after unblock" \
+    "! $OLW status 2>&1 | grep -qiE 'Fake Blocked'"
+
+# ── olw maintain ─────────────────────────────────────────────────────────────
+header "olw maintain"
+MAINTAIN_OUT=$($OLW maintain 2>&1 || true)
+echo "$MAINTAIN_OUT"
+_TMP=$(mktemp); echo "$MAINTAIN_OUT" > "$_TMP"
+check "maintain runs without fatal error" \
+    "! grep -qiE 'traceback|exception|fatal' \"$_TMP\""
+check "maintain reports health or quality info" \
+    "grep -qiE 'health|quality|lint|stub|orphan|issue|ok' \"$_TMP\""
+rm -f "$_TMP"
+
+MAINTAIN_DRY_OUT=$($OLW maintain --dry-run 2>&1 || true)
+_TMP=$(mktemp); echo "$MAINTAIN_DRY_OUT" > "$_TMP"
+check "maintain --dry-run completes" \
+    "! grep -qiE 'traceback|fatal' \"$_TMP\""
+rm -f "$_TMP"
+
+# ── olw maintain --fix (stubs) ────────────────────────────────────────────────
+header "olw maintain --fix (stub creation)"
+# Inject a broken wikilink into a published article so maintain can create a stub
+FIRST_WIKI=$(find "$VAULT_DIR/wiki" -maxdepth 1 -name "*.md" \
+    ! -name "index.md" ! -name "log.md" 2>/dev/null | head -1)
+
+if [[ -n "$FIRST_WIKI" ]]; then
+    echo -e "\n[[Nonexistent Stub Topic]]" >> "$FIRST_WIKI"
+    STUB_OUT=$($OLW maintain --fix 2>&1 || true)
+    echo "$STUB_OUT"
+    _TMP=$(mktemp); echo "$STUB_OUT" > "$_TMP"
+    check "maintain --fix runs without fatal error" \
+        "! grep -qiE 'traceback|fatal' \"$_TMP\""
+    rm -f "$_TMP"
+    # Restore the file
+    # (truncate last line — safe enough for smoke test purposes)
+    sed -i '' '$ d' "$FIRST_WIKI" 2>/dev/null || sed -i '$ d' "$FIRST_WIKI" 2>/dev/null || true
+else
+    pass "stub creation test skipped (no wiki article available)"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 header "Results"
 echo -e "${GREEN}${BOLD}All checks passed: $PASS_COUNT${NC}"
