@@ -146,6 +146,33 @@ def test_valid_wikilink_not_broken(vault, config, db):
     assert not broken
 
 
+def test_url_wikilinks_not_broken(vault, config, db):
+    """[[https://example.com]] and domain/path links must not trigger broken_link."""
+    _write_page(config, "Alpha", "See [[https://example.com/page]] and [[scrummasters.com.ua/book]].")
+    result = run_lint(config, db)
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    assert not broken
+
+
+def test_vault_path_fragments_not_broken(vault, config, db):
+    """LLM sometimes writes [[wiki/]], [[raw/]], [[source]] as links — not real pages."""
+    body = "See [[wiki/]] and [[raw/]] and [[source]] and [[sources]] and [[wiki/.drafts/]]."
+    _write_page(config, "Alpha", body)
+    result = run_lint(config, db)
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    assert not broken
+
+
+def test_duplicate_broken_links_deduplicated(vault, config, db):
+    """Same broken target appearing multiple times in one page → only one issue."""
+    body = "See [[Ghost]] here. Also [[Ghost]] there. And [[Ghost]] again."
+    _write_page(config, "Alpha", body)
+    result = run_lint(config, db)
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    assert len(broken) == 1
+    assert "Ghost" in broken[0].description
+
+
 # ── Low confidence ────────────────────────────────────────────────────────────
 
 
