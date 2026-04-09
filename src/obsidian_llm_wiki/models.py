@@ -99,7 +99,13 @@ class QueryAnswer(BaseModel):
 class LintIssue(BaseModel):
     path: str
     issue_type: Literal[
-        "orphan", "broken_link", "missing_frontmatter", "stale", "low_confidence", "invalid_tag"
+        "orphan",
+        "broken_link",
+        "missing_frontmatter",
+        "stale",
+        "low_confidence",
+        "invalid_tag",
+        "inline_tag",
     ]
     description: str
     suggestion: str

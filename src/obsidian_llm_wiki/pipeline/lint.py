@@ -16,6 +16,7 @@ Fix mode (--fix):
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 from ..config import Config
@@ -29,6 +30,9 @@ _LOW_CONFIDENCE_THRESHOLD = 0.3
 
 # Pages excluded from orphan + link checks (meta / system pages)
 _SYSTEM_STEMS = frozenset({"index", "log"})
+
+# Inline hashtag pattern — Obsidian indexes these as tags
+_INLINE_TAG_RE = re.compile(r"(?<![/\w])#([a-zA-Z][^\s#\]]*)")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -60,7 +64,8 @@ def _check_tags(
     else:
         non_str = [t for t in tags if not isinstance(t, str)]
         str_tags = [t for t in tags if isinstance(t, str)]
-        invalid = non_str + [t for t in str_tags if t != sanitize_tag(t)]
+        # also catch empty strings — sanitize_tags drops them but t == sanitize_tag(t) == ""
+        invalid = non_str + [t for t in str_tags if not sanitize_tag(t) or t != sanitize_tag(t)]
         if invalid:
             issues.append(
                 LintIssue(
@@ -248,6 +253,19 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
                         auto_fixable=False,
                     )
                 )
+
+        # ── Inline hashtags ───────────────────────────────────────────────────
+        inline_tags = _INLINE_TAG_RE.findall(body)
+        if inline_tags:
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="inline_tag",
+                    description=f"Inline #tags in body: {', '.join(f'#{t}' for t in inline_tags)}",
+                    suggestion="Replace inline #tags with [[wikilinks]] or frontmatter tags.",
+                    auto_fixable=False,
+                )
+            )
 
         # ── Orphan ───────────────────────────────────────────────────────────
         # Linked-by: pages that contain [[title]] or [[stem]] in their body

@@ -235,6 +235,7 @@ def _write_concept_prompt(
         f"\nIMPORTANT: Keep the content field under 800 words. Be concise.\n"
         f"Tags must be lowercase, hyphen-separated, no spaces or special characters. "
         f"Good: machine-learning, quantum-computing. Bad: Machine Learning, C++.\n"
+        f"Do NOT use inline hashtags (#tag) in the content body — use [[wikilinks]] only.\n"
         f"If source material references images or diagrams, mention their filenames "
         f"so they can be embedded later (e.g. ![[diagram.png]]).\n"
         f"Use [[wikilinks]] inline in prose to link to related concepts.\n\n"
@@ -388,7 +389,8 @@ def _write_prompt_legacy(article: ArticlePlan, sources: str, existing_titles: li
         f"Reasoning: {article.reasoning}\n"
         f"IMPORTANT: Keep the content field under 800 words. Be concise.\n"
         f"Tags must be lowercase, hyphen-separated, no spaces or special characters. "
-        f"Good: machine-learning, quantum-computing. Bad: Machine Learning, C++.\n\n"
+        f"Good: machine-learning, quantum-computing. Bad: Machine Learning, C++.\n"
+        f"Do NOT use inline hashtags (#tag) in the content body — use [[wikilinks]] only.\n\n"
         f"Existing wiki articles to link to: {titles_str}\n\n"
         f"SOURCE MATERIAL:\n{sources}"
     )
