@@ -584,8 +584,8 @@ import sqlite3
 db_path = "$VAULT_DIR/.olw/state.db"
 conn = sqlite3.connect(db_path)
 conn.execute("""
-    INSERT OR IGNORE INTO blocked_concepts (concept, blocked_at, reason)
-    VALUES ('Fake Blocked Concept', datetime('now'), 'test')
+    INSERT OR IGNORE INTO blocked_concepts (concept, blocked_at)
+    VALUES ('Fake Blocked Concept', datetime('now'))
 """)
 conn.commit()
 conn.close()
@@ -634,6 +634,20 @@ if [[ -n "$FIRST_WIKI" ]]; then
     _TMP=$(mktemp); echo "$STUB_OUT" > "$_TMP"
     check "maintain --fix runs without fatal error" \
         "! grep -qiE 'traceback|fatal' \"$_TMP\""
+    # Verify stub draft was created in .drafts or DB has stub entry
+    STUB_DRAFT_COUNT=$(find "$VAULT_DIR/wiki/.drafts" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+    STUB_DB_COUNT=$(python3 -c "
+import sqlite3
+conn = sqlite3.connect('$VAULT_DIR/.olw/state.db')
+try:
+    n = conn.execute('SELECT COUNT(*) FROM stubs').fetchone()[0]
+    print(n)
+except Exception:
+    print(0)
+conn.close()
+" 2>/dev/null || echo 0)
+    check "maintain --fix created stub draft or DB entry" \
+        "test '$STUB_DRAFT_COUNT' -gt 0 || test '$STUB_DB_COUNT' -gt 0"
     rm -f "$_TMP"
     # Restore the file
     # (truncate last line — safe enough for smoke test purposes)
