@@ -1,6 +1,6 @@
 [project]
 name = "obsidian-llm-wiki"
-version = "0.1.2"
+version = "0.1.3"
 description = "Convert Obsidian notes into an AI-maintained wiki using local LLMs (100% local, Ollama)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,7 +8,7 @@ license = { text = "MIT" }
 keywords = ["obsidian", "wiki", "llm", "ollama", "knowledge-management", "local-ai"]
 authors = [{ name = "kytmanov" }]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: End Users/Desktop",
     "Intended Audience :: Developers",
@@ -30,9 +30,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/kytmanov/obsidian-llm-wiki"
-Repository = "https://github.com/kytmanov/obsidian-llm-wiki"
-Issues = "https://github.com/kytmanov/obsidian-llm-wiki/issues"
+Homepage = "https://github.com/kytmanov/obsidian-llm-wiki-local"
+Repository = "https://github.com/kytmanov/obsidian-llm-wiki-local"
+Issues = "https://github.com/kytmanov/obsidian-llm-wiki-local/issues"
 
 
 [project.scripts]
