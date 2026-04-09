@@ -280,15 +280,16 @@ PYEOF
 )
     check "draft YAML is parseable" "test -z \"$DRAFT_YAML_OK\""
     DRAFT_TAG_BAD=$(uv run --project "$REPO_DIR" python - "$FIRST_DRAFT" 2>&1 <<'PYEOF'
-import sys, frontmatter
+import sys, re, frontmatter
 m = frontmatter.load(sys.argv[1])
-bad = [t for t in m.get('tags', []) if ' ' in t]
+valid_re = re.compile(r'^[a-z0-9][a-zA-Z0-9_/\-]*$')
+bad = [t for t in m.get('tags', []) if not isinstance(t, str) or ' ' in t or t != t.lower() or not valid_re.match(t)]
 if bad:
     print(f"Bad tags: {bad}")
     sys.exit(1)
 PYEOF
 )
-    check "draft tags have no spaces" "test -z \"$DRAFT_TAG_BAD\""
+    check "draft tags are valid (lowercase, no spaces, no special chars)" "test -z \"$DRAFT_TAG_BAD\""
 fi
 
 # ── Status after compile ──────────────────────────────────────────────────────
@@ -313,14 +314,15 @@ TAG_FAIL=0
 # Write validator to temp file (avoids heredoc-inside-process-substitution bash quirk)
 _YAML_VALIDATOR=$(mktemp /tmp/olw_yaml_check.XXXXXX)
 cat > "$_YAML_VALIDATOR" << 'PYEOF'
-import sys, frontmatter
+import sys, re, frontmatter
 try:
     m = frontmatter.load(sys.argv[1])
 except Exception as e:
     print(f"  YAML parse failed: {sys.argv[1]}: {e}")
     sys.exit(1)
 tags = m.get('tags', [])
-bad = [t for t in tags if isinstance(t, str) and ' ' in t]
+valid_re = re.compile(r'^[a-z0-9][a-zA-Z0-9_/\-]*$')
+bad = [t for t in tags if not isinstance(t, str) or ' ' in t or t != t.lower() or not valid_re.match(t)]
 if bad:
     print(f"  Bad tags in {sys.argv[1]}: {bad}")
     sys.exit(2)
@@ -340,7 +342,7 @@ done < <(find "$VAULT_DIR/wiki" -name "*.md" -not -path "*/.drafts/*" -print0 2>
 rm -f "$_YAML_VALIDATOR"
 
 check "all published pages have valid YAML" "test $YAML_FAIL -eq 0"
-check "no published pages have tags with spaces" "test $TAG_FAIL -eq 0"
+check "no published pages have invalid tags (spaces/uppercase/special)" "test $TAG_FAIL -eq 0"
 
 # ── Git log ───────────────────────────────────────────────────────────────────
 header "Git history"

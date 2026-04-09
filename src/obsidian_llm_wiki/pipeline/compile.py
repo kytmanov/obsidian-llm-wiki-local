@@ -26,6 +26,7 @@ import frontmatter as fm_lib
 from ..config import Config
 from ..models import ArticlePlan, CompilePlan, SingleArticle, WikiArticleRecord
 from ..ollama_client import OllamaClient
+from ..sanitize import sanitize_tags
 from ..state import StateDB
 from ..structured_output import StructuredOutputError, request_structured
 from ..vault import (
@@ -555,6 +556,9 @@ def approve_drafts(
         meta, body = parse_note(draft_path)
         meta["status"] = "published"
         meta["updated"] = datetime.now().strftime("%Y-%m-%d")
+        # Sanitize tags defensively — covers old drafts written before sanitization was added
+        if isinstance(meta.get("tags"), list):
+            meta["tags"] = sanitize_tags([str(t) for t in meta["tags"] if t is not None])
         write_note(target, meta, body)  # write to destination first
         draft_path.unlink()  # only remove draft after target is safely written
 
