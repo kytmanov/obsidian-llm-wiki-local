@@ -60,6 +60,7 @@ class PipelineConfig(BaseModel):
     auto_commit: bool = True
     watch_debounce: float = 3.0
     max_concepts_per_source: int = 8
+    auto_maintain: bool = False
 
 
 class RagConfig(BaseModel):

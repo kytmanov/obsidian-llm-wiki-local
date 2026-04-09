@@ -1,8 +1,8 @@
 # obsidian-llm-wiki
 
-**Turn your raw notes into a self-maintaining, interlinked wiki — powered by a local LLM.**
+**Turn your raw notes into a self-improving, interlinked wiki — powered by a local LLM.**
 
-Drop a markdown file into a folder. An AI reads it, extracts concepts, and either creates new wiki articles or updates existing ones with the new knowledge. Over time your wiki compounds: every note you add makes the whole smarter and more connected.
+Drop a markdown file into a folder. The pipeline reads it, extracts concepts, and creates or updates wiki articles with the new knowledge. Reject a draft and explain why — the next compile addresses your feedback. Over time your wiki compounds: every note you add (and every draft you review) makes the whole smarter.
 
 **100% local. No cloud, no API keys, no telemetry.** Just [Ollama](https://ollama.com) running on your machine.
 
@@ -32,14 +32,19 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 ## Features
 
 - **Concept-driven, incremental compilation** — each concept gets its own article, updated only when its source notes change
+- **Rejection feedback loop** — reject a draft with a reason; the next compile injects your feedback into the prompt so the model addresses it
+- **Draft annotations** — low-confidence or single-source drafts are flagged with `<!-- olw-auto: ... -->` comments (invisible in Obsidian, stripped on approval)
+- **Rich review interface** — `olw review` lists drafts ranked by rejection count, shows diffs vs published and vs the last rejected version
+- **Pipeline orchestrator** — `olw run` runs ingest → compile → lint → approve as one command with timing and failure classification
+- **Selective recompile** — after a file save, only concepts linked to that source are recompiled (not the entire wiki)
+- **Self-maintenance** — `olw maintain` creates stub articles for broken wikilinks, suggests orphan link fixes, and warns about low-quality source distribution
 - **Manual edit protection** — edited an article by hand? The compiler detects the change and skips it
 - **Source traceability** — every article links back to the raw notes it was built from
-- **Draft review workflow** — articles land in `.drafts/` for human approval before publishing
 - **File watcher** — `olw watch` auto-processes anything dropped into `raw/`
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
-- **Offline test suite** — all 139 tests run without Ollama
+- **Offline test suite** — all 290 tests run without Ollama
 
 ---
 
@@ -112,17 +117,16 @@ Drop any `.md` files into `~/my-wiki/raw/`. Web clips, book notes, meeting notes
   physics-lecture.md
 ```
 
-### 6. Run the pipeline
+### 6. Run the full pipeline
 
 ```bash
-# Analyze notes, extract concepts
+# One command: ingest + compile + lint + optional auto-approve
+olw run
+
+# Or step by step:
 olw ingest --all
-
-# Generate wiki articles (lands in .drafts/)
 olw compile
-
-# Review drafts, then publish
-olw approve --all
+olw review        # interactive draft review
 ```
 
 If you set a default vault in `olw setup`, the `--vault` flag is optional. Otherwise use `--vault ~/my-wiki` or `export OLW_VAULT=~/my-wiki`.
@@ -133,7 +137,7 @@ Open `~/my-wiki` as an Obsidian vault. The graph view shows your connected wiki.
 
 ```bash
 olw watch
-# Drop a file in raw/ → ingest + compile happen automatically
+# Drop a file in raw/ → ingest + compile happen automatically (selective: only linked concepts)
 ```
 
 ---
@@ -145,7 +149,7 @@ The pipeline has three stages, each using the LLM for a different purpose:
 ```
 raw/note.md
     │
-    ▼ olw ingest
+    ▼ olw ingest  (or olw run)
     Fast LLM (3B–8B)
     • Reads note
     • Extracts concept names
@@ -155,16 +159,60 @@ raw/note.md
     ▼ olw compile
     Heavy LLM (7B–14B)
     • For each concept: gathers all source notes that mention it
+    • Injects rejection feedback from previous reviews into the prompt
     • Writes a wiki article with [[wikilinks]] to related concepts
+    • Adds quality annotations if confidence is low or sources are sparse
     • Lands in wiki/.drafts/ for review
     │
-    ▼ olw approve
-    • Moves draft to wiki/
+    ▼ olw review  (or olw approve)
+    • Interactive numbered menu — approve / reject / diff / edit
+    • Rejection feedback stored and injected into next compile
+    • On approve: annotations stripped, article published to wiki/
     • Updates wiki/index.md (navigation layer)
     • Git commits the change
 ```
 
 **No vector databases, no embeddings.** `wiki/index.md` acts as the routing layer for `olw query`. This keeps the setup simple and works well up to ~100 source notes.
+
+---
+
+## Rejection feedback loop
+
+The core v0.2 feature. When you reject a draft:
+
+```bash
+olw review
+# Select draft → [r]eject → "The overview section is too vague, needs concrete examples"
+```
+
+The feedback is stored in the state database. On the next compile of that concept, the prompt includes:
+
+```
+PREVIOUS REJECTIONS — address these issues:
+- The overview section is too vague, needs concrete examples
+```
+
+After 5 rejections of the same concept without an approval, the concept is **auto-blocked** and excluded from future compiles until you explicitly re-enable it:
+
+```bash
+olw unblock "Quantum Computing"
+```
+
+---
+
+## Draft annotations
+
+Drafts with low confidence or sparse sources are annotated with HTML comments that are invisible in Obsidian's preview but visible in the editor:
+
+```markdown
+<!-- olw-auto: low-confidence (0.32) — verify before publishing -->
+<!-- olw-auto: single-source — cross-reference recommended -->
+
+## Overview
+...
+```
+
+Annotations are stripped automatically when you approve a draft. `olw review` surfaces them as a warning in the draft list.
 
 ---
 
@@ -188,7 +236,8 @@ my-wiki/
 ├── vault-schema.md             ← LLM context: conventions for this vault
 ├── wiki.toml                   ← configuration
 └── .olw/
-    └── state.db                ← SQLite: notes, concepts, articles, hashes
+    ├── state.db                ← SQLite: notes, concepts, articles, rejections, stubs
+    └── pipeline.lock           ← advisory lock (auto-released; safe to delete if stale)
 ```
 
 `raw/` is immutable — `olw` never writes to it. All metadata lives in `state.db`.
@@ -214,6 +263,7 @@ heavy_ctx = 16384                # context window for heavy model (tokens)
 [pipeline]
 auto_approve = false             # true = skip draft review
 auto_commit = true               # git commit after each operation
+auto_maintain = false            # true = run maintain checks after each compile
 max_concepts_per_source = 8      # limit concepts extracted per note
 watch_debounce = 3.0             # seconds after last file event before processing
 ```
@@ -243,13 +293,22 @@ After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to 
 | `olw init PATH` | Create vault structure and git repo |
 | `olw init PATH --existing` | Adopt an existing Obsidian vault |
 | `olw doctor` | Check Ollama, models, vault structure |
+| `olw run` | Full pipeline: ingest → compile → lint → [approve] |
+| `olw run --auto-approve` | Full pipeline, publish without review |
+| `olw run --dry-run` | Report what would happen, make no changes |
 | `olw ingest --all` | Analyze all raw notes |
 | `olw ingest FILE` | Analyze one note |
 | `olw compile` | Generate wiki articles → `.drafts/` |
 | `olw compile --retry-failed` | Retry previously failed notes |
-| `olw approve --all` | Publish all drafts |
+| `olw review` | Interactive draft review (approve / reject / diff) |
+| `olw approve --all` | Publish all drafts without review |
 | `olw approve FILE` | Publish one draft |
-| `olw reject FILE` | Discard a draft |
+| `olw reject FILE` | Discard a draft (prompts for feedback) |
+| `olw reject FILE --feedback "..."` | Discard with feedback for next compile |
+| `olw unblock "Concept"` | Re-enable a concept blocked after 5 rejections |
+| `olw maintain` | Health check + stubs + orphan and merge suggestions |
+| `olw maintain --fix` | Auto-fix issues and create stub articles |
+| `olw maintain --dry-run` | Report issues without making changes |
 | `olw status` | Show pipeline state and pending drafts |
 | `olw status --failed` | List failed notes with error messages |
 | `olw query "question"` | Answer from your wiki |
@@ -312,36 +371,30 @@ OLLAMA_URL=http://localhost:11434 bash scripts/smoke_test.sh
 Drafts land in `wiki/.drafts/` — Obsidian hides dotfolders by default so they won't show in the graph yet. Run:
 
 ```bash
+olw review        # interactive review
+# or
 olw approve --all
 ```
 
-Articles move to `wiki/` and become fully visible. Open `~/my-wiki` as an Obsidian vault (**File → Open vault**) if you haven't already.
+Articles move to `wiki/` and become fully visible.
 
 ---
 
 **Q: Compile says "2 article(s) failed: Methodology, Sprints" — what do I do?**
 
-Failed concepts are not recorded in the DB, so simply re-running compile retries them automatically:
+Failed concepts are retried automatically on the next run. Or force a retry:
 
 ```bash
 olw compile
 ```
 
-If the same concepts keep failing, the LLM is likely struggling with JSON output for those specific titles. Try:
-
-```bash
-# More room for the model to produce clean output
-# Edit wiki.toml: heavy_ctx = 32768, then:
-olw compile
-```
-
-See [Tuning context windows](#tuning-context-windows) for the `heavy_ctx` table.
+If the same concepts keep failing, the LLM is likely struggling with JSON output for those specific titles. Try increasing `heavy_ctx` in `wiki.toml` (see [Tuning context windows](#tuning-context-windows)).
 
 ---
 
 **Q: I see `structured_output attempt N failed` messages during compile — is something broken?**
 
-No. This is the built-in 3-tier retry system working as designed. The model occasionally echoes the JSON schema structure instead of flat output — the retry corrects it. Articles are still generated. These messages are debug-level noise; a real failure surfaces as `article(s) failed: ...` in the summary line.
+No. This is the built-in 3-tier retry system working as designed. The model occasionally echoes the JSON schema structure instead of flat output — the retry corrects it. Articles are still generated. A real failure surfaces as `article(s) failed: ...` in the summary line.
 
 ---
 
@@ -358,10 +411,27 @@ olw ingest --all && olw compile
 
 **Q: I changed models in `olw setup` but `olw compile` still uses the old model.**
 
-Re-run `olw init` on your vault — it now syncs the model settings from your global config into `wiki.toml`:
+Re-run `olw init` on your vault — it syncs the model settings from your global config into `wiki.toml`:
 
 ```bash
 olw init ~/my-wiki
+```
+
+---
+
+**Q: A concept keeps getting rejected — how do I stop it from recompiling?**
+
+After 5 rejections the concept is auto-blocked and excluded from future compiles. If it blocks earlier than you'd like:
+
+```bash
+olw unblock "Concept Name"   # re-enable
+```
+
+Or manually block it:
+
+```bash
+# Mark as blocked so compile skips it
+olw status   # shows blocked concepts
 ```
 
 ---

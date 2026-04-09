@@ -42,6 +42,15 @@ from ..vault import (
 
 log = logging.getLogger(__name__)
 
+# Annotation thresholds — applied to drafts, stripped on approve
+_ANNOTATION_CONFIDENCE_THRESHOLD = 0.4
+_ANNOTATION_MIN_SOURCES = 2
+
+_STUB_WRITE_SYSTEM = (
+    "You are a wiki editor. Write a brief stub article for a wiki concept that was referenced "
+    "by other articles but has no source material yet. Keep it under 150 words. Be factual."
+)
+
 _PLAN_SYSTEM = (
     "You are a wiki architect. Given source notes, decide what wiki articles to create or update. "
     "Keep article scope atomic (one concept per article). Plan only — no content yet."
@@ -75,6 +84,37 @@ _QUALITY_BONUS = {"high": 0.25, "medium": 0.1, "low": 0.0}
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _build_olw_annotations(
+    confidence: float, source_paths: list[str], db: StateDB
+) -> list[str]:
+    """Return HTML comment annotations for low-quality drafts. Empty list = no annotations."""
+    annotations = []
+    if confidence < _ANNOTATION_CONFIDENCE_THRESHOLD:
+        annotations.append(
+            f"<!-- olw-auto: low-confidence ({confidence:.2f}) — verify before publishing -->"
+        )
+    if len(source_paths) < _ANNOTATION_MIN_SOURCES:
+        annotations.append(
+            "<!-- olw-auto: single-source — cross-reference recommended -->"
+        )
+    if source_paths:
+        qualities = [
+            db.get_raw(sp).quality
+            for sp in source_paths
+            if db.get_raw(sp) and db.get_raw(sp).quality
+        ]
+        if qualities and all(q == "low" for q in qualities):
+            annotations.append(
+                "<!-- olw-auto: all sources low-quality — add better sources -->"
+            )
+    return annotations
+
+
+def _strip_olw_annotations(body: str) -> str:
+    """Remove all olw-auto HTML comment annotations from article body."""
+    return re.sub(r"<!--\s*olw-auto:.*?-->\n?", "", body, flags=re.DOTALL)
 
 
 def _truncate_to_budget(text: str, max_chars: int) -> str:
@@ -192,6 +232,17 @@ def _write_draft(
     body = ensure_wikilinks(content_result.content, existing_titles or [])
     body = _inject_body_sections(body, source_paths, config)
 
+    # Prepend quality annotations (invisible HTML comments, stripped on approve)
+    annotations = _build_olw_annotations(confidence, source_paths, db)
+    if annotations:
+        annotation_block = "\n".join(annotations) + "\n\n"
+        # Insert before first ## heading if present, else prepend
+        heading_match = re.search(r"^##\s", body, re.MULTILINE)
+        if heading_match:
+            body = body[: heading_match.start()] + annotation_block + body[heading_match.start() :]
+        else:
+            body = annotation_block + body
+
     meta = build_wiki_frontmatter(
         title=content_result.title,
         tags=content_result.tags,
@@ -226,6 +277,7 @@ def _write_concept_prompt(
     existing_titles: list[str],
     existing_content: str = "",
     vault_schema: str = "",
+    rejection_history: list[str] | None = None,
 ) -> str:
     titles_str = ", ".join(existing_titles[:50]) if existing_titles else "none yet"
     prompt = f'Write the wiki article: "{concept}"\n'
@@ -244,6 +296,11 @@ def _write_concept_prompt(
     )
     if existing_content:
         prompt += f"\n\nEXISTING ARTICLE (you are updating this):\n{existing_content}"
+    if rejection_history:
+        # Deduplicate while preserving order (dict.fromkeys trick)
+        unique = list(dict.fromkeys(rejection_history))
+        prompt += "\n\nPREVIOUS REJECTIONS — address these issues in this version:\n"
+        prompt += "\n".join(f"- {fb}" for fb in unique)
     return prompt
 
 
@@ -254,15 +311,26 @@ def compile_concepts(
     force: bool = False,
     dry_run: bool = False,
     on_progress: Callable[[int, int, str], None] | None = None,
+    concepts: list[str] | None = None,
 ) -> tuple[list[Path], list[str]]:
     """
     Concept-driven compile: one article per concept needing compile.
 
-    A concept needs compile if any linked source has status='ingested'.
+    A concept needs compile if any linked source has status='ingested', or if it
+    is a stub (created by olw maintain for broken wikilinks).
     Skips articles whose on-disk content_hash differs from DB (manually edited).
     Pass force=True to recompile even manually-edited articles.
+
+    Pass concepts= to compile only a specific subset (e.g. concepts linked to
+    recently changed source files). None = compile all needing compile.
     """
-    concept_names = db.concepts_needing_compile()
+    all_needing = db.concepts_needing_compile()
+    if concepts is not None:
+        concept_set = set(concepts)
+        concept_names = [c for c in all_needing if c in concept_set]
+    else:
+        concept_names = all_needing
+
     if not concept_names:
         log.info("No concepts needing compile")
         return [], []
@@ -275,8 +343,10 @@ def compile_concepts(
     if dry_run:
         for name in concept_names:
             srcs = db.get_sources_for_concept(name)
+            is_stub = db.has_stub(name)
+            stub_tag = " [stub]" if is_stub else ""
             print(
-                f"  [concept] {name} — {len(srcs)} source(s): "
+                f"  [concept{stub_tag}] {name} — {len(srcs)} source(s): "
                 f"{', '.join(Path(s).name for s in srcs)}"
             )
         return [], []
@@ -288,8 +358,11 @@ def compile_concepts(
     for idx, name in enumerate(concept_names, 1):
         if on_progress:
             on_progress(idx, total, name)
+
         source_paths = db.get_sources_for_concept(name)
-        if not source_paths:
+        is_stub = db.has_stub(name)
+
+        if not source_paths and not is_stub:
             continue
 
         # Manual edit protection
@@ -307,6 +380,40 @@ def compile_concepts(
                         continue
             except Exception:
                 pass
+
+        # For stubs: compile with empty sources using a lightweight stub prompt
+        if is_stub and not source_paths:
+            stub_prompt = (
+                f'Write a brief stub wiki article for the concept: "{name}"\n'
+                f"This concept is referenced by other articles but has no source material yet.\n"
+                f"Keep it under 150 words. Include a note that this is a stub needing sources."
+            )
+            try:
+                result: SingleArticle = request_structured(
+                    client=client,
+                    prompt=stub_prompt,
+                    model_class=SingleArticle,
+                    model=config.models.fast,
+                    system=_STUB_WRITE_SYSTEM,
+                    num_ctx=config.ollama.fast_ctx,
+                )
+            except StructuredOutputError as e:
+                log.error("Failed to write stub '%s': %s", name, e)
+                failed.append(name)
+                continue
+            draft_path = _write_draft(
+                content_result=result,
+                config=config,
+                source_paths=[],
+                db=db,
+                confidence=0.0,
+                existing_meta=existing_meta,
+                existing_titles=existing_titles,
+            )
+            draft_paths.append(draft_path)
+            db.delete_stub(name)
+            log.info("Stub draft written: %s", draft_path.name)
+            continue
 
         # Gather source material within context budget
         sources_text, resolved_paths = _gather_sources(
@@ -328,12 +435,18 @@ def compile_concepts(
             except Exception:
                 pass
 
+        # Inject rejection history into prompt
+        rejection_records = db.get_rejections(name, limit=3)
+        rejection_history = (
+            [r["feedback"] for r in rejection_records] if rejection_records else None
+        )
+
         write_prompt = _write_concept_prompt(
-            name, sources_text, existing_titles, existing_content, vault_schema
+            name, sources_text, existing_titles, existing_content, vault_schema, rejection_history
         )
 
         try:
-            result: SingleArticle = request_structured(
+            result = request_structured(
                 client=client,
                 prompt=write_prompt,
                 model_class=SingleArticle,
@@ -534,6 +647,7 @@ def approve_drafts(
     config: Config,
     db: StateDB,
     paths: list[Path] | None = None,
+    notes: str = "",
 ) -> list[Path]:
     """
     Move draft(s) from wiki/.drafts/ to wiki/.
@@ -561,6 +675,8 @@ def approve_drafts(
         # Sanitize tags defensively — covers old drafts written before sanitization was added
         if isinstance(meta.get("tags"), list):
             meta["tags"] = sanitize_tags([str(t) for t in meta["tags"] if t is not None])
+        # Strip olw-auto annotations before publishing
+        body = _strip_olw_annotations(body)
         write_note(target, meta, body)  # write to destination first
         draft_path.unlink()  # only remove draft after target is safely written
 
@@ -569,7 +685,7 @@ def approve_drafts(
         target_rel = str(target.relative_to(config.vault))
         db.publish_article(draft_rel, target_rel)
 
-        # Store content_hash of published body (body is what was in draft)
+        # Store content_hash of published body and record approval
         art = db.get_article(target_rel)
         if art:
             try:
@@ -587,6 +703,7 @@ def approve_drafts(
                 )
             except Exception:
                 pass
+            db.approve_article(target_rel, notes=notes)
 
         published.append(target)
         log.info("Published: %s", target.name)
@@ -600,10 +717,30 @@ def reject_draft(
     db: StateDB,
     feedback: str = "",
 ) -> None:
-    """Delete a draft and optionally record feedback for re-compile."""
+    """Delete a draft, store rejection feedback and body for future recompiles."""
+    # Read before deleting — title and body needed for rejection record
+    title = draft_path.stem
+    draft_body = ""
+    if draft_path.exists():
+        try:
+            meta, draft_body = parse_note(draft_path)
+            title = meta.get("title", draft_path.stem)
+        except Exception:
+            pass
+
     draft_rel = str(draft_path.relative_to(config.vault))
     db.delete_article(draft_rel)
     if draft_path.exists():
         draft_path.unlink()
+
     if feedback:
-        log.info("Draft rejected with feedback: %s", feedback)
+        db.add_rejection(title, feedback, body=draft_body)
+        count = db.rejection_count(title)
+        if count >= StateDB._REJECTION_CAP:
+            log.warning(
+                "Concept '%s' blocked after %d rejections — use `olw unblock` to re-enable",
+                title,
+                count,
+            )
+        else:
+            log.info("Draft rejected with feedback: %s", feedback)

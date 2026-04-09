@@ -140,3 +140,5 @@ class WikiArticleRecord(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
     is_draft: bool = True
+    approved_at: datetime | None = None
+    approval_notes: str | None = None

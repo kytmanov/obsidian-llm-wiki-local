@@ -3,6 +3,10 @@ SQLite-backed state tracking for the pipeline.
 
 Tracks raw note processing status and wiki article lineage.
 Handles: dedup via content hash, partial failure recovery, resume.
+
+Schema versioning: schema_version table tracks migration level.
+  v1 — initial (summary/quality columns on raw_notes)
+  v2 — rejections, stubs, blocked_concepts tables; approved_at/approval_notes on wiki_articles
 """
 
 from __future__ import annotations
@@ -15,7 +19,15 @@ from pathlib import Path
 
 from .models import RawNoteRecord, WikiArticleRecord
 
+_CURRENT_SCHEMA_VERSION = 2
+
+# Full current schema — idempotent (CREATE IF NOT EXISTS).
+# Fresh DBs get all tables + columns from here. Existing DBs use _VERSIONED_MIGRATIONS.
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS raw_notes (
     path        TEXT PRIMARY KEY,
     content_hash TEXT NOT NULL,
@@ -34,24 +46,72 @@ CREATE TABLE IF NOT EXISTS concepts (
 );
 
 CREATE TABLE IF NOT EXISTS wiki_articles (
-    path         TEXT PRIMARY KEY,
-    title        TEXT NOT NULL,
-    sources      TEXT NOT NULL,
-    content_hash TEXT NOT NULL,
-    created_at   TEXT NOT NULL,
-    updated_at   TEXT NOT NULL,
-    is_draft     INTEGER NOT NULL DEFAULT 1
+    path           TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    sources        TEXT NOT NULL,
+    content_hash   TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    is_draft       INTEGER NOT NULL DEFAULT 1,
+    approved_at    TEXT,
+    approval_notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS rejections (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept       TEXT NOT NULL,
+    feedback      TEXT NOT NULL,
+    rejected_body TEXT,
+    rejected_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stubs (
+    concept    TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    source     TEXT NOT NULL DEFAULT 'auto'
+);
+
+CREATE TABLE IF NOT EXISTS blocked_concepts (
+    concept    TEXT PRIMARY KEY,
+    blocked_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_hash ON raw_notes(content_hash);
 CREATE INDEX IF NOT EXISTS idx_raw_status ON raw_notes(status);
 CREATE INDEX IF NOT EXISTS idx_concept_name ON concepts(name);
+CREATE INDEX IF NOT EXISTS idx_rejections_concept ON rejections(concept);
 """
 
-_MIGRATIONS = [
-    "ALTER TABLE raw_notes ADD COLUMN summary TEXT",
-    "ALTER TABLE raw_notes ADD COLUMN quality TEXT",
-]
+# Migrations keyed by version they bring the DB to.
+_VERSIONED_MIGRATIONS: dict[int, list[str]] = {
+    1: [
+        # v0.1: add summary/quality columns to raw_notes (were missing in earliest schema)
+        "ALTER TABLE raw_notes ADD COLUMN summary TEXT",
+        "ALTER TABLE raw_notes ADD COLUMN quality TEXT",
+    ],
+    2: [
+        # v0.2: new tables and columns
+        """CREATE TABLE IF NOT EXISTS rejections (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               concept TEXT NOT NULL,
+               feedback TEXT NOT NULL,
+               rejected_body TEXT,
+               rejected_at TEXT NOT NULL
+           )""",
+        "CREATE INDEX IF NOT EXISTS idx_rejections_concept ON rejections(concept)",
+        """CREATE TABLE IF NOT EXISTS stubs (
+               concept TEXT PRIMARY KEY,
+               created_at TEXT NOT NULL,
+               source TEXT NOT NULL DEFAULT 'auto'
+           )""",
+        """CREATE TABLE IF NOT EXISTS blocked_concepts (
+               concept TEXT PRIMARY KEY,
+               blocked_at TEXT NOT NULL
+           )""",
+        "ALTER TABLE wiki_articles ADD COLUMN approved_at TEXT",
+        "ALTER TABLE wiki_articles ADD COLUMN approval_notes TEXT",
+    ],
+}
 
 
 class StateDB:
@@ -64,13 +124,45 @@ class StateDB:
         self._migrate()
 
     def _migrate(self) -> None:
-        """Apply schema migrations idempotently (ignore 'duplicate column' errors)."""
-        for stmt in _MIGRATIONS:
-            try:
-                self._conn.execute(stmt)
-                self._conn.commit()
-            except Exception:
-                pass  # column already exists
+        """Apply schema migrations in version order. Idempotent."""
+        row = self._conn.execute("SELECT version FROM schema_version").fetchone()
+
+        if row is None:
+            # No version record yet. Determine starting state by inspecting schema:
+            # If wiki_articles already has approved_at, this is a fresh DB created
+            # by the current _SCHEMA — all tables/columns exist, just record version.
+            cols = {
+                r[1]
+                for r in self._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()
+            }
+            if "approved_at" in cols:
+                with self._tx():
+                    self._conn.execute(
+                        "INSERT INTO schema_version VALUES (?)", (_CURRENT_SCHEMA_VERSION,)
+                    )
+                return
+            # Existing DB with no version tracking — start from 0, apply all migrations.
+            with self._tx():
+                self._conn.execute("INSERT INTO schema_version VALUES (0)")
+            current_version = 0
+        else:
+            current_version = row[0]
+
+        if current_version >= _CURRENT_SCHEMA_VERSION:
+            return
+
+        for version, stmts in sorted(_VERSIONED_MIGRATIONS.items()):
+            if current_version >= version:
+                continue
+            for stmt in stmts:
+                try:
+                    self._conn.execute(stmt)
+                except sqlite3.OperationalError as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
+            with self._tx():
+                self._conn.execute("UPDATE schema_version SET version = ?", (version,))
+            current_version = version
 
     def close(self) -> None:
         self._conn.close()
@@ -180,14 +272,42 @@ class StateDB:
         ).fetchall()
         return [r[0] for r in rows]
 
-    def concepts_needing_compile(self) -> list[str]:
-        """Concepts where any linked source has status='ingested' (pending compile)."""
+    def get_concepts_for_sources(self, source_paths: list[str]) -> list[str]:
+        """Concept names linked to any of the given source paths."""
+        if not source_paths:
+            return []
+        placeholders = ",".join("?" * len(source_paths))
         rows = self._conn.execute(
-            """SELECT DISTINCT c.name
-               FROM concepts c
-               JOIN raw_notes r ON c.source_path = r.path
-               WHERE r.status = 'ingested'
-               ORDER BY c.name"""
+            f"SELECT DISTINCT name FROM concepts WHERE source_path IN ({placeholders})",
+            source_paths,
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def concepts_needing_compile(self) -> list[str]:
+        """Concepts where any linked source has status='ingested', plus stub concepts.
+
+        Excludes blocked concepts from both sets.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT DISTINCT c.name
+            FROM concepts c
+            JOIN raw_notes r ON c.source_path = r.path
+            WHERE r.status = 'ingested'
+              AND c.name NOT IN (SELECT concept FROM blocked_concepts)
+
+            UNION
+
+            SELECT s.concept FROM stubs s
+            WHERE s.concept NOT IN (
+                SELECT DISTINCT c2.name FROM concepts c2
+                JOIN raw_notes r2 ON c2.source_path = r2.path
+                WHERE r2.status IN ('ingested', 'compiled')
+            )
+            AND s.concept NOT IN (SELECT concept FROM blocked_concepts)
+
+            ORDER BY 1
+            """
         ).fetchall()
         return [r[0] for r in rows]
 
@@ -235,9 +355,99 @@ class StateDB:
                 (new_path, datetime.now().isoformat(), old_path),
             )
 
+    def approve_article(self, path: str, notes: str = "") -> None:
+        """Record approval timestamp and optional notes on a published article."""
+        with self._tx():
+            self._conn.execute(
+                "UPDATE wiki_articles SET approved_at=?, approval_notes=? WHERE path=?",
+                (datetime.now().isoformat(), notes or None, path),
+            )
+
     def delete_article(self, path: str) -> None:
         with self._tx():
             self._conn.execute("DELETE FROM wiki_articles WHERE path = ?", (path,))
+
+    # ── Rejections ────────────────────────────────────────────────────────────
+
+    _REJECTION_CAP = 5
+
+    def add_rejection(self, concept: str, feedback: str, body: str = "") -> None:
+        """Store a rejection record. Auto-blocks concept after _REJECTION_CAP rejections."""
+        with self._tx():
+            self._conn.execute(
+                """INSERT INTO rejections (concept, feedback, rejected_body, rejected_at)
+                   VALUES (?, ?, ?, ?)""",
+                (concept, feedback, body or None, datetime.now().isoformat()),
+            )
+        if self.rejection_count(concept) >= self._REJECTION_CAP:
+            self.mark_concept_blocked(concept)
+
+    def get_rejections(self, concept: str, limit: int = 3) -> list[dict]:
+        """Return most recent rejections for a concept, newest first."""
+        rows = self._conn.execute(
+            """SELECT feedback, rejected_body, rejected_at
+               FROM rejections WHERE concept = ?
+               ORDER BY rejected_at DESC LIMIT ?""",
+            (concept, limit),
+        ).fetchall()
+        return [
+            {"feedback": r["feedback"], "body": r["rejected_body"], "rejected_at": r["rejected_at"]}
+            for r in rows
+        ]
+
+    def rejection_count(self, concept: str) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM rejections WHERE concept = ?", (concept,)
+        ).fetchone()
+        return row[0] if row else 0
+
+    # ── Blocked Concepts ──────────────────────────────────────────────────────
+
+    def mark_concept_blocked(self, concept: str) -> None:
+        with self._tx():
+            self._conn.execute(
+                "INSERT OR REPLACE INTO blocked_concepts (concept, blocked_at) VALUES (?, ?)",
+                (concept, datetime.now().isoformat()),
+            )
+
+    def is_concept_blocked(self, concept: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM blocked_concepts WHERE concept = ?", (concept,)
+        ).fetchone()
+        return row is not None
+
+    def unblock_concept(self, concept: str) -> None:
+        with self._tx():
+            self._conn.execute("DELETE FROM blocked_concepts WHERE concept = ?", (concept,))
+
+    def list_blocked_concepts(self) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT concept FROM blocked_concepts ORDER BY concept"
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    # ── Stubs ─────────────────────────────────────────────────────────────────
+
+    def add_stub(self, concept: str, source: str = "auto") -> None:
+        with self._tx():
+            self._conn.execute(
+                "INSERT OR IGNORE INTO stubs (concept, created_at, source) VALUES (?, ?, ?)",
+                (concept, datetime.now().isoformat(), source),
+            )
+
+    def delete_stub(self, concept: str) -> None:
+        with self._tx():
+            self._conn.execute("DELETE FROM stubs WHERE concept = ?", (concept,))
+
+    def has_stub(self, concept: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM stubs WHERE concept = ?", (concept,)
+        ).fetchone()
+        return row is not None
+
+    def get_stubs(self) -> list[str]:
+        rows = self._conn.execute("SELECT concept FROM stubs ORDER BY concept").fetchall()
+        return [r[0] for r in rows]
 
     # ── Stats ─────────────────────────────────────────────────────────────────
 
@@ -260,17 +470,30 @@ class StateDB:
             "published": pub_count,
         }
 
+    def quality_stats(self) -> dict[str, int]:
+        """Distribution of source quality levels."""
+        rows = self._conn.execute(
+            "SELECT quality, COUNT(*) as cnt FROM raw_notes "
+            "WHERE quality IS NOT NULL GROUP BY quality"
+        ).fetchall()
+        result: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+        for row in rows:
+            if row["quality"] in result:
+                result[row["quality"]] = row["cnt"]
+        return result
+
 
 # ── Row converters ────────────────────────────────────────────────────────────
 
 
 def _row_to_raw(row: sqlite3.Row) -> RawNoteRecord:
+    keys = row.keys()
     return RawNoteRecord(
         path=row["path"],
         content_hash=row["content_hash"],
         status=row["status"],
-        summary=row["summary"] if "summary" in row.keys() else None,
-        quality=row["quality"] if "quality" in row.keys() else None,
+        summary=row["summary"] if "summary" in keys else None,
+        quality=row["quality"] if "quality" in keys else None,
         ingested_at=datetime.fromisoformat(row["ingested_at"]) if row["ingested_at"] else None,
         compiled_at=datetime.fromisoformat(row["compiled_at"]) if row["compiled_at"] else None,
         error=row["error"],
@@ -278,6 +501,7 @@ def _row_to_raw(row: sqlite3.Row) -> RawNoteRecord:
 
 
 def _row_to_article(row: sqlite3.Row) -> WikiArticleRecord:
+    keys = row.keys()
     return WikiArticleRecord(
         path=row["path"],
         title=row["title"],
@@ -286,4 +510,10 @@ def _row_to_article(row: sqlite3.Row) -> WikiArticleRecord:
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
         is_draft=bool(row["is_draft"]),
+        approved_at=(
+            datetime.fromisoformat(row["approved_at"])
+            if "approved_at" in keys and row["approved_at"]
+            else None
+        ),
+        approval_notes=row["approval_notes"] if "approval_notes" in keys else None,
     )

@@ -647,16 +647,44 @@ def approve(vault_str, approve_all, files):
 
 @cli.command()
 @click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
-@click.option("--feedback", default="", help="Reason for rejection (logged)")
+@click.option("--feedback", default="", help="Reason for rejection")
 @click.argument("file", type=click.Path(exists=True))
 def reject(vault_str, feedback, file):
-    """Discard a draft article."""
+    """Discard a draft article and store rejection feedback for future recompiles."""
     from .pipeline.compile import reject_draft
 
     config = _load_config(vault_str)
     db = _load_db(config)
-    reject_draft(Path(file), config, db, feedback=feedback)
+
+    if not feedback:
+        feedback = click.prompt("Reason for rejection?", default="")
+
+    draft_path = Path(file)
+    # Peek at title before rejection (for user-facing message)
+    title = draft_path.stem
+    try:
+        from .vault import parse_note as _parse
+
+        meta, _ = _parse(draft_path)
+        title = meta.get("title", draft_path.stem)
+    except Exception:
+        pass
+
+    reject_draft(draft_path, config, db, feedback=feedback)
     console.print(f"[yellow]Draft rejected:[/yellow] {file}")
+
+    if feedback:
+        count = db.rejection_count(title)
+        if db.is_concept_blocked(title):
+            console.print(
+                f"[red]⚠ '{title}' blocked after {count} rejections. "
+                f"Use [bold]olw unblock \"{title}\"[/bold] to re-enable.[/red]"
+            )
+        else:
+            console.print(
+                f"[dim]Feedback saved. Next compile of '{title}' will address it. "
+                f"({count}/{db._REJECTION_CAP} rejections)[/dim]"
+            )
 
 
 # ── status ────────────────────────────────────────────────────────────────────
@@ -705,6 +733,28 @@ def status(vault_str, show_failed):
                 console.print(f"  [dim]{rec.path}[/dim]")
                 console.print(f"    [red]{err}[/red]")
             console.print("\nRun [bold]olw compile --retry-failed[/bold] to re-attempt.")
+
+    # Show blocked concepts
+    blocked = db.list_blocked_concepts()
+    if blocked:
+        console.print(f"\n[red][bold]{len(blocked)} blocked concept(s):[/bold][/red]")
+        for concept in blocked:
+            count = db.rejection_count(concept)
+            console.print(f"  {concept} [dim]({count} rejections)[/dim]")
+        console.print("[dim]Run [bold]olw unblock \"Concept\"[/bold] to re-enable.[/dim]")
+
+    # Show pipeline lock status
+    from .pipeline.lock import lock_holder_pid
+
+    pid = lock_holder_pid(config.vault)
+    if pid is not None:
+        import os
+
+        try:
+            os.kill(pid, 0)
+            console.print(f"\n[yellow]⚠ Pipeline lock held by PID {pid}[/yellow]")
+        except (ProcessLookupError, PermissionError):
+            console.print(f"\n[dim]Lock file present (PID {pid}) but process not running[/dim]")
 
 
 # ── undo ─────────────────────────────────────────────────────────────────────
@@ -937,14 +987,13 @@ def lint(vault_str, fix):
 )
 def watch(vault_str, auto_approve):
     """Watch raw/ for new/changed notes → auto-ingest + compile."""
-    from .git_ops import git_commit
-    from .indexer import append_log, generate_index
-    from .pipeline.compile import approve_drafts, compile_concepts
-    from .pipeline.ingest import ingest_note as _ingest_note
+    from .pipeline.lock import pipeline_lock
+    from .pipeline.orchestrator import PipelineOrchestrator
     from .watcher import watch as _watch
 
     config = _load_config(vault_str)
     client, db = _load_deps(config)
+    orchestrator = PipelineOrchestrator(config, client, db)
 
     debounce = config.pipeline.watch_debounce
     console.print(f"[bold]Watching[/bold] {config.raw_dir}  (debounce={debounce:.0f}s)")
@@ -957,52 +1006,391 @@ def watch(vault_str, auto_approve):
 
         console.rule(f"[dim]{len(md_paths)} file(s) changed[/dim]")
 
-        # Ingest each changed file
-        ingested = 0
-        for raw_path in md_paths:
-            p = Path(raw_path)
-            if not p.exists() or config.raw_dir not in p.parents:
-                continue
-            try:
-                result = _ingest_note(path=p, config=config, client=client, db=db)
-                if result is not None:
-                    ingested += 1
-                    console.print(f"  [green]✓[/green] ingested {p.name}")
-                else:
-                    console.print(f"  [dim]~ skipped {p.name} (duplicate/unchanged)[/dim]")
-            except Exception as exc:
-                console.print(f"  [red]✗[/red] ingest failed {p.name}: {exc}")
-
-        if not ingested:
-            return
-
-        generate_index(config, db)
-        append_log(config, f"watch | ingested {ingested} note(s)")
-
-        # Compile
-        try:
-            draft_paths, failed = compile_concepts(config=config, client=client, db=db)
-        except Exception as exc:
-            console.print(f"[red]Compile error:[/red] {exc}")
-            return
-
-        if draft_paths:
-            console.print(f"  [green]✓[/green] {len(draft_paths)} draft(s) compiled")
-
-        if failed:
-            failed_str = ", ".join(failed)
-            console.print(f"  [yellow]![/yellow] {len(failed)} concept(s) failed: {failed_str}")
-
-        if auto_approve and draft_paths:
-            published = approve_drafts(config, db, draft_paths)
-            generate_index(config, db)
-            append_log(config, f"approve | {len(published)} articles published")
-            if config.pipeline.auto_commit:
-                git_commit(
-                    config.vault, f"watch: {len(published)} articles", paths=["wiki/", ".olw/"]
+        with pipeline_lock(config.vault) as acquired:
+            if not acquired:
+                console.print(
+                    "[yellow]⚠ compile skipped — pipeline already running[/yellow]"
                 )
-            console.print(f"  [green]✓[/green] {len(published)} article(s) published")
-        elif draft_paths:
+                return
+            try:
+                report = orchestrator.run(
+                    paths=md_paths,
+                    auto_approve=auto_approve or config.pipeline.auto_approve,
+                    fix=config.pipeline.auto_maintain,
+                )
+            except Exception as exc:
+                console.print(f"[red]Pipeline error:[/red] {exc}")
+                return
+
+        if report.ingested:
+            console.print(f"  [green]✓[/green] ingested {report.ingested} note(s)")
+        if report.compiled:
+            console.print(f"  [green]✓[/green] {report.compiled} draft(s) compiled")
+        if report.failed:
+            failed_str = ", ".join(report.failed_names)
+            console.print(
+                f"  [yellow]![/yellow] {len(report.failed)} concept(s) failed: {failed_str}"
+            )
+        if report.published:
+            console.print(f"  [green]✓[/green] {report.published} article(s) published")
+        elif report.compiled:
             console.print("  [dim]Run [bold]olw approve --all[/bold] to publish drafts.[/dim]")
+        if report.stubs_created:
+            console.print(f"  [dim]Created {report.stubs_created} stub(s) for broken links[/dim]")
 
     _watch(config=config, client=client, db=db, on_event=_on_event)
+
+
+# ── run ───────────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+@click.option("--auto-approve", is_flag=True, help="Publish drafts immediately")
+@click.option("--fix", is_flag=True, help="Create stubs for broken wikilinks")
+@click.option("--max-rounds", default=2, show_default=True, help="Max compile rounds")
+@click.option("--dry-run", is_flag=True, help="Report what would happen, make no changes")
+def run(vault_str, auto_approve, fix, max_rounds, dry_run):
+    """Run full pipeline: ingest → compile → lint → [approve]."""
+    from .pipeline.lock import pipeline_lock
+    from .pipeline.orchestrator import PipelineOrchestrator
+
+    config = _load_config(vault_str)
+    client, db = _load_deps(config)
+
+    if dry_run:
+        console.print("[dim]Dry run — no changes will be made.[/dim]\n")
+
+    with pipeline_lock(config.vault) as acquired:
+        if not acquired:
+            err_console.print("Pipeline already running — lock held. Check `olw status`.")
+            sys.exit(1)
+        orchestrator = PipelineOrchestrator(config, client, db)
+        report = orchestrator.run(
+            auto_approve=auto_approve,
+            fix=fix,
+            max_rounds=max_rounds,
+            dry_run=dry_run,
+        )
+
+    table = Table(title="Pipeline Report", show_header=True)
+    table.add_column("Step")
+    table.add_column("Count", justify="right")
+    table.add_column("Time", justify="right")
+
+    table.add_row("Ingested", str(report.ingested), f"{report.timings.get('ingest', 0):.1f}s")
+    table.add_row(
+        "Compiled",
+        str(report.compiled),
+        f"{report.timings.get('compile_r1', 0) + report.timings.get('compile_r2', 0):.1f}s",
+    )
+    table.add_row("Published", str(report.published), "")
+    table.add_row("Lint issues", str(report.lint_issues), "")
+    table.add_row("Stubs created", str(report.stubs_created), "")
+    if report.rounds > 1:
+        table.add_row("Compile rounds", str(report.rounds), "")
+    console.print(table)
+
+    if report.failed:
+        console.print(f"\n[yellow]{len(report.failed)} concept(s) failed:[/yellow]")
+        for f in report.failed:
+            console.print(f"  [dim]{f.concept}[/dim] ({f.reason.value})")
+
+
+# ── review ────────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+def review(vault_str):
+    """Interactive draft review: approve, reject, edit, or diff drafts."""
+
+    from .pipeline.compile import approve_drafts, reject_draft
+    from .pipeline.review import (
+        compute_diff,
+        compute_rejection_diff,
+        list_drafts,
+        load_draft_content,
+    )
+
+    config = _load_config(vault_str)
+    db = _load_db(config)
+
+    while True:
+        summaries = list_drafts(config, db)
+        if not summaries:
+            console.print("[dim]No drafts pending review.[/dim]")
+            return
+
+        # Build menu table
+        table = Table(title="Drafts Pending Review", show_header=True, show_lines=False)
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("Title")
+        table.add_column("Conf", justify="right")
+        table.add_column("Sources", justify="right")
+        table.add_column("Rejections", justify="right")
+        table.add_column("Flags", justify="left")
+
+        for i, s in enumerate(summaries, 1):
+            flags = ""
+            if s.has_annotations:
+                flags += "⚠ annotations  "
+            if s.rejection_count > 0:
+                flags += f"{'🔴' if s.rejection_count >= 3 else '🟡'} rejected"
+            conf_color = (
+                "green" if s.confidence >= 0.6 else "yellow" if s.confidence >= 0.4 else "red"
+            )
+            table.add_row(
+                str(i),
+                s.title,
+                f"[{conf_color}]{s.confidence:.2f}[/{conf_color}]",
+                str(s.source_count),
+                str(s.rejection_count),
+                flags.strip(),
+            )
+
+        console.print(table)
+        console.print("\n[dim][a] approve all  [x] reject all  [q] quit  or number to review[/dim]")
+        choice = click.prompt("", prompt_suffix="> ").strip().lower()
+
+        if choice == "q":
+            return
+        elif choice == "a":
+            all_paths = [s.path for s in summaries]
+            published = approve_drafts(config, db, all_paths)
+            console.print(f"[green]Published {len(published)} article(s).[/green]")
+            from .indexer import append_log, generate_index
+            generate_index(config, db)
+            append_log(config, f"review | approved {len(published)} articles")
+            return
+        elif choice == "x":
+            reason = click.prompt("Reason for rejecting all", default="")
+            for s in summaries:
+                reject_draft(s.path, config, db, feedback=reason)
+            console.print(f"[yellow]Rejected {len(summaries)} draft(s).[/yellow]")
+            return
+        elif choice.isdigit():
+            idx = int(choice) - 1
+            if idx < 0 or idx >= len(summaries):
+                console.print("[red]Invalid selection.[/red]")
+                continue
+            _review_single(summaries[idx], config, db, approve_drafts, reject_draft,
+                           compute_diff, compute_rejection_diff, load_draft_content)
+        else:
+            console.print("[red]Unknown command.[/red]")
+
+
+def _review_single(summary, config, db, approve_drafts, reject_draft,
+                   compute_diff, compute_rejection_diff, load_draft_content):
+    """Handle single-draft review loop."""
+    from rich.panel import Panel
+
+    from .vault import sanitize_filename
+
+    while True:
+        if not summary.path.exists():
+            console.print("[yellow]Draft no longer exists.[/yellow]")
+            return
+
+        try:
+            meta, body = load_draft_content(summary.path)
+        except Exception as e:
+            console.print(f"[red]Could not read draft: {e}[/red]")
+            return
+
+        # Show rejection history
+        rejections = db.get_rejections(summary.title, limit=3)
+        if rejections:
+            console.print(Panel(
+                "\n".join(f"• {r['feedback']}" for r in rejections),
+                title=f"[red]Previous rejections ({len(rejections)})[/red]",
+                border_style="red",
+            ))
+
+        # Show metadata
+        console.print(
+            f"[bold]{summary.title}[/bold]  "
+            f"conf={meta.get('confidence', 0):.2f}  "
+            f"sources={summary.source_count}  "
+            f"rejections={summary.rejection_count}"
+        )
+
+        # Show body
+        console.print(Panel(body[:3000] + ("…" if len(body) > 3000 else ""), title="Draft"))
+
+        console.print(
+            "\n[dim][a]pprove  [r]eject  [e]dit  [d]iff vs published  "
+            "[R]iff vs rejected  [s]kip[/dim]"
+        )
+        action = click.prompt("", prompt_suffix="> ").strip().lower()
+
+        if action == "s":
+            return
+        elif action == "a":
+            if not summary.path.exists():
+                console.print("[yellow]Draft disappeared.[/yellow]")
+                return
+            published = approve_drafts(config, db, [summary.path])
+            console.print(f"[green]Published:[/green] {published[0].name if published else '?'}")
+            from .indexer import append_log, generate_index
+            generate_index(config, db)
+            append_log(config, f"review | approved {summary.title}")
+            return
+        elif action == "r":
+            reason = click.prompt("Reason?", default="")
+            if not summary.path.exists():
+                console.print("[yellow]Draft disappeared.[/yellow]")
+                return
+            reject_draft(summary.path, config, db, feedback=reason)
+            console.print("[yellow]Rejected.[/yellow]")
+            if reason:
+                count = db.rejection_count(summary.title)
+                if db.is_concept_blocked(summary.title):
+                    console.print(f"[red]⚠ '{summary.title}' is now blocked.[/red]")
+                else:
+                    console.print(f"[dim]({count}/{db._REJECTION_CAP} rejections)[/dim]")
+            return
+        elif action == "e":
+            editor = click.get_app_dir("EDITOR") or "vi"
+            import os
+            editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
+            import subprocess
+            subprocess.call([editor, str(summary.path)])
+        elif action == "d":
+            safe_name = sanitize_filename(summary.title)
+            wiki_path = config.wiki_dir / f"{safe_name}.md"
+            diff = compute_diff(summary.path, wiki_path)
+            if diff is None:
+                console.print("[dim]No published version — this is a new article.[/dim]")
+            else:
+                console.print(diff)
+        elif action in ("R", "shift+r"):
+            diff = compute_rejection_diff(summary.path, db, summary.title)
+            if diff is None:
+                console.print("[dim]No rejected body stored for this concept.[/dim]")
+            else:
+                console.print(diff)
+        else:
+            console.print("[red]Unknown action.[/red]")
+
+
+# ── maintain ──────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+@click.option("--fix", is_flag=True, help="Auto-fix missing frontmatter, invalid tags, create stubs")  # noqa: E501
+@click.option("--stubs-only", is_flag=True, help="Only create stub articles")
+@click.option("--dry-run", is_flag=True, help="Report issues without making changes")
+def maintain(vault_str, fix, stubs_only, dry_run):
+    """Wiki maintenance: lint, stub creation, orphan suggestions, concept merge hints."""
+    from .pipeline.lint import run_lint
+    from .pipeline.lock import pipeline_lock
+    from .pipeline.maintain import create_stubs, suggest_concept_merges, suggest_orphan_links
+
+    config = _load_config(vault_str)
+    db = _load_db(config)
+
+    if dry_run:
+        console.print("[dim]Dry run — no changes will be made.[/dim]\n")
+
+    with pipeline_lock(config.vault) as acquired:
+        if not acquired:
+            err_console.print("Pipeline already running — lock held.")
+            sys.exit(1)
+
+        # Quality warning
+        quality = db.quality_stats()
+        total_sources = sum(quality.values())
+        if total_sources > 0:
+            low_pct = round(100 * quality["low"] / total_sources)
+            if low_pct > 60:
+                console.print(
+                    f"[yellow]⚠ {low_pct}% of sources are low quality — "
+                    f"articles will have low confidence.[/yellow]"
+                )
+
+        # Blocked concepts
+        blocked = db.list_blocked_concepts()
+        if blocked:
+            console.print(f"\n[red]{len(blocked)} blocked concept(s):[/red]")
+            for concept in blocked:
+                count = db.rejection_count(concept)
+                console.print(f"  {concept} ({count} rejections)")
+            console.print("[dim]Use [bold]olw unblock \"Concept\"[/bold] to re-enable.[/dim]")
+
+        if stubs_only:
+            if not dry_run:
+                created = create_stubs(config, db)
+                console.print(f"[green]Created {len(created)} stub(s).[/green]")
+            else:
+                result = run_lint(config, db)
+                broken = [i for i in result.issues if i.issue_type == "broken_link"]
+                console.print(f"[dim]Would create up to {min(len(broken), 5)} stub(s).[/dim]")
+            return
+
+        # Full lint
+        result = run_lint(config, db, fix=fix and not dry_run)
+        score = result.health_score
+        colour = "green" if score >= 80 else "yellow" if score >= 50 else "red"
+        console.print(f"\n[bold {colour}]Health: {score}/100[/bold {colour}]  {result.summary}")
+
+        if result.issues:
+            console.print()
+            for iss in result.issues:
+                fix_tag = " [dim][auto-fixable][/dim]" if iss.auto_fixable else ""
+                console.print(f"  [bold]{iss.issue_type}[/bold]{fix_tag}  {iss.path}")
+                console.print(f"    {iss.description}")
+
+        # Stub creation
+        broken = [i for i in result.issues if i.issue_type == "broken_link"]
+        if broken:
+            if fix and not dry_run:
+                created = create_stubs(config, db, broken_link_issues=broken)
+                if created:
+                    console.print(f"\n[green]Created {len(created)} stub(s).[/green]")
+            else:
+                console.print(
+                    f"\n[dim]{len(broken)} broken link(s) — "
+                    f"run [bold]olw maintain --fix[/bold] to create stubs.[/dim]"
+                )
+
+        # Orphan suggestions
+        orphan_suggestions = suggest_orphan_links(config, db)
+        if orphan_suggestions:
+            console.print(f"\n[bold]Orphan link suggestions ({len(orphan_suggestions)}):[/bold]")
+            for title, mentioners in orphan_suggestions[:5]:
+                console.print(f"  {title} — mentioned in:")
+                for m in mentioners[:3]:
+                    console.print(f"    [dim]{m}[/dim]")
+
+        # Concept merge suggestions
+        merges = suggest_concept_merges(config, db)
+        if merges:
+            console.print(f"\n[bold]Possible concept duplicates ({len(merges)}):[/bold]")
+            for a, b, score in merges[:5]:
+                console.print(f"  '{a}' ≈ '{b}'  [dim](similarity={score:.0%})[/dim]")
+
+
+# ── unblock ───────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+@click.argument("concept")
+def unblock(vault_str, concept):
+    """Re-enable a concept that was blocked after too many rejections."""
+    config = _load_config(vault_str)
+    db = _load_db(config)
+
+    if not db.is_concept_blocked(concept):
+        console.print(f"[yellow]'{concept}' is not blocked.[/yellow]")
+        return
+
+    db.unblock_concept(concept)
+    count = db.rejection_count(concept)
+    console.print(f"[green]'{concept}' unblocked.[/green]")
+    console.print(
+        f"[dim]{count} rejection(s) remain on record. "
+        f"Next compile will include this concept.[/dim]"
+    )

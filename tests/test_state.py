@@ -152,3 +152,192 @@ def test_stats(db):
     assert s["raw"]["new"] == 1
     assert s["drafts"] == 1
     assert s["published"] == 0
+
+
+# ── v0.2: Rejections ─────────────────────────────────────────────────────────
+
+
+def test_add_and_get_rejection(db):
+    db.add_rejection("Quantum Computing", "Too vague", body="draft body here")
+    rejections = db.get_rejections("Quantum Computing")
+    assert len(rejections) == 1
+    assert rejections[0]["feedback"] == "Too vague"
+    assert rejections[0]["body"] == "draft body here"
+    assert rejections[0]["rejected_at"] is not None
+
+
+def test_get_rejections_newest_first(db):
+    db.add_rejection("Topic", "First feedback")
+    db.add_rejection("Topic", "Second feedback")
+    rejections = db.get_rejections("Topic")
+    assert rejections[0]["feedback"] == "Second feedback"
+    assert rejections[1]["feedback"] == "First feedback"
+
+
+def test_get_rejections_limit(db):
+    for i in range(5):
+        db.add_rejection("Topic", f"feedback {i}")
+    rejections = db.get_rejections("Topic", limit=3)
+    assert len(rejections) == 3
+
+
+def test_rejection_count(db):
+    assert db.rejection_count("Topic") == 0
+    db.add_rejection("Topic", "bad")
+    db.add_rejection("Topic", "still bad")
+    assert db.rejection_count("Topic") == 2
+
+
+def test_rejection_cap_blocks_concept(db):
+    """After 5 rejections, concept is auto-blocked."""
+    for i in range(5):
+        db.add_rejection("Tricky Topic", f"feedback {i}")
+    assert db.is_concept_blocked("Tricky Topic")
+
+
+def test_rejection_below_cap_no_block(db):
+    for i in range(4):
+        db.add_rejection("Easy Topic", f"feedback {i}")
+    assert not db.is_concept_blocked("Easy Topic")
+
+
+# ── v0.2: Blocked Concepts ────────────────────────────────────────────────────
+
+
+def test_block_and_unblock(db):
+    db.mark_concept_blocked("Some Concept")
+    assert db.is_concept_blocked("Some Concept")
+    db.unblock_concept("Some Concept")
+    assert not db.is_concept_blocked("Some Concept")
+
+
+def test_list_blocked_concepts(db):
+    db.mark_concept_blocked("Alpha")
+    db.mark_concept_blocked("Beta")
+    blocked = db.list_blocked_concepts()
+    assert "Alpha" in blocked
+    assert "Beta" in blocked
+
+
+def test_blocked_concept_excluded_from_needing_compile(db):
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Blocked Topic"])
+    db.mark_concept_blocked("Blocked Topic")
+    needing = db.concepts_needing_compile()
+    assert "Blocked Topic" not in needing
+
+
+# ── v0.2: Stubs ───────────────────────────────────────────────────────────────
+
+
+def test_add_and_has_stub(db):
+    db.add_stub("Orphan Concept")
+    assert db.has_stub("Orphan Concept")
+    assert not db.has_stub("Other Concept")
+
+
+def test_delete_stub(db):
+    db.add_stub("Orphan Concept")
+    db.delete_stub("Orphan Concept")
+    assert not db.has_stub("Orphan Concept")
+
+
+def test_stub_appears_in_needing_compile(db):
+    db.add_stub("Stub Concept")
+    needing = db.concepts_needing_compile()
+    assert "Stub Concept" in needing
+
+
+def test_stub_superseded_by_real_source(db):
+    """Once real source added for stub's concept, stub is excluded from UNION."""
+    db.add_stub("Shared Concept")
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="compiled"))
+    db.upsert_concepts("raw/a.md", ["Shared Concept"])
+    # Stub should not appear since real source already compiled
+    needing = db.concepts_needing_compile()
+    assert "Shared Concept" not in needing
+
+
+def test_stub_blocked_excluded(db):
+    db.add_stub("Stub Topic")
+    db.mark_concept_blocked("Stub Topic")
+    needing = db.concepts_needing_compile()
+    assert "Stub Topic" not in needing
+
+
+def test_get_stubs(db):
+    db.add_stub("A")
+    db.add_stub("B")
+    stubs = db.get_stubs()
+    assert set(stubs) == {"A", "B"}
+
+
+def test_add_stub_idempotent(db):
+    db.add_stub("Topic")
+    db.add_stub("Topic")  # should not raise or duplicate
+    assert db.get_stubs().count("Topic") == 1
+
+
+# ── v0.2: get_concepts_for_sources ───────────────────────────────────────────
+
+
+def test_get_concepts_for_sources(db):
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha", "Beta"])
+    db.upsert_concepts("raw/b.md", ["Beta", "Gamma"])
+    result = db.get_concepts_for_sources(["raw/a.md"])
+    assert set(result) == {"Alpha", "Beta"}
+
+
+def test_get_concepts_for_sources_empty(db):
+    assert db.get_concepts_for_sources([]) == []
+
+
+# ── v0.2: quality_stats ───────────────────────────────────────────────────────
+
+
+def test_quality_stats(db):
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested", quality="high"))  # noqa: E501
+    db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested", quality="low"))  # noqa: E501
+    db.upsert_raw(RawNoteRecord(path="raw/c.md", content_hash="h3", status="ingested", quality="low"))  # noqa: E501
+    stats = db.quality_stats()
+    assert stats["high"] == 1
+    assert stats["low"] == 2
+    assert stats["medium"] == 0
+
+
+# ── v0.2: approve_article ─────────────────────────────────────────────────────
+
+
+def test_approve_article_sets_timestamp(db):
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/test.md", title="Test", sources=[], content_hash="h", is_draft=False
+        )
+    )
+    db.approve_article("wiki/test.md", notes="Looks great")
+    art = db.get_article("wiki/test.md")
+    assert art is not None
+    assert art.approved_at is not None
+    assert art.approval_notes == "Looks great"
+
+
+# ── v0.2: schema versioning ───────────────────────────────────────────────────
+
+
+def test_schema_version_set_on_fresh_db(db):
+    """Fresh DB should have schema_version = 2."""
+    row = db._conn.execute("SELECT version FROM schema_version").fetchone()
+    assert row is not None
+    assert row[0] == 2
+
+
+def test_schema_version_idempotent(tmp_path):
+    """Opening the same DB twice should not change schema_version."""
+    path = tmp_path / ".olw" / "state.db"
+    db1 = StateDB(path)
+    db1.close()
+    db2 = StateDB(path)
+    row = db2._conn.execute("SELECT version FROM schema_version").fetchone()
+    assert row[0] == 2
