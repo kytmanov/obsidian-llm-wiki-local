@@ -155,7 +155,20 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
 
         # ── Invalid tags ──────────────────────────────────────────────────────
         tags = meta.get("tags", [])
-        if isinstance(tags, list):
+        if not isinstance(tags, list):
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="invalid_tag",
+                    description=f"tags field is not a list: {tags!r}",
+                    suggestion="Convert tags to a YAML list.",
+                    auto_fixable=True,
+                )
+            )
+            if fix:
+                meta["tags"] = sanitize_tags([str(tags)])
+                write_note(page, meta, body)
+        else:
             non_str = [t for t in tags if not isinstance(t, str)]
             str_tags = [t for t in tags if isinstance(t, str)]
             invalid = non_str + [t for t in str_tags if t != sanitize_tag(t)]
@@ -250,12 +263,34 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
         rel_path = str(page.relative_to(config.vault))
         try:
             meta, body = parse_note(page)
-        except Exception:
+        except Exception as exc:
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="missing_frontmatter",
+                    description=f"Failed to parse frontmatter: {exc}",
+                    suggestion="Fix YAML syntax in frontmatter.",
+                    auto_fixable=False,
+                )
+            )
             continue
 
         # Invalid tags
         tags = meta.get("tags", [])
-        if isinstance(tags, list):
+        if not isinstance(tags, list):
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="invalid_tag",
+                    description=f"tags field is not a list: {tags!r}",
+                    suggestion="Convert tags to a YAML list.",
+                    auto_fixable=True,
+                )
+            )
+            if fix:
+                meta["tags"] = sanitize_tags([str(tags)])
+                write_note(page, meta, body)
+        else:
             non_str = [t for t in tags if not isinstance(t, str)]
             str_tags = [t for t in tags if isinstance(t, str)]
             invalid = non_str + [t for t in str_tags if t != sanitize_tag(t)]

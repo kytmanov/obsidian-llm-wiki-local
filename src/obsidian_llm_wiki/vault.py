@@ -75,7 +75,11 @@ _MEDIA_EXTENSIONS = frozenset(
 
 
 def extract_wikilinks(content: str) -> list[str]:
-    """Return all [[target]] titles, excluding media file embeds (![[file.ext]])."""
+    """Return all [[target]] titles, excluding targets with media file extensions.
+
+    Note: filters by extension regardless of embed syntax (![[...]]) vs normal link ([[...]]).
+    This prevents media filenames from appearing as broken wikilinks in lint checks.
+    """
     raw = _WIKILINK_RE.findall(content)
     return [t for t in raw if not any(t.lower().endswith(ext) for ext in _MEDIA_EXTENSIONS)]
 

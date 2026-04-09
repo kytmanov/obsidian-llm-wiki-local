@@ -36,7 +36,6 @@ from ..vault import (
     list_wiki_articles,
     parse_note,
     sanitize_filename,
-    sanitize_wikilink_target,
     write_note,
 )
 
@@ -157,7 +156,10 @@ def _inject_body_sections(body: str, source_paths: list[str], config: Config) ->
                 src_title = Path(sp).stem.replace("-", " ").title()
         else:
             src_title = Path(sp).stem.replace("-", " ").title()
-        source_lines.append(f"- [[{sanitize_wikilink_target(src_title)}]]")
+        safe_src = sanitize_filename(src_title)
+        display = src_title if safe_src != src_title else src_title
+        link = f"[[{safe_src}|{display}]]" if safe_src != src_title else f"[[{src_title}]]"
+        source_lines.append(f"- {link}")
 
     # ## See Also: wikilinks already in body (sorted, deduplicated)
     linked = sorted(set(extract_wikilinks(body)))

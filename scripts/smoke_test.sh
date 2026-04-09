@@ -378,7 +378,7 @@ INGEST3_OUT=$($OLW compile --dry-run 2>&1)
 echo "$INGEST3_OUT"
 _TMP=$(mktemp); echo "$INGEST3_OUT" > "$_TMP"
 check "dry run shows only new concepts" \
-    "grep -qiE '\1' \"\2\""
+    "grep -qiE 'concept|compile|deep|neural|no concept' \"$_TMP\""
 rm -f "$_TMP"
 
 # ── Manual edit protection ────────────────────────────────────────────────────
@@ -398,7 +398,7 @@ if [[ -n "$WIKI_ARTICLE" ]]; then
     # Manually edited article should be skipped (not recompiled)
     DRAFT_AFTER_EDIT=$(find "$VAULT_DIR/wiki/.drafts" -name "$(basename $WIKI_ARTICLE)" 2>/dev/null | wc -l | tr -d ' ')
     check "manually edited article skipped in compile" \
-        "test '$DRAFT_AFTER_EDIT' -eq 0"
+        "test \"$DRAFT_AFTER_EDIT\" -eq 0"
 fi
 
 # ── Duplicate detection ───────────────────────────────────────────────────────
@@ -407,7 +407,7 @@ cp "$VAULT_DIR/raw/quantum-computing.md" "$VAULT_DIR/raw/quantum-computing-copy.
 
 INGEST_OUT=$($OLW ingest "$VAULT_DIR/raw/quantum-computing-copy.md" 2>&1 || true)
 _TMP=$(mktemp); echo "$INGEST_OUT" > "$_TMP"
-check "duplicate skipped" "grep -qiE '\1' \"\2\""
+check "duplicate skipped" "grep -qiE 'skip|duplicate|already' \"$_TMP\""
 rm -f "$_TMP"
 rm -f "$VAULT_DIR/raw/quantum-computing-copy.md"
 
@@ -421,14 +421,14 @@ QUERY_OUT=$($OLW query "What is a qubit?" 2>&1 || true)
 echo "$QUERY_OUT"
 _TMP=$(mktemp); echo "$QUERY_OUT" > "$_TMP"
 check "query returns an answer" \
-    "grep -qiE '\1' \"\2\""
+    "grep -qiE 'qubit|quantum|superposition|bit' \"$_TMP\""
 rm -f "$_TMP"
 
 info "Running query with --save..."
 QUERY_SAVE_OUT=$($OLW query --save "What algorithms are used in quantum computing?" 2>&1 || true)
 echo "$QUERY_SAVE_OUT"
 QUERY_COUNT=$(find "$VAULT_DIR/wiki/queries" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
-check "query --save creates file in wiki/queries/" "test '$QUERY_COUNT' -ge 1"
+check "query --save creates file in wiki/queries/" "test \"$QUERY_COUNT\" -ge 1"
 
 # ── Lint (Stage 3) ────────────────────────────────────────────────────────────
 header "olw lint (Stage 3)"
@@ -436,7 +436,7 @@ LINT_OUT=$($OLW lint 2>&1 || true)
 echo "$LINT_OUT"
 _TMP=$(mktemp); echo "$LINT_OUT" > "$_TMP"
 check "lint reports health score" \
-    "grep -qiE '\1' \"\2\""
+    "grep -qiE 'health|score|100|issue' \"$_TMP\""
 rm -f "$_TMP"
 
 # Lint --fix (should not crash even if no fixable issues)

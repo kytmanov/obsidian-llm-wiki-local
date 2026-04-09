@@ -14,7 +14,7 @@ import frontmatter as fm_lib
 
 from .config import Config
 from .state import StateDB
-from .vault import atomic_write, parse_note, sanitize_wikilink_target, write_note
+from .vault import atomic_write, parse_note, sanitize_filename, write_note
 
 
 def generate_index(config: Config, db: StateDB) -> Path:
@@ -83,7 +83,9 @@ def generate_index(config: Config, db: StateDB) -> Path:
     if concept_entries:
         body_lines.append("## Concepts")
         for title, hint in concept_entries:
-            entry = f"- [[{sanitize_wikilink_target(title)}]]"
+            safe = sanitize_filename(title)
+            link = f"[[{safe}|{title}]]" if safe != title else f"[[{title}]]"
+            entry = f"- {link}"
             if hint:
                 entry += f" — {hint}"
             body_lines.append(entry)
@@ -92,7 +94,9 @@ def generate_index(config: Config, db: StateDB) -> Path:
     if source_pages:
         body_lines.append("## Sources")
         for title, hint in source_pages:
-            entry = f"- [[{sanitize_wikilink_target(title)}]]"
+            safe = sanitize_filename(title)
+            link = f"[[{safe}|{title}]]" if safe != title else f"[[{title}]]"
+            entry = f"- {link}"
             if hint:
                 entry += f" — {hint}"
             body_lines.append(entry)
