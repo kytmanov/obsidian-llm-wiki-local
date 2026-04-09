@@ -67,13 +67,15 @@ def pipeline_lock(vault: Path, block: bool = False):
     with open(lock_path, "w") as f:
         import os
 
-        f.write(str(os.getpid()))
-        f.flush()
         try:
             fcntl.flock(f, fcntl.LOCK_EX | (0 if block else fcntl.LOCK_NB))
         except BlockingIOError:
             yield False
             return
+        # Write PID only after acquiring — avoids race where two processes
+        # both write their PID before either acquires the lock.
+        f.write(str(os.getpid()))
+        f.flush()
         try:
             yield True
         finally:
@@ -81,9 +83,27 @@ def pipeline_lock(vault: Path, block: bool = False):
 
 
 def lock_holder_pid(vault: Path) -> int | None:
-    """Return the PID written in the lock file, or None if absent/unreadable."""
+    """Return PID if the pipeline lock is actively held, None otherwise.
+
+    Verifies the lock is actually held (not just a stale lock file) by
+    attempting a non-blocking exclusive acquire. If that succeeds the lock
+    is free; if it raises BlockingIOError the lock is live.
+    """
     lock_path = vault / ".olw" / "pipeline.lock"
+    if not lock_path.exists():
+        return None
     try:
-        return int(lock_path.read_text().strip())
+        pid = int(lock_path.read_text().strip())
     except Exception:
         return None
+    if not _IS_POSIX:
+        return pid
+    import fcntl
+
+    try:
+        with open(lock_path) as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(f, fcntl.LOCK_UN)
+        return None  # acquired → nobody holding it
+    except BlockingIOError:
+        return pid  # lock is live

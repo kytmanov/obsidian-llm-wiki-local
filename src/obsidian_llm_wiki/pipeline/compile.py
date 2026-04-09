@@ -86,9 +86,7 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _build_olw_annotations(
-    confidence: float, source_paths: list[str], db: StateDB
-) -> list[str]:
+def _build_olw_annotations(confidence: float, source_paths: list[str], db: StateDB) -> list[str]:
     """Return HTML comment annotations for low-quality drafts. Empty list = no annotations."""
     annotations = []
     if confidence < _ANNOTATION_CONFIDENCE_THRESHOLD:
@@ -96,19 +94,15 @@ def _build_olw_annotations(
             f"<!-- olw-auto: low-confidence ({confidence:.2f}) — verify before publishing -->"
         )
     if len(source_paths) < _ANNOTATION_MIN_SOURCES:
-        annotations.append(
-            "<!-- olw-auto: single-source — cross-reference recommended -->"
-        )
+        annotations.append("<!-- olw-auto: single-source — cross-reference recommended -->")
     if source_paths:
-        qualities = [
-            db.get_raw(sp).quality
-            for sp in source_paths
-            if db.get_raw(sp) and db.get_raw(sp).quality
-        ]
+        qualities = []
+        for sp in source_paths:
+            rec = db.get_raw(sp)
+            if rec and rec.quality:
+                qualities.append(rec.quality)
         if qualities and all(q == "low" for q in qualities):
-            annotations.append(
-                "<!-- olw-auto: all sources low-quality — add better sources -->"
-            )
+            annotations.append("<!-- olw-auto: all sources low-quality — add better sources -->")
     return annotations
 
 

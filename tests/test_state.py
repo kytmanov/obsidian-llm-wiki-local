@@ -298,9 +298,15 @@ def test_get_concepts_for_sources_empty(db):
 
 
 def test_quality_stats(db):
-    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested", quality="high"))  # noqa: E501
-    db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested", quality="low"))  # noqa: E501
-    db.upsert_raw(RawNoteRecord(path="raw/c.md", content_hash="h3", status="ingested", quality="low"))  # noqa: E501
+    db.upsert_raw(
+        RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested", quality="high")
+    )  # noqa: E501
+    db.upsert_raw(
+        RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested", quality="low")
+    )  # noqa: E501
+    db.upsert_raw(
+        RawNoteRecord(path="raw/c.md", content_hash="h3", status="ingested", quality="low")
+    )  # noqa: E501
     stats = db.quality_stats()
     assert stats["high"] == 1
     assert stats["low"] == 2
@@ -383,9 +389,7 @@ def test_legacy_migration_from_v0(tmp_path):
     # Verify v0.2 tables exist after migration
     tables = {
         r[0]
-        for r in db._conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        for r in db._conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     assert "rejections" in tables
     assert "stubs" in tables

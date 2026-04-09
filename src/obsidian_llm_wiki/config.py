@@ -37,6 +37,7 @@ def default_wiki_toml(
         f"[pipeline]\n"
         f"auto_approve = false\n"
         f"auto_commit = true\n"
+        f"auto_maintain = false\n"
         f"watch_debounce = 3.0\n"
         f"max_concepts_per_source = 8\n"
     )

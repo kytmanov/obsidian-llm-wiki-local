@@ -152,9 +152,7 @@ def test_orchestrator_run_timings_populated(config, db):
 
 def test_orchestrator_run_rounds_default_one(config, db):
     """No transient failures → only one compile round."""
-    with patch(
-        "obsidian_llm_wiki.pipeline.orchestrator._run_compile"
-    ) as mock_compile:
+    with patch("obsidian_llm_wiki.pipeline.orchestrator._run_compile") as mock_compile:
         mock_compile.return_value = ([], [])
         orch = PipelineOrchestrator(config, make_mock_client(), db)
         report = orch.run(paths=[])
@@ -170,9 +168,7 @@ def test_orchestrator_retries_transient_failures(config, db):
     round1_result = ([], [transient, bad_json])
     round2_result = ([], [])  # transient resolved
 
-    with patch(
-        "obsidian_llm_wiki.pipeline.orchestrator._run_compile"
-    ) as mock_compile:
+    with patch("obsidian_llm_wiki.pipeline.orchestrator._run_compile") as mock_compile:
         mock_compile.side_effect = [round1_result, round2_result]
         orch = PipelineOrchestrator(config, make_mock_client(), db)
         report = orch.run(paths=[])
@@ -188,9 +184,7 @@ def test_orchestrator_llm_output_not_retried(config, db):
     """LLM_OUTPUT failure stays in report without triggering round 2."""
     bad = FailureRecord(concept="BadJSON", reason=FailureReason.LLM_OUTPUT)
 
-    with patch(
-        "obsidian_llm_wiki.pipeline.orchestrator._run_compile"
-    ) as mock_compile:
+    with patch("obsidian_llm_wiki.pipeline.orchestrator._run_compile") as mock_compile:
         mock_compile.return_value = ([], [bad])
         orch = PipelineOrchestrator(config, make_mock_client(), db)
         report = orch.run(paths=[])
@@ -198,6 +192,43 @@ def test_orchestrator_llm_output_not_retried(config, db):
     assert mock_compile.call_count == 1  # no round 2
     assert report.rounds == 1
     assert report.failed[0].concept == "BadJSON"
+
+
+def test_orchestrator_selective_recompile_with_absolute_paths(config, db):
+    """Absolute paths from watchdog must be normalized to vault-relative before DB lookup."""
+    import json
+
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha"])
+    db.upsert_concepts("raw/b.md", ["Beta"])
+
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: A\n---\nContent about Alpha.")
+    (config.vault / "raw" / "b.md").write_text("---\ntitle: B\n---\nContent about Beta.")
+
+    mock_response = json.dumps({"title": "Alpha", "content": "Alpha content.", "tags": []})
+    client = make_mock_client(mock_response)
+
+    # Pass absolute path (as watchdog would supply it)
+    abs_path = str(config.vault / "raw" / "a.md")
+
+    import obsidian_llm_wiki.pipeline.ingest as ingest_mod
+
+    original_ingest = ingest_mod.ingest_note
+
+    def fake_ingest(path, config, client, db):
+        return object()  # truthy — simulates successful ingest
+
+    ingest_mod.ingest_note = fake_ingest
+    try:
+        orch = PipelineOrchestrator(config, client, db)
+        orch.run(paths=[abs_path])
+    finally:
+        ingest_mod.ingest_note = original_ingest
+
+    # Alpha was the linked concept; Beta should still need compile
+    needing = db.concepts_needing_compile()
+    assert "Beta" in needing
 
 
 def test_orchestrator_auto_approve(config, db):

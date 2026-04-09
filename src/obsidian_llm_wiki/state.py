@@ -131,10 +131,7 @@ class StateDB:
             # No version record yet. Determine starting state by inspecting schema:
             # If wiki_articles already has approved_at, this is a fresh DB created
             # by the current _SCHEMA — all tables/columns exist, just record version.
-            cols = {
-                r[1]
-                for r in self._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()
-            }
+            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()}
             if "approved_at" in cols:
                 with self._tx():
                     self._conn.execute(
@@ -440,9 +437,7 @@ class StateDB:
             self._conn.execute("DELETE FROM stubs WHERE concept = ?", (concept,))
 
     def has_stub(self, concept: str) -> bool:
-        row = self._conn.execute(
-            "SELECT 1 FROM stubs WHERE concept = ?", (concept,)
-        ).fetchone()
+        row = self._conn.execute("SELECT 1 FROM stubs WHERE concept = ?", (concept,)).fetchone()
         return row is not None
 
     def get_stubs(self) -> list[str]:

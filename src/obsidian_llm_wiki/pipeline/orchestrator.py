@@ -102,9 +102,7 @@ class PipelineOrchestrator:
             md_paths = [p for p in paths if p.endswith(".md")]
         else:
             md_paths = (
-                [str(p) for p in config.raw_dir.rglob("*.md")]
-                if config.raw_dir.exists()
-                else []
+                [str(p) for p in config.raw_dir.rglob("*.md")] if config.raw_dir.exists() else []
             )
 
         for raw_path_str in md_paths:
@@ -131,9 +129,17 @@ class PipelineOrchestrator:
             append_log(config, f"run | ingested {report.ingested} note(s)")
 
         # ── Round 1: Compile ───────────────────────────────────────────────────
+        # Normalize ingested paths to vault-relative for DB lookup (watchdog supplies
+        # absolute paths; DB stores relative paths like raw/note.md).
         priority_concepts: list[str] | None = None
         if ingested_paths:
-            priority_concepts = db.get_concepts_for_sources(ingested_paths) or None
+            relative_ingested = []
+            for p_str in ingested_paths:
+                try:
+                    relative_ingested.append(str(Path(p_str).relative_to(config.vault)))
+                except ValueError:
+                    relative_ingested.append(p_str)  # already relative
+            priority_concepts = db.get_concepts_for_sources(relative_ingested) or None
 
         t1 = time.monotonic()
         draft_paths, round1_failed = _run_compile(
@@ -144,8 +150,8 @@ class PipelineOrchestrator:
         report.failed.extend(round1_failed)
         report.rounds = 1
 
-        # ── Lint on new drafts ─────────────────────────────────────────────────
-        if not dry_run and draft_paths:
+        # ── Lint ──────────────────────────────────────────────────────────────
+        if not dry_run:
             lint_result = run_lint(config, db)
             report.lint_issues = len(lint_result.issues)
             broken_links = [i for i in lint_result.issues if i.issue_type == "broken_link"]

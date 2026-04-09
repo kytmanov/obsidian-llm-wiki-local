@@ -110,9 +110,7 @@ def _extract_link_target(description: str) -> str | None:
     return match.group(1) if match else None
 
 
-def suggest_orphan_links(
-    config: Config, db: StateDB
-) -> list[tuple[str, list[str]]]:
+def suggest_orphan_links(config: Config, db: StateDB) -> list[tuple[str, list[str]]]:
     """
     For each orphan article, find other articles that mention its title unlinked.
 
@@ -164,9 +162,7 @@ def suggest_orphan_links(
     return suggestions
 
 
-def suggest_concept_merges(
-    config: Config, db: StateDB
-) -> list[tuple[str, str, float]]:
+def suggest_concept_merges(config: Config, db: StateDB) -> list[tuple[str, str, float]]:
     """
     Find near-duplicate concept pairs using Jaccard similarity on title tokens.
 

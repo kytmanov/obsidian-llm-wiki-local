@@ -115,6 +115,46 @@ def test_only_one_thread_acquires_lock(vault):
     assert results.count(False) == 1
 
 
+# ── Stale PID detection ───────────────────────────────────────────────────────
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="flock POSIX only")
+def test_lock_holder_pid_returns_none_after_release(vault):
+    """lock_holder_pid returns None once the flock is released (not just stale file)."""
+    with pipeline_lock(vault) as acquired:
+        assert acquired is True
+        pid_during = lock_holder_pid(vault)
+        assert pid_during is not None  # lock held → pid visible
+    # After context exit flock is released; file still exists but lock is free
+    pid_after = lock_holder_pid(vault)
+    assert pid_after is None  # stale file should not report lock as held
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="flock POSIX only")
+def test_lock_holder_pid_returns_pid_while_held(vault):
+    import os
+
+    with pipeline_lock(vault) as acquired:
+        assert acquired is True
+        pid = lock_holder_pid(vault)
+        assert pid == os.getpid()
+
+
+# ── PID written after flock acquired ─────────────────────────────────────────
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="flock POSIX only")
+def test_pid_written_after_lock_acquired(vault):
+    """Lock file should contain our PID only after the flock is held."""
+    import os
+
+    with pipeline_lock(vault) as acquired:
+        assert acquired is True
+        lock_path = vault / ".olw" / "pipeline.lock"
+        pid_in_file = int(lock_path.read_text().strip())
+        assert pid_in_file == os.getpid()
+
+
 # ── Windows fallback ──────────────────────────────────────────────────────────
 
 

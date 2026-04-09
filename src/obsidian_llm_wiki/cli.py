@@ -678,7 +678,7 @@ def reject(vault_str, feedback, file):
         if db.is_concept_blocked(title):
             console.print(
                 f"[red]⚠ '{title}' blocked after {count} rejections. "
-                f"Use [bold]olw unblock \"{title}\"[/bold] to re-enable.[/red]"
+                f'Use [bold]olw unblock "{title}"[/bold] to re-enable.[/red]'
             )
         else:
             console.print(
@@ -741,7 +741,7 @@ def status(vault_str, show_failed):
         for concept in blocked:
             count = db.rejection_count(concept)
             console.print(f"  {concept} [dim]({count} rejections)[/dim]")
-        console.print("[dim]Run [bold]olw unblock \"Concept\"[/bold] to re-enable.[/dim]")
+        console.print('[dim]Run [bold]olw unblock "Concept"[/bold] to re-enable.[/dim]')
 
     # Show pipeline lock status
     from .pipeline.lock import lock_holder_pid
@@ -1008,9 +1008,7 @@ def watch(vault_str, auto_approve):
 
         with pipeline_lock(config.vault) as acquired:
             if not acquired:
-                console.print(
-                    "[yellow]⚠ compile skipped — pipeline already running[/yellow]"
-                )
+                console.print("[yellow]⚠ compile skipped — pipeline already running[/yellow]")
                 return
             try:
                 report = orchestrator.run(
@@ -1160,6 +1158,7 @@ def review(vault_str):
             published = approve_drafts(config, db, all_paths)
             console.print(f"[green]Published {len(published)} article(s).[/green]")
             from .indexer import append_log, generate_index
+
             generate_index(config, db)
             append_log(config, f"review | approved {len(published)} articles")
             return
@@ -1174,14 +1173,30 @@ def review(vault_str):
             if idx < 0 or idx >= len(summaries):
                 console.print("[red]Invalid selection.[/red]")
                 continue
-            _review_single(summaries[idx], config, db, approve_drafts, reject_draft,
-                           compute_diff, compute_rejection_diff, load_draft_content)
+            _review_single(
+                summaries[idx],
+                config,
+                db,
+                approve_drafts,
+                reject_draft,
+                compute_diff,
+                compute_rejection_diff,
+                load_draft_content,
+            )
         else:
             console.print("[red]Unknown command.[/red]")
 
 
-def _review_single(summary, config, db, approve_drafts, reject_draft,
-                   compute_diff, compute_rejection_diff, load_draft_content):
+def _review_single(
+    summary,
+    config,
+    db,
+    approve_drafts,
+    reject_draft,
+    compute_diff,
+    compute_rejection_diff,
+    load_draft_content,
+):
     """Handle single-draft review loop."""
     from rich.panel import Panel
 
@@ -1201,11 +1216,13 @@ def _review_single(summary, config, db, approve_drafts, reject_draft,
         # Show rejection history
         rejections = db.get_rejections(summary.title, limit=3)
         if rejections:
-            console.print(Panel(
-                "\n".join(f"• {r['feedback']}" for r in rejections),
-                title=f"[red]Previous rejections ({len(rejections)})[/red]",
-                border_style="red",
-            ))
+            console.print(
+                Panel(
+                    "\n".join(f"• {r['feedback']}" for r in rejections),
+                    title=f"[red]Previous rejections ({len(rejections)})[/red]",
+                    border_style="red",
+                )
+            )
 
         # Show metadata
         console.print(
@@ -1220,9 +1237,10 @@ def _review_single(summary, config, db, approve_drafts, reject_draft,
 
         console.print(
             "\n[dim][a]pprove  [r]eject  [e]dit  [d]iff vs published  "
-            "[R]iff vs rejected  [s]kip[/dim]"
+            "[v]iew rejection diff  [s]kip[/dim]"
         )
-        action = click.prompt("", prompt_suffix="> ").strip().lower()
+        raw_action = click.prompt("", prompt_suffix="> ").strip()
+        action = raw_action.lower()
 
         if action == "s":
             return
@@ -1233,6 +1251,7 @@ def _review_single(summary, config, db, approve_drafts, reject_draft,
             published = approve_drafts(config, db, [summary.path])
             console.print(f"[green]Published:[/green] {published[0].name if published else '?'}")
             from .indexer import append_log, generate_index
+
             generate_index(config, db)
             append_log(config, f"review | approved {summary.title}")
             return
@@ -1251,10 +1270,10 @@ def _review_single(summary, config, db, approve_drafts, reject_draft,
                     console.print(f"[dim]({count}/{db._REJECTION_CAP} rejections)[/dim]")
             return
         elif action == "e":
-            editor = click.get_app_dir("EDITOR") or "vi"
             import os
-            editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
             import subprocess
+
+            editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
             subprocess.call([editor, str(summary.path)])
         elif action == "d":
             safe_name = sanitize_filename(summary.title)
@@ -1264,7 +1283,7 @@ def _review_single(summary, config, db, approve_drafts, reject_draft,
                 console.print("[dim]No published version — this is a new article.[/dim]")
             else:
                 console.print(diff)
-        elif action in ("R", "shift+r"):
+        elif action == "v":
             diff = compute_rejection_diff(summary.path, db, summary.title)
             if diff is None:
                 console.print("[dim]No rejected body stored for this concept.[/dim]")
@@ -1279,7 +1298,9 @@ def _review_single(summary, config, db, approve_drafts, reject_draft,
 
 @cli.command()
 @click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
-@click.option("--fix", is_flag=True, help="Auto-fix missing frontmatter, invalid tags, create stubs")  # noqa: E501
+@click.option(
+    "--fix", is_flag=True, help="Auto-fix missing frontmatter, invalid tags, create stubs"
+)  # noqa: E501
 @click.option("--stubs-only", is_flag=True, help="Only create stub articles")
 @click.option("--dry-run", is_flag=True, help="Report issues without making changes")
 def maintain(vault_str, fix, stubs_only, dry_run):
@@ -1317,7 +1338,7 @@ def maintain(vault_str, fix, stubs_only, dry_run):
             for concept in blocked:
                 count = db.rejection_count(concept)
                 console.print(f"  {concept} ({count} rejections)")
-            console.print("[dim]Use [bold]olw unblock \"Concept\"[/bold] to re-enable.[/dim]")
+            console.print('[dim]Use [bold]olw unblock "Concept"[/bold] to re-enable.[/dim]')
 
         if stubs_only:
             if not dry_run:
@@ -1391,6 +1412,5 @@ def unblock(vault_str, concept):
     count = db.rejection_count(concept)
     console.print(f"[green]'{concept}' unblocked.[/green]")
     console.print(
-        f"[dim]{count} rejection(s) remain on record. "
-        f"Next compile will include this concept.[/dim]"
+        f"[dim]{count} rejection(s) remain on record. Next compile will include this concept.[/dim]"
     )

@@ -223,7 +223,13 @@ def test_reject_draft_blocks_after_cap(config, db):
 
     # 5th rejection via reject_draft
     draft_path = config.drafts_dir / "Blocked.md"
-    meta = {"title": "Blocked Topic", "status": "draft", "tags": [], "sources": [], "confidence": 0.5}  # noqa: E501
+    meta = {
+        "title": "Blocked Topic",
+        "status": "draft",
+        "tags": [],
+        "sources": [],
+        "confidence": 0.5,
+    }  # noqa: E501
     atomic_write(draft_path, fm_lib.dumps(fm_lib.Post("body", **meta)))
     db.upsert_article(
         WikiArticleRecord(
