@@ -712,6 +712,9 @@ def reject_draft(
     feedback: str = "",
 ) -> None:
     """Delete a draft, store rejection feedback and body for future recompiles."""
+    # Resolve to canonical path so relative_to(config.vault) works on macOS
+    # where /var is a symlink to /private/var but config.vault is always resolved.
+    draft_path = draft_path.resolve()
     # Read before deleting — title and body needed for rejection record
     title = draft_path.stem
     draft_body = ""
