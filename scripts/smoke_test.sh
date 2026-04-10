@@ -495,10 +495,12 @@ check "olw run reports ingested or compiled" \
     "grep -qiE 'ingest|compile|draft|publish|rounds' \"$_TMP\""
 rm -f "$_TMP"
 
+DRAFTS_BEFORE=$(find "$VAULT_DIR/wiki/.drafts" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 RUN_DRYRUN_OUT=$($OLW run --dry-run 2>&1 || true)
+DRAFTS_AFTER=$(find "$VAULT_DIR/wiki/.drafts" -name '*.md' 2>/dev/null | wc -l | tr -d ' ')
 _TMP=$(mktemp); echo "$RUN_DRYRUN_OUT" > "$_TMP"
 check "olw run --dry-run makes no LLM calls (no new drafts)" \
-    "test \$(find $VAULT_DIR/wiki/.drafts -name '*.md' 2>/dev/null | wc -l) -eq 0"
+    "test '$DRAFTS_AFTER' -eq '$DRAFTS_BEFORE'"
 rm -f "$_TMP"
 
 # ── Draft annotations ────────────────────────────────────────────────────────
