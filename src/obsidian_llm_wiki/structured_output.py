@@ -26,27 +26,52 @@ if TYPE_CHECKING:
 T = TypeVar("T", bound=BaseModel)
 log = logging.getLogger(__name__)
 
+# Template-based instruction: a concrete fill-in example is less likely to
+# confuse small models than a full JSON Schema object (which they may echo back).
 _SCHEMA_INSTRUCTION = """\
 You MUST respond with ONLY valid JSON. No prose before or after.
-Return the JSON object directly — do NOT wrap it in a container or class name.
+Return the JSON object directly. Do NOT wrap it or add extra keys.
 
-WRONG: {{"AnalysisResult": {{"summary": "..."}}}}
-RIGHT: {{"summary": "..."}}
+Fill in this exact JSON structure with real content:
 
-JSON must have exactly these top-level fields:
+{template}
 
-{schema}
-
-Respond with nothing but the JSON object."""
+Replace each placeholder string with actual content. Keep the same keys and types.
+Respond with nothing but the completed JSON object."""
 
 
 class StructuredOutputError(Exception):
     pass
 
 
+def _make_template(model_class: type[T]) -> str:
+    """Build a fill-in JSON example from model fields (simpler than raw JSON Schema)."""
+    schema = model_class.model_json_schema()
+    props = schema.get("properties", {})
+
+    template: dict = {}
+    for field_name, field_schema in props.items():
+        ftype = field_schema.get("type", "string")
+        desc = field_schema.get("description", "")
+        enum = field_schema.get("enum")
+
+        if enum:
+            template[field_name] = " | ".join(str(e) for e in enum)
+        elif ftype == "array":
+            template[field_name] = [desc[:60] or f"<{field_name} item>"]
+        elif ftype in ("integer", "number"):
+            template[field_name] = 0
+        elif ftype == "boolean":
+            template[field_name] = True
+        else:
+            template[field_name] = desc[:80] or f"<{field_name}>"
+
+    return json.dumps(template, indent=2)
+
+
 def _schema_system(model_class: type[T]) -> str:
-    schema = json.dumps(model_class.model_json_schema(), indent=2)
-    return _SCHEMA_INSTRUCTION.format(schema=schema)
+    template = _make_template(model_class)
+    return _SCHEMA_INSTRUCTION.format(template=template)
 
 
 def _extract_json(text: str) -> str | None:
@@ -70,20 +95,29 @@ def _unwrap(data: dict, model_class: type[T]) -> dict:
     """
     Unwrap containers that models sometimes produce instead of flat objects.
 
-    Handles two patterns:
-    1. Single-key wrapper:  {"AnalysisResult": {...}} → {...}
-    2. JSON-Schema echo:    {"description": "...", "properties": {"title": ..., "content": ...}}
-                           → extract leaf values from "properties"
+    Handles three patterns:
+    1.  Single-key dict wrapper:    {"AnalysisResult": {...}} → {...}
+    1b. Single-key string wrapper:  {"result": "{...json...}"} → parsed inner dict
+    2.  JSON-Schema echo:           {"description": "...", "properties": {"title": ..., ...}}
+                                    → extract leaf values from "properties"
     """
     if not isinstance(data, dict):
         return data
 
-    # Pattern 1: single-key wrapper {"ClassName": {...}}
+    # Pattern 1 / 1b: single-key wrapper
     if len(data) == 1:
         key = next(iter(data))
         value = data[key]
         if isinstance(value, dict):
             return value
+        # 1b: value is a JSON-encoded string — model put the whole object in one field
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
 
     # Pattern 2: model echoes JSON Schema format with "properties" dict
     # {"description": "...", "properties": {"field": "value", ...}}
