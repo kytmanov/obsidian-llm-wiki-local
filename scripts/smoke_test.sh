@@ -521,14 +521,16 @@ conn.close()
 PYEOF
 
 $OLW compile 2>&1 || true
-DRAFTS_WITH_ANNOTATION=$(grep -rl 'olw-auto' "$VAULT_DIR/wiki/.drafts/" 2>/dev/null | wc -l | tr -d ' ')
+DRAFTS_WITH_ANNOTATION=$(grep -rl 'olw-auto' "$VAULT_DIR/wiki/.drafts/" 2>/dev/null \
+    | wc -l | tr -d ' ' || echo 0)
 # Not guaranteed to annotate since model may produce high confidence — just check no crash
 pass "annotation check ran (found $DRAFTS_WITH_ANNOTATION annotated draft(s))"
 
 # Verify annotations are stripped on approve
 $OLW approve --all 2>&1 || true
 PUBLISHED_WITH_ANNOTATION=$(grep -rl 'olw-auto' "$VAULT_DIR/wiki/" \
-    --include='*.md' --exclude-dir='.drafts' --exclude-dir='sources' 2>/dev/null | wc -l | tr -d ' ')
+    --include='*.md' --exclude-dir='.drafts' --exclude-dir='sources' 2>/dev/null \
+    | wc -l | tr -d ' ' || echo 0)
 check "no olw-auto annotations in published articles" \
     "test '$PUBLISHED_WITH_ANNOTATION' -eq 0"
 
