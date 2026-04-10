@@ -128,9 +128,8 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
     console.print(f"[green]Vault initialised:[/green] {vault}")
     console.print("Next steps:")
     console.print("  1. Drop .md notes into [bold]raw/[/bold]")
-    console.print("  2. Run [bold]olw ingest --all[/bold]")
-    console.print("  3. Run [bold]olw compile[/bold]")
-    console.print("  4. Run [bold]olw approve --all[/bold]")
+    console.print("  2. Run [bold]olw run[/bold]  (ingest + compile + lint in one step)")
+    console.print("  3. Review drafts: [bold]olw review[/bold]")
 
 
 def _sync_wiki_toml_models(toml_path: Path, fast: str, heavy: str, ollama_url: str) -> None:
@@ -384,7 +383,7 @@ def setup(non_interactive: bool, reset: bool):
             "",
             "  Next steps:",
             f"    [bold]olw init {init_target}[/bold]",
-            "    [bold]olw ingest --all && olw compile[/bold]",
+            "    [bold]olw run[/bold]  (or: olw ingest --all && olw compile)",
         ]
         console.print()
         console.print(
