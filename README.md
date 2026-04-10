@@ -67,7 +67,7 @@ uv tool install obsidian-llm-wiki
 **From source** (latest development version):
 
 ```bash
-git clone https://github.com/kytmanov/obsidian-llm-wiki
+git clone https://github.com/kytmanov/obsidian-llm-wiki-local
 cd obsidian-llm-wiki
 python install.py
 ```
@@ -362,7 +362,7 @@ Any [Ollama model](https://ollama.com/library) with JSON format support works. T
 All tests are offline — no Ollama required.
 
 ```bash
-git clone https://github.com/kytmanov/obsidian-llm-wiki
+git clone https://github.com/kytmanov/obsidian-llm-wiki-local
 cd obsidian-llm-wiki
 uv sync --group dev
 uv run pytest
