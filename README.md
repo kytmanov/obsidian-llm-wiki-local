@@ -35,7 +35,7 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Rejection feedback loop** — reject a draft with a reason; the next compile injects your feedback into the prompt so the model addresses it
 - **Draft annotations** — low-confidence or single-source drafts are flagged with `<!-- olw-auto: ... -->` comments (invisible in Obsidian, stripped on approval)
 - **Rich review interface** — `olw review` lists drafts ranked by rejection count, shows diffs vs published and vs the last rejected version
-- **Pipeline orchestrator** — `olw run` runs ingest → compile → lint → approve as one command with timing and failure classification
+- **Pipeline orchestrator** — `olw run` runs ingest → compile → lint → [approve] as one command with timing and failure classification
 - **Selective recompile** — after a file save, only concepts linked to that source are recompiled (not the entire wiki)
 - **Self-maintenance** — `olw maintain` creates stub articles for broken wikilinks, suggests orphan link fixes, and warns about low-quality source distribution
 - **Manual edit protection** — edited an article by hand? The compiler detects the change and skips it
@@ -68,7 +68,7 @@ uv tool install obsidian-llm-wiki
 
 ```bash
 git clone https://github.com/kytmanov/obsidian-llm-wiki-local
-cd obsidian-llm-wiki
+cd obsidian-llm-wiki-local
 python install.py
 ```
 
@@ -363,7 +363,7 @@ All tests are offline — no Ollama required.
 
 ```bash
 git clone https://github.com/kytmanov/obsidian-llm-wiki-local
-cd obsidian-llm-wiki
+cd obsidian-llm-wiki-local
 uv sync --group dev
 uv run pytest
 ```
