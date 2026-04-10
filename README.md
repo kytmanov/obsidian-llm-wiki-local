@@ -44,7 +44,7 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
-- **Offline test suite** — all 290 tests run without Ollama
+- **Offline test suite** — all 309 tests run without Ollama
 
 ---
 
@@ -237,7 +237,7 @@ my-wiki/
 ├── wiki.toml                   ← configuration
 └── .olw/
     ├── state.db                ← SQLite: notes, concepts, articles, rejections, stubs
-    └── pipeline.lock           ← advisory lock (auto-released; safe to delete if stale)
+    └── pipeline.lock           ← advisory lock (auto-released when the holding process exits)
 ```
 
 `raw/` is immutable — `olw` never writes to it. All metadata lives in `state.db`.
@@ -385,7 +385,7 @@ Articles move to `wiki/` and become fully visible.
 Failed concepts are retried automatically on the next run. Or force a retry:
 
 ```bash
-olw compile
+olw compile --retry-failed
 ```
 
 If the same concepts keep failing, the LLM is likely struggling with JSON output for those specific titles. Try increasing `heavy_ctx` in `wiki.toml` (see [Tuning context windows](#tuning-context-windows)).
