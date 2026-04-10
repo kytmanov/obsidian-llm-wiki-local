@@ -25,6 +25,7 @@ _CURRENT_SCHEMA_VERSION = 2
 # Fresh DBs get all tables + columns from here. Existing DBs use _VERSIONED_MIGRATIONS.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
+    id      INTEGER PRIMARY KEY CHECK(id = 1),
     version INTEGER NOT NULL
 );
 
@@ -125,7 +126,31 @@ class StateDB:
 
     def _migrate(self) -> None:
         """Apply schema migrations in version order. Idempotent."""
-        row = self._conn.execute("SELECT version FROM schema_version").fetchone()
+        # Upgrade schema_version table if it lacks the id column (pre-v0.2 DBs).
+        sv_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(schema_version)").fetchall()}
+        if sv_cols and "id" not in sv_cols:
+            # Read the current version from the old single-column table, then
+            # recreate it with the proper constraint.
+            old_row = self._conn.execute(
+                "SELECT version FROM schema_version ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            old_version = old_row[0] if old_row else None
+            self._conn.executescript(
+                "DROP TABLE schema_version;"
+                "CREATE TABLE schema_version "
+                "(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);"
+            )
+            if old_version is not None:
+                self._conn.execute(
+                    "INSERT INTO schema_version (id, version) VALUES (1, ?)", (old_version,)
+                )
+            self._conn.commit()
+
+        # Use ORDER BY rowid DESC LIMIT 1 to be robust against legacy DBs that
+        # accumulated multiple rows before the id=1 uniqueness constraint was added.
+        row = self._conn.execute(
+            "SELECT version FROM schema_version ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
 
         if row is None:
             # No version record yet. Determine starting state by inspecting schema:
@@ -135,12 +160,15 @@ class StateDB:
             if "approved_at" in cols:
                 with self._tx():
                     self._conn.execute(
-                        "INSERT INTO schema_version VALUES (?)", (_CURRENT_SCHEMA_VERSION,)
+                        "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+                        (_CURRENT_SCHEMA_VERSION,),
                     )
                 return
             # Existing DB with no version tracking — start from 0, apply all migrations.
             with self._tx():
-                self._conn.execute("INSERT INTO schema_version VALUES (0)")
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 0)"
+                )
             current_version = 0
         else:
             current_version = row[0]
@@ -158,7 +186,10 @@ class StateDB:
                     if "duplicate column" not in str(e).lower():
                         raise
             with self._tx():
-                self._conn.execute("UPDATE schema_version SET version = ?", (version,))
+                self._conn.execute(
+                    "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
+                    (version,),
+                )
             current_version = version
 
     def close(self) -> None:
@@ -291,7 +322,7 @@ class StateDB:
             FROM concepts c
             JOIN raw_notes r ON c.source_path = r.path
             WHERE r.status = 'ingested'
-              AND c.name NOT IN (SELECT concept FROM blocked_concepts)
+              AND lower(c.name) NOT IN (SELECT lower(concept) FROM blocked_concepts)
 
             UNION
 
@@ -301,7 +332,7 @@ class StateDB:
                 JOIN raw_notes r2 ON c2.source_path = r2.path
                 WHERE r2.status IN ('ingested', 'compiled')
             )
-            AND s.concept NOT IN (SELECT concept FROM blocked_concepts)
+            AND lower(s.concept) NOT IN (SELECT lower(concept) FROM blocked_concepts)
 
             ORDER BY 1
             """
@@ -347,6 +378,13 @@ class StateDB:
 
     def publish_article(self, old_path: str, new_path: str) -> None:
         with self._tx():
+            # Guard: draft row must exist before we touch anything.
+            # Without this, the DELETE below would silently destroy the previously
+            # published row when the draft was never recorded in wiki_articles.
+            if not self._conn.execute(
+                "SELECT 1 FROM wiki_articles WHERE path = ?", (old_path,)
+            ).fetchone():
+                return
             # Remove existing published row at target path (re-publish scenario)
             if old_path != new_path:
                 self._conn.execute("DELETE FROM wiki_articles WHERE path = ?", (new_path,))
@@ -412,7 +450,7 @@ class StateDB:
 
     def is_concept_blocked(self, concept: str) -> bool:
         row = self._conn.execute(
-            "SELECT 1 FROM blocked_concepts WHERE concept = ?", (concept,)
+            "SELECT 1 FROM blocked_concepts WHERE lower(concept) = lower(?)", (concept,)
         ).fetchone()
         return row is not None
 

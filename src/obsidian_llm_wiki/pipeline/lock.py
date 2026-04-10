@@ -64,7 +64,10 @@ def pipeline_lock(vault: Path, block: bool = False):
     lock_path = vault / ".olw" / "pipeline.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(lock_path, "w") as f:
+    # Open with "a+" (create if absent, no truncation) so a competing process
+    # that fails to acquire the lock does not clear the incumbent's PID.
+    # We truncate and write the PID ourselves only after the lock is held.
+    with open(lock_path, "a+") as f:
         import os
 
         try:
@@ -72,8 +75,9 @@ def pipeline_lock(vault: Path, block: bool = False):
         except BlockingIOError:
             yield False
             return
-        # Write PID only after acquiring — avoids race where two processes
-        # both write their PID before either acquires the lock.
+        # We now hold the lock — overwrite with our PID.
+        f.seek(0)
+        f.truncate()
         f.write(str(os.getpid()))
         f.flush()
         try:
