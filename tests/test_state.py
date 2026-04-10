@@ -87,6 +87,33 @@ def test_publish_article(db):
     assert got.is_draft is False
 
 
+def test_publish_article_republish_no_unique_violation(db):
+    """Re-publishing a concept that was already published must not raise UNIQUE error."""
+    # Simulate first publish: existing row at wiki/test.md
+    existing = WikiArticleRecord(
+        path="wiki/test.md",
+        title="Test",
+        sources=[],
+        content_hash="old",
+        is_draft=False,
+    )
+    db.upsert_article(existing)
+    # New draft for same concept
+    draft = WikiArticleRecord(
+        path="wiki/.drafts/test.md",
+        title="Test",
+        sources=[],
+        content_hash="new",
+        is_draft=True,
+    )
+    db.upsert_article(draft)
+    # Should not raise sqlite3.IntegrityError
+    db.publish_article("wiki/.drafts/test.md", "wiki/test.md")
+    got = db.get_article("wiki/test.md")
+    assert got is not None
+    assert got.is_draft is False
+
+
 # ── Concepts ──────────────────────────────────────────────────────────────────
 
 

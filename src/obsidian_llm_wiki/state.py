@@ -347,6 +347,9 @@ class StateDB:
 
     def publish_article(self, old_path: str, new_path: str) -> None:
         with self._tx():
+            # Remove existing published row at target path (re-publish scenario)
+            if old_path != new_path:
+                self._conn.execute("DELETE FROM wiki_articles WHERE path = ?", (new_path,))
             self._conn.execute(
                 "UPDATE wiki_articles SET path=?, is_draft=0, updated_at=? WHERE path=?",
                 (new_path, datetime.now().isoformat(), old_path),
