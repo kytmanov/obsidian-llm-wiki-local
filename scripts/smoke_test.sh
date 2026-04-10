@@ -531,6 +531,15 @@ $OLW approve --all 2>&1 || true
 PUBLISHED_WITH_ANNOTATION=$(grep -rl 'olw-auto' "$VAULT_DIR/wiki/" \
     --include='*.md' --exclude-dir='.drafts' --exclude-dir='sources' 2>/dev/null \
     | wc -l | tr -d ' ' || echo 0)
+# Debug: show which files still have annotations (and from which dir)
+if [[ "$PUBLISHED_WITH_ANNOTATION" -gt 0 ]]; then
+    info "DEBUG: files with olw-auto after approve:"
+    grep -rl 'olw-auto' "$VAULT_DIR/wiki/" --include='*.md' \
+        --exclude-dir='.drafts' --exclude-dir='sources' 2>/dev/null | while read f; do
+        echo "  FILE: $f"
+        grep 'olw-auto' "$f" | head -2 | sed 's/^/    /'
+    done
+fi
 check "no olw-auto annotations in published articles" \
     "test '$PUBLISHED_WITH_ANNOTATION' -eq 0"
 
