@@ -52,7 +52,19 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 
 ### 1. Install
 
-**From source** (clone and install with one command):
+**From PyPI** (recommended):
+
+```bash
+pip install obsidian-llm-wiki
+```
+
+Or with `uv`:
+
+```bash
+uv tool install obsidian-llm-wiki
+```
+
+**From source** (latest development version):
 
 ```bash
 git clone https://github.com/kytmanov/obsidian-llm-wiki
