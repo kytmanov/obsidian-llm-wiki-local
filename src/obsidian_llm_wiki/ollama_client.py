@@ -93,13 +93,14 @@ class OllamaClient:
         system: str = "",
         format: str | None = None,
         num_ctx: int = 8192,
+        num_predict: int = -1,
     ) -> str:
         payload: dict = {
             "model": model,
             "prompt": prompt,
             "system": system,
             "stream": False,
-            "options": {"num_ctx": num_ctx},
+            "options": {"num_ctx": num_ctx, "num_predict": num_predict},
         }
         if format:
             payload["format"] = format

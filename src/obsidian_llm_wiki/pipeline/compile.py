@@ -390,6 +390,7 @@ def compile_concepts(
                     model=config.models.fast,
                     system=_STUB_WRITE_SYSTEM,
                     num_ctx=config.ollama.fast_ctx,
+                    num_predict=config.ollama.fast_ctx // 2,
                 )
             except StructuredOutputError as e:
                 log.error("Failed to write stub '%s': %s", name, e)
@@ -447,6 +448,7 @@ def compile_concepts(
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
                 num_ctx=config.ollama.heavy_ctx,
+                num_predict=config.ollama.heavy_ctx // 2,
             )
         except StructuredOutputError as e:
             log.error("Failed to write '%s': %s", name, e)
@@ -597,6 +599,7 @@ def compile_notes(
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
                 num_ctx=config.ollama.heavy_ctx,
+                num_predict=config.ollama.heavy_ctx // 2,
             )
         except StructuredOutputError as e:
             log.error("Failed to write '%s': %s", article.title, e)

@@ -159,6 +159,7 @@ def request_structured(
     model: str,
     system: str = "",
     num_ctx: int = 8192,
+    num_predict: int = -1,
     max_retries: int = 2,
 ) -> T:
     """
@@ -192,6 +193,7 @@ def request_structured(
             system=full_system,
             format="json",
             num_ctx=num_ctx,
+            num_predict=num_predict,
         )
 
         # Try direct parse
