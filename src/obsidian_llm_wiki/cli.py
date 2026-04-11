@@ -295,9 +295,15 @@ def setup(non_interactive: bool, reset: bool):
     try:
         # ── Header ───────────────────────────────────────────────────────────
         console.print()
+        from importlib.metadata import version as _pkg_version
+
+        try:
+            _ver = _pkg_version("obsidian-llm-wiki")
+        except Exception:
+            _ver = "unknown"
         console.print(
             Panel(
-                "[bold]obsidian-llm-wiki[/bold]  ·  first run setup",
+                f"[bold]obsidian-llm-wiki[/bold] v{_ver}  ·  first run setup",
                 expand=False,
                 border_style="blue",
                 padding=(0, 4),
