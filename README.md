@@ -44,7 +44,7 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
-- **Offline test suite** — all 309 tests run without Ollama
+- **Offline test suite** — all 322 tests run without Ollama
 
 ---
 
@@ -269,8 +269,8 @@ heavy = "qwen2.5:14b"     # article generation, Q&A answers
 [ollama]
 url = "http://localhost:11434"   # supports LAN: http://192.168.1.x:11434
 timeout = 600
-fast_ctx = 8192                  # context window for fast model (tokens)
-heavy_ctx = 16384                # context window for heavy model (tokens)
+fast_ctx = 16384                 # context window for fast model (tokens)
+heavy_ctx = 32768                # context window for heavy model (tokens)
 
 [pipeline]
 auto_approve = false             # true = skip draft review
@@ -278,20 +278,43 @@ auto_commit = true               # git commit after each operation
 auto_maintain = false            # true = run maintain checks after each compile
 max_concepts_per_source = 8      # limit concepts extracted per note
 watch_debounce = 3.0             # seconds after last file event before processing
+ingest_parallel = false          # true = parallel chunk analysis (needs OLLAMA_NUM_PARALLEL>=4)
 ```
 
 ### Tuning context windows
 
-`heavy_ctx` controls how much source material the heavy model reads when writing articles (`source budget = heavy_ctx / 2` chars) and how long the generated article can be. The default of `16384` is sized for 7–14B models. **If you use a model with a large context window (e.g. `gemma4:e4b` supports 128K), increase it.**
+`heavy_ctx` controls how much source material the heavy model reads when writing articles (`source budget = heavy_ctx / 2` chars) and how long the generated article can be. Defaults target **16 GB VRAM**. **If you use a model with a large context window (e.g. `gemma4:e4b` supports 128K), increase it.**
 
-| RAM available | Recommended `heavy_ctx` | Source budget | Notes |
+| VRAM | Recommended `heavy_ctx` | Source budget | Notes |
 |---|---|---|---|
 | 8 GB | `8192` | ~4K chars | Minimum; short articles |
-| 16 GB | `16384` | ~8K chars | Default |
-| 16 GB+ | `32768` | ~16K chars | Recommended for `gemma4:e4b` |
+| 16 GB | `32768` | ~16K chars | Default |
 | 32 GB+ | `65536` | ~32K chars | Rich multi-source articles |
 
-`fast_ctx` (used for ingest/routing) rarely needs changing — single notes fit comfortably in 8K.
+`fast_ctx` controls ingest analysis. Notes longer than `fast_ctx / 2` chars are automatically split into chunks and analyzed in sequence — all content is covered, no truncation.
+
+| VRAM | Recommended `fast_ctx` | Notes per chunk |
+|---|---|---|
+| 8 GB | `8192` | ~4K chars |
+| 16 GB | `16384` | ~8K chars — Default |
+| 32 GB+ | `32768` | ~16K chars |
+
+### Speeding up long-note ingest
+
+For vaults with many long notes (>8K chars), enable parallel chunk analysis:
+
+```toml
+[pipeline]
+ingest_parallel = true   # requires OLLAMA_NUM_PARALLEL>=4
+```
+
+Also set in your shell before starting Ollama:
+
+```bash
+OLLAMA_NUM_PARALLEL=4 ollama serve
+```
+
+This lets Ollama process multiple chunks simultaneously. On 16 GB VRAM with `gemma4:e4b` (9.6 GB), 4 parallel slots fit comfortably (~12.8 GB total). Wall time for a 25K-char note drops from ~39s to ~14s.
 
 After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to regenerate articles with the new context budget.
 

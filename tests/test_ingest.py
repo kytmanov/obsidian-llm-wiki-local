@@ -9,8 +9,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from obsidian_llm_wiki.config import Config
+from obsidian_llm_wiki.models import AnalysisResult
 from obsidian_llm_wiki.pipeline.ingest import (
+    _analyze_body,
     _build_analysis_prompt,
+    _merge_chunk_results,
     _normalize_concept_names,
     _preprocess_web_clip,
     ingest_note,
@@ -138,29 +141,21 @@ def test_build_prompt_includes_existing_concepts():
     assert "Machine Learning" in prompt
 
 
-def test_build_prompt_truncates_long_body():
-    long_body = "x " * 5000  # way over 4000 chars
-    prompt = _build_analysis_prompt(long_body, [])
-    # Prompt body portion should not be full 10000+ chars
-    assert len(prompt) < 6000
+def test_build_prompt_includes_full_body():
+    # No truncation in _build_analysis_prompt — chunking happens in _analyze_body
+    body = "x " * 5000  # ~10000 chars
+    prompt = _build_analysis_prompt(body, [])
+    assert body in prompt
 
 
-def test_build_prompt_warns_on_truncation(caplog):
-    import logging
-
-    long_body = "word " * 1000  # ~5000 chars
-    with caplog.at_level(logging.WARNING, logger="obsidian_llm_wiki.pipeline.ingest"):
-        _build_analysis_prompt(long_body, [], path_name="test.md")
-    assert "truncated" in caplog.text.lower()
+def test_build_prompt_includes_chunk_label():
+    prompt = _build_analysis_prompt("content", [], chunk_label="[part 2/4]")
+    assert "[part 2/4]" in prompt
 
 
-def test_build_prompt_no_warning_for_short_body(caplog):
-    import logging
-
-    short_body = "word " * 100
-    with caplog.at_level(logging.WARNING, logger="obsidian_llm_wiki.pipeline.ingest"):
-        _build_analysis_prompt(short_body, [], path_name="test.md")
-    assert "truncated" not in caplog.text.lower()
+def test_build_prompt_no_chunk_label_by_default():
+    prompt = _build_analysis_prompt("content", [])
+    assert "[part" not in prompt
 
 
 # ── _normalize_concept_names ──────────────────────────────────────────────────
@@ -359,3 +354,106 @@ def test_ingest_note_respects_max_concepts_per_source(vault, config, db):
     names = db.list_all_concept_names()
     # Only first 2 should be stored
     assert len(names) <= 2
+
+
+# ── _merge_chunk_results ──────────────────────────────────────────────────────
+
+
+def _make_result(concepts, summary="Summary.", quality="high", topics=None):
+    return AnalysisResult(
+        summary=summary,
+        key_concepts=concepts,
+        suggested_topics=topics or ["Topic"],
+        quality=quality,
+    )
+
+
+def test_merge_single_chunk_returns_unchanged():
+    r = _make_result(["A", "B"])
+    assert _merge_chunk_results([r]) is r
+
+
+def test_merge_unions_concepts():
+    r1 = _make_result(["A", "B"])
+    r2 = _make_result(["B", "C"])
+    merged = _merge_chunk_results([r1, r2])
+    assert merged.key_concepts == ["A", "B", "C"]  # B deduped
+
+
+def test_merge_concept_dedup_case_insensitive():
+    r1 = _make_result(["Machine Learning"])
+    r2 = _make_result(["machine learning", "Deep Learning"])
+    merged = _merge_chunk_results([r1, r2])
+    names_lower = [c.lower() for c in merged.key_concepts]
+    assert names_lower.count("machine learning") == 1
+    assert "deep learning" in names_lower
+
+
+def test_merge_summary_from_first_chunk():
+    r1 = _make_result(["A"], summary="First summary.")
+    r2 = _make_result(["B"], summary="Second summary.")
+    merged = _merge_chunk_results([r1, r2])
+    assert merged.summary == "First summary."
+
+
+def test_merge_quality_is_minimum():
+    r1 = _make_result(["A"], quality="high")
+    r2 = _make_result(["B"], quality="low")
+    r3 = _make_result(["C"], quality="medium")
+    merged = _merge_chunk_results([r1, r2, r3])
+    assert merged.quality == "low"
+
+
+def test_merge_unions_topics():
+    r1 = _make_result(["A"], topics=["Topic A"])
+    r2 = _make_result(["B"], topics=["Topic B", "Topic A"])
+    merged = _merge_chunk_results([r1, r2])
+    assert len(merged.suggested_topics) == 2
+
+
+# ── _analyze_body ──────────────────────────────────────────────────────────────
+
+
+def test_analyze_body_single_call_for_short_note(vault, config, db):
+    """Body <= fast_ctx // 2 → exactly one generate call."""
+    client = _make_client(_analysis_json())
+    body = "Short note content."
+    _analyze_body(body, [], "test.md", client, config)
+    assert client.generate.call_count == 1
+
+
+def test_analyze_body_multi_call_for_long_note(vault, config, db):
+    """Body > fast_ctx // 2 → one call per chunk."""
+    config2 = Config(vault=vault, ollama={"fast_ctx": 100})  # tiny ctx for test
+    chunk_size = 100 // 2  # = 50 chars per chunk
+    body = "x" * 200  # 200 chars → 4 chunks
+    client = _make_client(_analysis_json())
+    result = _analyze_body(body, [], "long.md", client, config2)
+    expected_chunks = -(-200 // chunk_size)  # ceiling division
+    assert client.generate.call_count == expected_chunks
+    assert isinstance(result, AnalysisResult)
+
+
+def test_analyze_body_chunk_labels_in_prompt(vault, config, db):
+    """Multi-chunk prompts include [part N/M] labels."""
+    config2 = Config(vault=vault, ollama={"fast_ctx": 100})
+    body = "x" * 200
+    client = _make_client(_analysis_json())
+    _analyze_body(body, [], "long.md", client, config2)
+    prompts = [call.kwargs["prompt"] for call in client.generate.call_args_list]
+    assert any("[part 1/" in p for p in prompts)
+    assert any("[part 2/" in p for p in prompts)
+
+
+def test_analyze_body_parallel_mode(vault):
+    """ingest_parallel=True still produces one call per chunk, results merged."""
+    config2 = Config(
+        vault=vault,
+        ollama={"fast_ctx": 100},
+        pipeline={"ingest_parallel": True},
+    )
+    body = "x" * 200
+    client = _make_client(_analysis_json(concepts=["A"]))
+    result = _analyze_body(body, [], "long.md", client, config2)
+    assert client.generate.call_count == -(-200 // 50)  # same chunk count
+    assert isinstance(result, AnalysisResult)

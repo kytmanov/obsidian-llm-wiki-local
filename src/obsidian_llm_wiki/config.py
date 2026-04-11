@@ -32,14 +32,15 @@ def default_wiki_toml(
         f"[ollama]\n"
         f"url = {_toml_quote(ollama_url)}\n"
         f"timeout = 600\n"
-        f"fast_ctx = 8192\n"
-        f"heavy_ctx = 16384\n\n"
+        f"fast_ctx = 16384                  # context window for fast model (tokens)\n"
+        f"heavy_ctx = 32768                 # context window for heavy model (tokens)\n\n"
         f"[pipeline]\n"
         f"auto_approve = false\n"
         f"auto_commit = true\n"
         f"auto_maintain = false\n"
         f"watch_debounce = 3.0\n"
         f"max_concepts_per_source = 8\n"
+        f"ingest_parallel = false   # true = parallel chunks (needs OLLAMA_NUM_PARALLEL>=4)\n"
     )
 
 
@@ -52,8 +53,8 @@ class ModelsConfig(BaseModel):
 class OllamaConfig(BaseModel):
     url: str = "http://localhost:11434"
     timeout: float = 600.0  # seconds; 14B models over network need >5min
-    fast_ctx: int = 8192
-    heavy_ctx: int = 16384
+    fast_ctx: int = 16384
+    heavy_ctx: int = 32768
 
 
 class PipelineConfig(BaseModel):
@@ -62,6 +63,7 @@ class PipelineConfig(BaseModel):
     watch_debounce: float = 3.0
     max_concepts_per_source: int = 8
     auto_maintain: bool = False
+    ingest_parallel: bool = False  # parallel chunk analysis (needs OLLAMA_NUM_PARALLEL≥4)
 
 
 class RagConfig(BaseModel):

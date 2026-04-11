@@ -38,25 +38,116 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-_MAX_BODY_CHARS = 4000
-
-
-def _build_analysis_prompt(body: str, existing_concepts: list[str], path_name: str = "") -> str:
+def _build_analysis_prompt(
+    body: str,
+    existing_concepts: list[str],
+    path_name: str = "",
+    chunk_label: str = "",
+) -> str:
     concepts_hint = ", ".join(existing_concepts[:30]) if existing_concepts else "none yet"
-    if len(body) > _MAX_BODY_CHARS:
-        log.warning(
-            "Note %s truncated from %d to %d chars for analysis — "
-            "concepts in later sections may be missed",
-            path_name or "unknown",
-            len(body),
-            _MAX_BODY_CHARS,
-        )
-    body_trunc = body[:_MAX_BODY_CHARS]
+    label = f" {chunk_label}" if chunk_label else ""
     return (
-        f"Analyze this note and extract structured metadata.\n\n"
+        f"Analyze this note{label} and extract structured metadata.\n\n"
         f"Existing wiki concepts (reuse these names where applicable): {concepts_hint}\n\n"
-        f"NOTE CONTENT:\n{body_trunc}"
+        f"NOTE CONTENT:\n{body}"
     )
+
+
+def _merge_chunk_results(results: list[AnalysisResult]) -> AnalysisResult:
+    """Merge AnalysisResults from multiple chunks into one.
+
+    Concepts and topics: union (deduplicated, insertion order preserved).
+    Summary: first chunk's (intro is most representative).
+    Quality: minimum across chunks (conservative).
+    """
+    if len(results) == 1:
+        return results[0]
+
+    seen_concepts: set[str] = set()
+    all_concepts: list[str] = []
+    for r in results:
+        for c in r.key_concepts:
+            if c.lower() not in seen_concepts:
+                seen_concepts.add(c.lower())
+                all_concepts.append(c)
+
+    seen_topics: set[str] = set()
+    all_topics: list[str] = []
+    for r in results:
+        for t in r.suggested_topics:
+            if t.lower() not in seen_topics:
+                seen_topics.add(t.lower())
+                all_topics.append(t)
+
+    quality_rank = {"high": 2, "medium": 1, "low": 0}
+    min_result = min(results, key=lambda r: quality_rank.get(r.quality, 1))
+
+    return AnalysisResult(
+        summary=results[0].summary,
+        key_concepts=all_concepts[:8],
+        suggested_topics=all_topics[:5],
+        quality=min_result.quality,
+    )
+
+
+def _analyze_body(
+    body: str,
+    existing_concepts: list[str],
+    path_name: str,
+    client: OllamaClient,
+    config: Config,
+) -> AnalysisResult:
+    """Analyze note body, splitting into chunks if body exceeds fast_ctx // 2 chars."""
+    chunk_size = config.ollama.fast_ctx // 2
+
+    if len(body) <= chunk_size:
+        prompt = _build_analysis_prompt(body, existing_concepts, path_name)
+        return request_structured(
+            client=client,
+            prompt=prompt,
+            model_class=AnalysisResult,
+            model=config.models.fast,
+            system=_SYSTEM,
+            num_ctx=config.ollama.fast_ctx,
+        )
+
+    # Split into chunks — no overlap needed for concept extraction
+    chunks = [body[i : i + chunk_size] for i in range(0, len(body), chunk_size)]
+    log.info(
+        "Note %s split into %d chunks for analysis (%d chars, chunk_size=%d)",
+        path_name or "unknown",
+        len(chunks),
+        len(body),
+        chunk_size,
+    )
+
+    def _analyze_chunk(chunk: str, idx: int) -> AnalysisResult:
+        label = f"[part {idx + 1}/{len(chunks)}]"
+        prompt = _build_analysis_prompt(chunk, existing_concepts, path_name, chunk_label=label)
+        return request_structured(
+            client=client,
+            prompt=prompt,
+            model_class=AnalysisResult,
+            model=config.models.fast,
+            system=_SYSTEM,
+            num_ctx=config.ollama.fast_ctx,
+        )
+
+    if config.pipeline.ingest_parallel:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        chunk_results: list[AnalysisResult | None] = [None] * len(chunks)
+        with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+            futures = {
+                executor.submit(_analyze_chunk, chunk, i): i for i, chunk in enumerate(chunks)
+            }
+            for future in as_completed(futures):
+                chunk_results[futures[future]] = future.result()
+        results = [r for r in chunk_results if r is not None]
+    else:
+        results = [_analyze_chunk(chunk, i) for i, chunk in enumerate(chunks)]
+
+    return _merge_chunk_results(results)
 
 
 def _normalize_concept_names(raw_names: list[str], db: StateDB) -> list[str]:
@@ -244,15 +335,13 @@ def ingest_note(
     # LLM analysis — use existing concept names so model can reuse canonical names
     if existing_topics is None:
         existing_topics = db.list_all_concept_names()
-    prompt = _build_analysis_prompt(body, existing_topics, path_name=path.name)
     try:
-        result: AnalysisResult = request_structured(
+        result: AnalysisResult = _analyze_body(
+            body=body,
+            existing_concepts=existing_topics,
+            path_name=path.name,
             client=client,
-            prompt=prompt,
-            model_class=AnalysisResult,
-            model=config.models.fast,
-            system=_SYSTEM,
-            num_ctx=config.ollama.fast_ctx,
+            config=config,
         )
     except Exception as e:
         log.error("Analysis failed for %s: %s", path.name, e)
