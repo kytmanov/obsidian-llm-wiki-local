@@ -122,9 +122,13 @@ def _analyze_body(
     )
 
     def _analyze_chunk(chunk: str, idx: int) -> AnalysisResult:
+        import time
+
         label = f"[part {idx + 1}/{len(chunks)}]"
+        log.info("Analyzing %s %s …", path_name or "note", label)
+        t0 = time.monotonic()
         prompt = _build_analysis_prompt(chunk, existing_concepts, path_name, chunk_label=label)
-        return request_structured(
+        result = request_structured(
             client=client,
             prompt=prompt,
             model_class=AnalysisResult,
@@ -132,6 +136,8 @@ def _analyze_body(
             system=_SYSTEM,
             num_ctx=config.ollama.fast_ctx,
         )
+        log.info("Analyzed %s %s (%.1fs)", path_name or "note", label, time.monotonic() - t0)
+        return result
 
     if config.pipeline.ingest_parallel:
         from concurrent.futures import ThreadPoolExecutor, as_completed
