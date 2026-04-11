@@ -79,6 +79,18 @@ def cli():
 
     Run `olw setup` for interactive configuration.
     """
+    import logging
+
+    from rich.logging import RichHandler
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        handlers=[RichHandler(console=console, show_path=False, show_time=False)],
+    )
+    # Silence noisy third-party loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 # ── init ──────────────────────────────────────────────────────────────────────

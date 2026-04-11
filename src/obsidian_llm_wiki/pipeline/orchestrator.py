@@ -105,6 +105,7 @@ class PipelineOrchestrator:
                 [str(p) for p in config.raw_dir.rglob("*.md")] if config.raw_dir.exists() else []
             )
 
+        log.info("── Ingest (%d note(s)) ──────────────────────────────────", len(md_paths))
         for raw_path_str in md_paths:
             p = Path(raw_path_str)
             if not p.exists():
@@ -128,7 +129,7 @@ class PipelineOrchestrator:
             generate_index(config, db)
             append_log(config, f"run | ingested {report.ingested} note(s)")
 
-        # ── Round 1: Compile ───────────────────────────────────────────────────
+        # ── Round 1: Compile ──────────────────────────────────────────────────
         # Normalize ingested paths to vault-relative for DB lookup (watchdog supplies
         # absolute paths; DB stores relative paths like raw/note.md).
         priority_concepts: list[str] | None = None
@@ -141,6 +142,8 @@ class PipelineOrchestrator:
                     relative_ingested.append(p_str)  # already relative
             priority_concepts = db.get_concepts_for_sources(relative_ingested) or None
 
+        n_concepts = len(priority_concepts) if priority_concepts else "all"
+        log.info("── Compile round 1 (%s concept(s)) ─────────────────────────", n_concepts)
         t1 = time.monotonic()
         draft_paths, round1_failed = _run_compile(
             config, client, db, concepts=priority_concepts, dry_run=dry_run
@@ -151,6 +154,7 @@ class PipelineOrchestrator:
         report.rounds = 1
 
         # ── Lint ──────────────────────────────────────────────────────────────
+        log.info("── Lint ─────────────────────────────────────────────────────")
         if not dry_run:
             lint_result = run_lint(config, db)
             report.lint_issues = len(lint_result.issues)
@@ -163,6 +167,7 @@ class PipelineOrchestrator:
         # ── Round 2: Retry transient failures ─────────────────────────────────
         transient = [f for f in round1_failed if f.reason == FailureReason.TRANSIENT]
         if transient and report.rounds < max_rounds:
+            log.info("── Compile round 2 (%d retries) ────────────────────────────", len(transient))
             transient_concepts = [f.concept for f in transient]
             t2 = time.monotonic()
             r2_drafts, r2_failed = _run_compile(
@@ -178,6 +183,7 @@ class PipelineOrchestrator:
 
         # ── Approve ────────────────────────────────────────────────────────────
         if auto_approve and draft_paths and not dry_run:
+            log.info("── Auto-approve (%d draft(s)) ───────────────────────────────", len(draft_paths))  # noqa: E501
             published = approve_drafts(config, db, draft_paths)
             report.published = len(published)
             generate_index(config, db)
