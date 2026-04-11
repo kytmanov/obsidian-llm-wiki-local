@@ -134,8 +134,10 @@ def detect_installer(force_uv: bool, force_pip: bool) -> str:
 
 
 def install_with_uv(repo_root: Path) -> None:
-    info("Running: uv tool install . --force")
-    result = subprocess.run(["uv", "tool", "install", ".", "--force"], cwd=repo_root)
+    info("Running: uv tool install . --force --reinstall")
+    result = subprocess.run(
+        ["uv", "tool", "install", ".", "--force", "--reinstall"], cwd=repo_root
+    )
     if result.returncode != 0:
         die("uv install failed. Try: python install.py --pip")
 
