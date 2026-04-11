@@ -159,6 +159,50 @@ def test_single_article_sanitizes_tags():
     assert "C++" not in article.tags
 
 
+def test_num_predict_passed_to_generate():
+    """num_predict forwarded to client.generate so output isn't truncated mid-JSON."""
+    raw = json.dumps({"title": "T", "content": "body", "tags": ["t"]})
+    c = _client(raw)
+    request_structured(
+        client=c,
+        prompt="write",
+        model_class=SingleArticle,
+        model="qwen2.5:14b",
+        num_ctx=16384,
+        num_predict=8192,
+    )
+    _, kwargs = c.generate.call_args
+    assert kwargs.get("num_predict") == 8192
+
+
+def test_num_predict_default_is_minus_one():
+    """Default num_predict=-1 means unlimited — Ollama generates until stop token."""
+    raw = json.dumps({"title": "T", "content": "body", "tags": ["t"]})
+    c = _client(raw)
+    request_structured(
+        client=c,
+        prompt="write",
+        model_class=SingleArticle,
+        model="qwen2.5:14b",
+    )
+    _, kwargs = c.generate.call_args
+    assert kwargs.get("num_predict") == -1
+
+
+def test_truncated_json_fails_all_retries():
+    """Truncated JSON (output cut off mid-string) exhausts retries and raises."""
+    truncated = '{"title": "T", "content": "body that got cut off'
+    c = _client(truncated)
+    with pytest.raises(StructuredOutputError, match="Invalid JSON"):
+        request_structured(
+            client=c,
+            prompt="write",
+            model_class=SingleArticle,
+            model="qwen2.5:14b",
+            max_retries=1,
+        )
+
+
 def test_single_article_missing_required_field():
     # Missing required 'content' field should fail validation
     bad = json.dumps(
