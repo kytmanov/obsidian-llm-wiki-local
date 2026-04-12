@@ -186,7 +186,9 @@ class PipelineOrchestrator:
 
         # ── Approve ────────────────────────────────────────────────────────────
         if auto_approve and draft_paths and not dry_run:
-            log.info("── Auto-approve (%d draft(s)) ───────────────────────────────", len(draft_paths))  # noqa: E501
+            log.info(
+                "── Auto-approve (%d draft(s)) ───────────────────────────────", len(draft_paths)
+            )  # noqa: E501
             published = approve_drafts(config, db, draft_paths)
             report.published = len(published)
             generate_index(config, db)
@@ -225,10 +227,14 @@ def _run_compile(
         # Connection-level failure — all concepts are transient
         log.error("Ollama connection error during compile: %s", e)
         all_concepts = concepts or db.concepts_needing_compile()
-        return [], [
-            FailureRecord(concept=c, reason=FailureReason.TRANSIENT, error_msg=str(e))
-            for c in all_concepts
-        ], {}
+        return (
+            [],
+            [
+                FailureRecord(concept=c, reason=FailureReason.TRANSIENT, error_msg=str(e))
+                for c in all_concepts
+            ],
+            {},
+        )
 
     # Classify individual concept failures
     # compile_concepts returns bare names — we can't know the exact reason
