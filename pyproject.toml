@@ -47,7 +47,7 @@ build-backend = "hatchling.build"
 packages = ["src/obsidian_llm_wiki"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.4"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-benchmark>=4.0", "ruff>=0.4"]
 
 [tool.uv]
 

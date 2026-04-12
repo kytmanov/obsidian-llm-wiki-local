@@ -183,7 +183,7 @@ def test_compile_concepts_creates_draft(vault, config, db, fixtures_dir):
     article_json = (fixtures_dir / "single_article_valid.json").read_text()
     client = _make_concept_client(article_json)
 
-    drafts, failed = compile_concepts(config=config, client=client, db=db)
+    drafts, failed, _ = compile_concepts(config=config, client=client, db=db)
 
     assert len(drafts) == 1
     assert len(failed) == 0
@@ -200,7 +200,7 @@ def test_compile_concepts_skips_when_no_concepts_needing_compile(vault, config, 
     db.upsert_concepts("raw/note.md", ["Some Concept"])
 
     client = MagicMock()
-    drafts, failed = compile_concepts(config=config, client=client, db=db)
+    drafts, failed, _ = compile_concepts(config=config, client=client, db=db)
 
     assert drafts == []
     assert failed == []
@@ -218,7 +218,7 @@ def test_compile_concepts_dry_run(vault, config, db, fixtures_dir, capsys):
     db.upsert_concepts("raw/note.md", ["Concept A"])
 
     client = MagicMock()
-    drafts, _ = compile_concepts(config=config, client=client, db=db, dry_run=True)
+    drafts, _, _ = compile_concepts(config=config, client=client, db=db, dry_run=True)
 
     assert drafts == []
     assert list(config.drafts_dir.glob("*.md")) == []
@@ -255,7 +255,7 @@ def test_compile_concepts_manual_edit_protection(vault, config, db, fixtures_dir
     article_json = (fixtures_dir / "single_article_valid.json").read_text()
     client = _make_concept_client(article_json)
 
-    drafts, failed = compile_concepts(config=config, client=client, db=db)
+    drafts, failed, _ = compile_concepts(config=config, client=client, db=db)
 
     # Should skip the manually-edited article
     assert drafts == []
@@ -290,7 +290,7 @@ def test_compile_concepts_force_overrides_edit_protection(vault, config, db, fix
     article_json = (fixtures_dir / "single_article_valid.json").read_text()
     client = _make_concept_client(article_json)
 
-    drafts, failed = compile_concepts(config=config, client=client, db=db, force=True)
+    drafts, failed, _ = compile_concepts(config=config, client=client, db=db, force=True)
 
     assert len(drafts) == 1
 

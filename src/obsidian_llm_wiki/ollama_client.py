@@ -109,6 +109,8 @@ class OllamaClient:
             resp.raise_for_status()
         except httpx.ConnectError:
             raise OllamaError(_STARTUP_HINT)
+        except httpx.TimeoutException as e:
+            raise OllamaError(f"Ollama request timed out: {e}") from e
         except httpx.HTTPStatusError as e:
             raise OllamaError(
                 f"Ollama HTTP error: {e.response.status_code} {e.response.text}"

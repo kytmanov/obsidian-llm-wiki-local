@@ -91,7 +91,7 @@ def test_run_compile_ollama_error_classified_as_transient(config, db):
 
     compile_mod.compile_concepts = raise_ollama
     try:
-        drafts, failures = _run_compile(
+        drafts, failures, _ = _run_compile(
             config, make_mock_client(), db, concepts=["Alpha"], dry_run=False
         )
     finally:
@@ -110,11 +110,11 @@ def test_run_compile_unknown_failure_per_concept(config, db):
     original = compile_mod.compile_concepts
 
     def fake_compile(**kwargs):
-        return ([], ["Fails"])
+        return ([], ["Fails"], {})
 
     compile_mod.compile_concepts = fake_compile
     try:
-        drafts, failures = _run_compile(
+        drafts, failures, _ = _run_compile(
             config, make_mock_client(), db, concepts=["Fails"], dry_run=False
         )
     finally:
@@ -153,7 +153,7 @@ def test_orchestrator_run_timings_populated(config, db):
 def test_orchestrator_run_rounds_default_one(config, db):
     """No transient failures → only one compile round."""
     with patch("obsidian_llm_wiki.pipeline.orchestrator._run_compile") as mock_compile:
-        mock_compile.return_value = ([], [])
+        mock_compile.return_value = ([], [], {})
         orch = PipelineOrchestrator(config, make_mock_client(), db)
         report = orch.run(paths=[])
 
@@ -165,8 +165,8 @@ def test_orchestrator_retries_transient_failures(config, db):
     transient = FailureRecord(concept="Flaky", reason=FailureReason.TRANSIENT)
     bad_json = FailureRecord(concept="BadJSON", reason=FailureReason.LLM_OUTPUT)
 
-    round1_result = ([], [transient, bad_json])
-    round2_result = ([], [])  # transient resolved
+    round1_result = ([], [transient, bad_json], {})
+    round2_result = ([], [], {})  # transient resolved
 
     with patch("obsidian_llm_wiki.pipeline.orchestrator._run_compile") as mock_compile:
         mock_compile.side_effect = [round1_result, round2_result]
@@ -185,7 +185,7 @@ def test_orchestrator_llm_output_not_retried(config, db):
     bad = FailureRecord(concept="BadJSON", reason=FailureReason.LLM_OUTPUT)
 
     with patch("obsidian_llm_wiki.pipeline.orchestrator._run_compile") as mock_compile:
-        mock_compile.return_value = ([], [bad])
+        mock_compile.return_value = ([], [bad], {})
         orch = PipelineOrchestrator(config, make_mock_client(), db)
         report = orch.run(paths=[])
 
@@ -264,7 +264,7 @@ def test_orchestrator_lint_runs_when_no_drafts_produced(config, db):
     lint_mod.run_lint = fake_lint
     try:
         with patch("obsidian_llm_wiki.pipeline.orchestrator._run_compile") as mock_compile:
-            mock_compile.return_value = ([], [])  # no drafts produced
+            mock_compile.return_value = ([], [], {})  # no drafts produced
             orch = PipelineOrchestrator(config, make_mock_client(), db)
             orch.run(paths=[])
     finally:
@@ -328,7 +328,7 @@ def test_orchestrator_fix_creates_stubs(config, db):
     original_compile_fn = compile_mod.compile_concepts
 
     def fake_compile(**kwargs):
-        return ([fake_draft], [])
+        return ([fake_draft], [], {})
 
     def fake_lint_fn(config, db):
         return fake_lint

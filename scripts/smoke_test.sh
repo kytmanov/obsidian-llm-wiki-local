@@ -15,7 +15,7 @@ set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
 FAST_MODEL="${FAST_MODEL:-gemma4:e4b}"
-HEAVY_MODEL="${HEAVY_MODEL:-qwen2.5:14b}"
+HEAVY_MODEL="${HEAVY_MODEL:-gemma4:e4b}"
 OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
 SKIP_PULL="${SKIP_PULL:-0}"
 KEEP_VAULT="${KEEP_VAULT:-0}"

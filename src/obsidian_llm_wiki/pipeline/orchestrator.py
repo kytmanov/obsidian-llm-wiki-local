@@ -48,6 +48,7 @@ class PipelineReport:
     stubs_created: int = 0
     rounds: int = 0
     timings: dict[str, float] = field(default_factory=dict)
+    concept_timings: dict[str, float] = field(default_factory=dict)
 
     @property
     def failed_names(self) -> list[str]:
@@ -145,12 +146,13 @@ class PipelineOrchestrator:
         n_concepts = len(priority_concepts) if priority_concepts else "all"
         log.info("── Compile round 1 (%s concept(s)) ─────────────────────────", n_concepts)
         t1 = time.monotonic()
-        draft_paths, round1_failed = _run_compile(
+        draft_paths, round1_failed, r1_timings = _run_compile(
             config, client, db, concepts=priority_concepts, dry_run=dry_run
         )
         report.timings["compile_r1"] = time.monotonic() - t1
         report.compiled += len(draft_paths)
         report.failed.extend(round1_failed)
+        report.concept_timings.update(r1_timings)
         report.rounds = 1
 
         # ── Lint ──────────────────────────────────────────────────────────────
@@ -170,12 +172,13 @@ class PipelineOrchestrator:
             log.info("── Compile round 2 (%d retries) ────────────────────────────", len(transient))
             transient_concepts = [f.concept for f in transient]
             t2 = time.monotonic()
-            r2_drafts, r2_failed = _run_compile(
+            r2_drafts, r2_failed, r2_timings = _run_compile(
                 config, client, db, concepts=transient_concepts, dry_run=dry_run
             )
             report.timings["compile_r2"] = time.monotonic() - t2
             report.compiled += len(r2_drafts)
             draft_paths = draft_paths + r2_drafts
+            report.concept_timings.update(r2_timings)
             # Replace transient failures with round-2 results
             report.failed = [f for f in report.failed if f.reason != FailureReason.TRANSIENT]
             report.failed.extend(r2_failed)
@@ -205,13 +208,13 @@ def _run_compile(
     db: StateDB,
     concepts: list[str] | None,
     dry_run: bool,
-) -> tuple[list[Path], list[FailureRecord]]:
+) -> tuple[list[Path], list[FailureRecord], dict[str, float]]:
     """Run compile_concepts and classify failures by reason."""
     from ..ollama_client import OllamaError
     from ..pipeline.compile import compile_concepts
 
     try:
-        draft_paths, failed_names = compile_concepts(
+        draft_paths, failed_names, concept_timings = compile_concepts(
             config=config,
             client=client,
             db=db,
@@ -225,7 +228,7 @@ def _run_compile(
         return [], [
             FailureRecord(concept=c, reason=FailureReason.TRANSIENT, error_msg=str(e))
             for c in all_concepts
-        ]
+        ], {}
 
     # Classify individual concept failures
     # compile_concepts returns bare names — we can't know the exact reason
@@ -234,4 +237,4 @@ def _run_compile(
     failure_records = [
         FailureRecord(concept=name, reason=FailureReason.UNKNOWN) for name in failed_names
     ]
-    return draft_paths, failure_records
+    return draft_paths, failure_records, concept_timings

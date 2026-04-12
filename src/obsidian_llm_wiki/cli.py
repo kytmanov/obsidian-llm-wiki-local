@@ -574,7 +574,7 @@ def compile(vault_str, dry_run, auto_approve, force, legacy, retry_failed):
                     description=f"[dim]{name}[/dim]",
                 )
 
-            draft_paths, failed = compile_concepts(
+            draft_paths, failed, _ = compile_concepts(
                 config=config,
                 client=client,
                 db=db,
@@ -1165,8 +1165,8 @@ def review(vault_str):
             )
 
         console.print(table)
-        console.print("\n[dim][a] approve all  [x] reject all  [q] quit  or number to review[/dim]")
-        choice = click.prompt("", prompt_suffix="> ").strip().lower()
+        console.print("\n[dim]  [a] approve all  [x] reject all  [q] quit  or enter number[/dim]")
+        choice = click.prompt("\nChoice", prompt_suffix=" > ").strip().lower()
 
         if choice == "q":
             return
@@ -1252,11 +1252,10 @@ def _review_single(
         # Show body
         console.print(Panel(body[:3000] + ("…" if len(body) > 3000 else ""), title="Draft"))
 
-        console.print(
-            "\n[dim][a]pprove  [r]eject  [e]dit  [d]iff vs published  "
-            "[v]iew rejection diff  [s]kip[/dim]"
-        )
-        raw_action = click.prompt("", prompt_suffix="> ").strip()
+        console.print("\n[dim]Actions:[/dim]")
+        console.print("[dim]  [a]pprove  [r]eject  [e]dit[/dim]")
+        console.print("[dim]  [d]iff vs published  [v]iew rejection diff  [s]kip[/dim]")
+        raw_action = click.prompt("\nAction", prompt_suffix=" > ").strip()
         action = raw_action.lower()
 
         if action == "s":

@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -306,7 +307,7 @@ def compile_concepts(
     dry_run: bool = False,
     on_progress: Callable[[int, int, str], None] | None = None,
     concepts: list[str] | None = None,
-) -> tuple[list[Path], list[str]]:
+) -> tuple[list[Path], list[str], dict[str, float]]:
     """
     Concept-driven compile: one article per concept needing compile.
 
@@ -327,7 +328,7 @@ def compile_concepts(
 
     if not concept_names:
         log.info("No concepts needing compile")
-        return [], []
+        return [], [], {}
 
     log.info("Compiling %d concept(s)", len(concept_names))
     existing_titles = [t for t, _ in list_wiki_articles(config.wiki_dir)]
@@ -343,15 +344,17 @@ def compile_concepts(
                 f"  [concept{stub_tag}] {name} — {len(srcs)} source(s): "
                 f"{', '.join(Path(s).name for s in srcs)}"
             )
-        return [], []
+        return [], [], {}
 
     draft_paths: list[Path] = []
     failed: list[str] = []
+    concept_timings: dict[str, float] = {}
     compiled_sources: set[str] = set()
 
     for idx, name in enumerate(concept_names, 1):
         if on_progress:
             on_progress(idx, total, name)
+        _t_concept = time.monotonic()
 
         source_paths = db.get_sources_for_concept(name)
         is_stub = db.has_stub(name)
@@ -407,7 +410,9 @@ def compile_concepts(
             )
             draft_paths.append(draft_path)
             db.delete_stub(name)
-            log.info("Stub draft written: %s", draft_path.name)
+            elapsed = time.monotonic() - _t_concept
+            concept_timings[name] = elapsed
+            log.info("Stub draft written: %s (%.1fs)", draft_path.name, elapsed)
             continue
 
         # Gather source material within context budget
@@ -466,13 +471,15 @@ def compile_concepts(
         )
         draft_paths.append(draft_path)
         compiled_sources.update(resolved_paths)
-        log.info("Draft written: %s", draft_path.name)
+        elapsed = time.monotonic() - _t_concept
+        concept_timings[name] = elapsed
+        log.info("Draft written: %s (%.1fs)", draft_path.name, elapsed)
 
     # Mark all sources that fed any compiled concept as 'compiled'
     for sp in compiled_sources:
         db.mark_raw_status(sp, "compiled")
 
-    return draft_paths, failed
+    return draft_paths, failed, concept_timings
 
 
 # ── Legacy compile (CompilePlan → SingleArticle) ──────────────────────────────

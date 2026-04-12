@@ -265,7 +265,7 @@ def test_compile_concepts_selective(config, db, tmp_path):
     mock_response = json.dumps({"title": "Alpha", "content": "Alpha content.", "tags": []})
     client = make_mock_client(mock_response)
 
-    drafts, failed = compile_concepts(config, client, db, concepts=["Alpha"])
+    drafts, failed, _ = compile_concepts(config, client, db, concepts=["Alpha"])
     assert len(drafts) == 1
     assert "Alpha" in drafts[0].name or "alpha" in drafts[0].name.lower()
     # Beta should still be needing compile
@@ -284,7 +284,7 @@ def test_compile_concepts_none_compiles_all(config, db):
     mock_response = json.dumps({"title": "Topic", "content": "Content.", "tags": []})
     client = make_mock_client(mock_response)
 
-    drafts, failed = compile_concepts(config, client, db, concepts=None)
+    drafts, failed, _ = compile_concepts(config, client, db, concepts=None)
     assert len(drafts) == 1
 
 
@@ -364,7 +364,7 @@ def test_compile_concepts_stub_produces_draft(config, db):
     mock_response = json.dumps({"title": "Orphan Topic", "content": "Stub content.", "tags": []})
     client = make_mock_client(mock_response)
 
-    drafts, failed = compile_concepts(config, client, db)
+    drafts, failed, _ = compile_concepts(config, client, db)
     assert len(drafts) == 1
     assert not db.has_stub("Orphan Topic")
     assert "Orphan" in drafts[0].name or "orphan" in drafts[0].name.lower()
@@ -379,5 +379,5 @@ def test_compile_concepts_stub_failure_adds_to_failed(config, db):
     # Mock client to always return garbage
     client.generate.return_value = "garbage"
 
-    drafts, failed = compile_concepts(config, client, db)
+    drafts, failed, _ = compile_concepts(config, client, db)
     assert "Bad Stub" in failed
