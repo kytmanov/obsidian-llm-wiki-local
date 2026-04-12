@@ -39,14 +39,3 @@ jobs:
           path: benchmark-results.json
           retention-days: 90
 
-      - name: Comment benchmark summary on PR
-        if: github.event_name == 'pull_request'
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          tool: pytest
-          output-file-path: benchmark-results.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-on-alert: true
-          alert-threshold: "150%"
-          fail-on-alert: false
-          comment-always: true
