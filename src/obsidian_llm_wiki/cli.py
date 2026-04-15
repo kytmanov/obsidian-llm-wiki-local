@@ -321,8 +321,12 @@ def _pick_model(
 @cli.command()
 @click.option("--non-interactive", is_flag=True, help="Print current config and exit")
 @click.option("--reset", is_flag=True, help="Clear saved config and re-run wizard")
-@click.option("--provider", "provider_preset", default=None,
-              help="Skip provider selection (e.g. groq, lm_studio)")
+@click.option(
+    "--provider",
+    "provider_preset",
+    default=None,
+    help="Skip provider selection (e.g. groq, lm_studio)",
+)
 def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
     """Interactive wizard: configure provider, models, and default vault."""
     from .global_config import GlobalConfig, load_global_config, save_global_config
@@ -1071,9 +1075,7 @@ def doctor(vault_str):
                 if prov.name == "ollama"
                 else "check provider model list"
             )
-            console.print(
-                f"  [yellow]![/yellow] {label}: {model_name} not found — {pull_hint}"
-            )
+            console.print(f"  [yellow]![/yellow] {label}: {model_name} not found — {pull_hint}")
             ok = False
 
     # ── Vault stats ───────────────────────────────────────────────────────────

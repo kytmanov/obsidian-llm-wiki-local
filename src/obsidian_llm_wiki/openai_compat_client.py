@@ -87,28 +87,18 @@ class OpenAICompatClient:
         if isinstance(exc, httpx.ConnectError):
             if self._is_local():
                 return LLMError(
-                    f"{prefix}Cannot connect to {self.base_url}. "
-                    f"Make sure the service is running."
+                    f"{prefix}Cannot connect to {self.base_url}. Make sure the service is running."
                 )
-            return LLMError(
-                f"{prefix}Cannot reach {self.base_url}. "
-                f"Check your network connection."
-            )
+            return LLMError(f"{prefix}Cannot reach {self.base_url}. Check your network connection.")
         if isinstance(exc, httpx.TimeoutException):
             return LLMError(f"{prefix}Request timed out ({self._timeout}s). {context}")
         if isinstance(exc, httpx.HTTPStatusError):
             code = exc.response.status_code
             if code == 401:
-                return LLMError(
-                    f"{prefix}HTTP 401 Unauthorized. Check your API key."
-                )
+                return LLMError(f"{prefix}HTTP 401 Unauthorized. Check your API key.")
             if code == 429:
-                return LLMError(
-                    f"{prefix}HTTP 429 Rate limit exceeded. Wait and retry."
-                )
-            return LLMError(
-                f"{prefix}HTTP {code}: {exc.response.text[:200]}"
-            )
+                return LLMError(f"{prefix}HTTP 429 Rate limit exceeded. Wait and retry.")
+            return LLMError(f"{prefix}HTTP {code}: {exc.response.text[:200]}")
         return LLMError(f"{prefix}{exc}")
 
     def _is_local(self) -> bool:

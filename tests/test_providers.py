@@ -89,9 +89,7 @@ def test_generate_success():
     client = _make_client()
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "choices": [{"message": {"content": "hello world"}}]
-    }
+    mock_resp.json.return_value = {"choices": [{"message": {"content": "hello world"}}]}
     with patch.object(client._client, "post", return_value=mock_resp):
         result = client.generate("say hi", model="test-model")
     assert result == "hello world"
@@ -103,9 +101,11 @@ def test_generate_with_system():
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
     captured = {}
+
     def fake_post(url, json=None, **kw):
         captured["payload"] = json
         return mock_resp
+
     with patch.object(client._client, "post", side_effect=fake_post):
         client.generate("prompt", model="m", system="sys")
     msgs = captured["payload"]["messages"]
@@ -119,9 +119,11 @@ def test_generate_json_mode_injected():
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"choices": [{"message": {"content": "{}"}}]}
     captured = {}
+
     def fake_post(url, json=None, **kw):
         captured["payload"] = json
         return mock_resp
+
     with patch.object(client._client, "post", side_effect=fake_post):
         client.generate("p", model="m", format="json")
     assert captured["payload"].get("response_format") == {"type": "json_object"}
@@ -143,6 +145,7 @@ def test_generate_json_mode_400_retry():
     good_resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
 
     call_count = {"n": 0}
+
     def fake_post(url, json=None, **kw):
         call_count["n"] += 1
         if call_count["n"] == 1:
@@ -161,9 +164,11 @@ def test_generate_max_tokens_set_when_positive():
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"choices": [{"message": {"content": "x"}}]}
     captured = {}
+
     def fake_post(url, json=None, **kw):
         captured["payload"] = json
         return mock_resp
+
     with patch.object(client._client, "post", side_effect=fake_post):
         client.generate("p", model="m", num_predict=512)
     assert captured["payload"]["max_tokens"] == 512
@@ -175,9 +180,11 @@ def test_generate_max_tokens_omitted_when_minus_one():
     mock_resp.status_code = 200
     mock_resp.json.return_value = {"choices": [{"message": {"content": "x"}}]}
     captured = {}
+
     def fake_post(url, json=None, **kw):
         captured["payload"] = json
         return mock_resp
+
     with patch.object(client._client, "post", side_effect=fake_post):
         client.generate("p", model="m", num_predict=-1)
     assert "max_tokens" not in captured["payload"]
@@ -447,9 +454,7 @@ def test_setup_wizard_cloud_provider_empty_api_key(tmp_path, cfg_dir):
     from obsidian_llm_wiki.providers import list_all_providers
 
     runner = CliRunner()
-    groq_number = next(
-        str(i) for i, p in enumerate(list_all_providers(), 1) if p.name == "groq"
-    )
+    groq_number = next(str(i) for i, p in enumerate(list_all_providers(), 1) if p.name == "groq")
 
     with patch("obsidian_llm_wiki.openai_compat_client.OpenAICompatClient") as MockClient:
         instance = MagicMock()
@@ -482,11 +487,7 @@ def test_setup_wizard_azure_saves_provider_name(tmp_path, cfg_dir):
 
     runner = CliRunner()
     # Find Azure's menu number
-    azure_number = next(
-        str(i)
-        for i, p in enumerate(list_all_providers(), 1)
-        if p.name == "azure"
-    )
+    azure_number = next(str(i) for i, p in enumerate(list_all_providers(), 1) if p.name == "azure")
 
     with patch("obsidian_llm_wiki.openai_compat_client.OpenAICompatClient") as MockClient:
         instance = MagicMock()
