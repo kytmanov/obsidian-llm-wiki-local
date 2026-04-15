@@ -22,25 +22,52 @@ def default_wiki_toml(
     fast_model: str = "gemma4:e4b",
     heavy_model: str = "qwen2.5:14b",
     ollama_url: str = "http://localhost:11434",
+    provider_name: str = "ollama",
+    provider_url: str | None = None,
+    provider_timeout: float = 600.0,
+    azure_api_version: str | None = None,
 ) -> str:
-    """Generate wiki.toml content, optionally pre-filled from global config."""
+    """Generate wiki.toml content, optionally pre-filled from global config.
+
+    When provider_name is "ollama" (default), emits the legacy [ollama] section
+    so existing vaults keep working unchanged. Non-Ollama providers emit [provider].
+    """
+    if provider_name == "ollama":
+        url = provider_url or ollama_url
+        provider_section = (
+            f"[ollama]\n"
+            f"url = {_toml_quote(url)}\n"
+            f"timeout = 600\n"
+            f"fast_ctx = 16384                  # context window for fast model (tokens)\n"
+            f"heavy_ctx = 32768                 # context window for heavy model (tokens)\n"
+        )
+    else:
+        url = provider_url or ""
+        timeout_int = int(provider_timeout)
+        provider_section = (
+            f"[provider]\n"
+            f'name = "{provider_name}"\n'
+            f"url = {_toml_quote(url)}\n"
+            f"timeout = {timeout_int}\n"
+            f"fast_ctx = 8192                   # context window hint (tokens)\n"
+            f"heavy_ctx = 32768                 # context window hint (tokens)\n"
+        )
+        if provider_name == "azure":
+            api_ver = azure_api_version or "2024-02-15-preview"
+            provider_section += f'azure_api_version = "{api_ver}"\n'
     return (
         f"[models]\n"
         f"fast = {_toml_quote(fast_model)}\n"
         f"heavy = {_toml_quote(heavy_model)}\n"
         f"# Optional: set heavy = fast to use a single model for everything\n\n"
-        f"[ollama]\n"
-        f"url = {_toml_quote(ollama_url)}\n"
-        f"timeout = 600\n"
-        f"fast_ctx = 16384                  # context window for fast model (tokens)\n"
-        f"heavy_ctx = 32768                 # context window for heavy model (tokens)\n\n"
+        f"{provider_section}\n"
         f"[pipeline]\n"
         f"auto_approve = false\n"
         f"auto_commit = true\n"
         f"auto_maintain = false\n"
         f"watch_debounce = 3.0\n"
         f"max_concepts_per_source = 8\n"
-        f"ingest_parallel = false   # true = parallel chunks (needs OLLAMA_NUM_PARALLEL>=4)\n"
+        f"ingest_parallel = false   # true = parallel chunks\n"
     )
 
 
@@ -55,6 +82,17 @@ class OllamaConfig(BaseModel):
     timeout: float = 600.0  # seconds; 14B models over network need >5min
     fast_ctx: int = 16384
     heavy_ctx: int = 32768
+
+
+class ProviderConfig(BaseModel):
+    """New per-vault provider config. Supersedes [ollama] when present."""
+
+    name: str = "ollama"
+    url: str = "http://localhost:11434"
+    timeout: float = 600.0
+    fast_ctx: int = 16384
+    heavy_ctx: int = 32768
+    azure_api_version: str = "2024-02-15-preview"
 
 
 class PipelineConfig(BaseModel):
@@ -76,6 +114,7 @@ class Config(BaseModel):
     vault: Path
     models: ModelsConfig = ModelsConfig()
     ollama: OllamaConfig = OllamaConfig()
+    provider: ProviderConfig | None = None  # supersedes [ollama] when present
     pipeline: PipelineConfig = PipelineConfig()
     rag: RagConfig = RagConfig()
 
@@ -83,6 +122,19 @@ class Config(BaseModel):
     @classmethod
     def resolve_vault(cls, v: str | Path) -> Path:
         return Path(v).expanduser().resolve()
+
+    @property
+    def effective_provider(self) -> ProviderConfig:
+        """Return provider config, silently migrating [ollama] section if needed."""
+        if self.provider is not None:
+            return self.provider
+        return ProviderConfig(
+            name="ollama",
+            url=self.ollama.url,
+            timeout=self.ollama.timeout,
+            fast_ctx=self.ollama.fast_ctx,
+            heavy_ctx=self.ollama.heavy_ctx,
+        )
 
     @property
     def raw_dir(self) -> Path:

@@ -20,9 +20,14 @@ class GlobalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     vault: str | None = None
-    ollama_url: str | None = None
+    ollama_url: str | None = None  # legacy — kept for backward compat
     fast_model: str | None = None
     heavy_model: str | None = None
+    # Provider fields (new in v0.3)
+    provider_name: str | None = None
+    provider_url: str | None = None
+    api_key: str | None = None  # never stored in wiki.toml; this file is user-private
+    azure_api_version: str | None = None  # Azure OpenAI API version (e.g. "2024-02-15-preview")
 
 
 def _global_config_path() -> Path:
@@ -59,6 +64,14 @@ def save_global_config(cfg: GlobalConfig) -> None:
         lines.append(f"fast_model = {_toml_str(cfg.fast_model)}")
     if cfg.heavy_model is not None:
         lines.append(f"heavy_model = {_toml_str(cfg.heavy_model)}")
+    if cfg.provider_name is not None:
+        lines.append(f"provider_name = {_toml_str(cfg.provider_name)}")
+    if cfg.provider_url is not None:
+        lines.append(f"provider_url = {_toml_str(cfg.provider_url)}")
+    if cfg.api_key is not None:
+        lines.append(f"api_key = {_toml_str(cfg.api_key)}")
+    if cfg.azure_api_version is not None:
+        lines.append(f"azure_api_version = {_toml_str(cfg.azure_api_version)}")
     path.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
 
 

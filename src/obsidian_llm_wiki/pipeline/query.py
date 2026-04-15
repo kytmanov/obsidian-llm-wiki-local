@@ -17,7 +17,7 @@ from pathlib import Path
 from ..config import Config
 from ..indexer import append_log, generate_index
 from ..models import PageSelection, QueryAnswer
-from ..ollama_client import OllamaClient
+from ..protocols import LLMClientProtocol
 from ..state import StateDB
 from ..structured_output import request_structured
 from ..vault import parse_note, sanitize_filename, write_note
@@ -80,7 +80,7 @@ def _load_pages(config: Config, page_titles: list[str]) -> str:
 
 def run_query(
     config: Config,
-    client: OllamaClient,
+    client: LLMClientProtocol,
     db: StateDB,
     question: str,
     save: bool = False,
@@ -109,7 +109,7 @@ def run_query(
         prompt=selection_prompt,
         model_class=PageSelection,
         model=config.models.fast,
-        num_ctx=config.ollama.fast_ctx,
+        num_ctx=config.effective_provider.fast_ctx,
         max_retries=2,
     )
 
@@ -131,7 +131,7 @@ def run_query(
         prompt=answer_prompt,
         model_class=QueryAnswer,
         model=config.models.heavy,
-        num_ctx=config.ollama.heavy_ctx,
+        num_ctx=config.effective_provider.heavy_ctx,
         max_retries=2,
     )
 

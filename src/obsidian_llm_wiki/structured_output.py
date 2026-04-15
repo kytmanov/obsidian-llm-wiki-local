@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, TypeVar
 from pydantic import BaseModel, ValidationError
 
 if TYPE_CHECKING:
-    from .ollama_client import OllamaClient
+    from .protocols import LLMClientProtocol
 
 T = TypeVar("T", bound=BaseModel)
 log = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ def _try_parse(raw: str, model_class: type[T]) -> tuple[T | None, str]:
 
 
 def request_structured(
-    client: OllamaClient,
+    client: LLMClientProtocol,
     prompt: str,
     model_class: type[T],
     model: str,
@@ -163,10 +163,10 @@ def request_structured(
     max_retries: int = 2,
 ) -> T:
     """
-    Request structured output from Ollama, parse into Pydantic model.
+    Request structured output from an LLM client, parse into Pydantic model.
 
     Args:
-        client:      OllamaClient instance
+        client:      LLM client (OllamaClient or OpenAICompatClient)
         prompt:      User-facing prompt
         model_class: Pydantic model to parse response into
         model:       Ollama model name

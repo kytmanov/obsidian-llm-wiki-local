@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ..config import Config
 from ..models import AnalysisResult, RawNoteRecord
-from ..ollama_client import OllamaClient
+from ..protocols import LLMClientProtocol
 from ..state import StateDB
 from ..structured_output import request_structured
 from ..vault import (
@@ -94,11 +94,11 @@ def _analyze_body(
     body: str,
     existing_concepts: list[str],
     path_name: str,
-    client: OllamaClient,
+    client: LLMClientProtocol,
     config: Config,
 ) -> AnalysisResult:
     """Analyze note body, splitting into chunks if body exceeds fast_ctx // 2 chars."""
-    chunk_size = config.ollama.fast_ctx // 2
+    chunk_size = config.effective_provider.fast_ctx // 2
 
     if len(body) <= chunk_size:
         prompt = _build_analysis_prompt(body, existing_concepts, path_name)
@@ -108,7 +108,7 @@ def _analyze_body(
             model_class=AnalysisResult,
             model=config.models.fast,
             system=_SYSTEM,
-            num_ctx=config.ollama.fast_ctx,
+            num_ctx=config.effective_provider.fast_ctx,
         )
 
     # Split into chunks — no overlap needed for concept extraction
@@ -134,7 +134,7 @@ def _analyze_body(
             model_class=AnalysisResult,
             model=config.models.fast,
             system=_SYSTEM,
-            num_ctx=config.ollama.fast_ctx,
+            num_ctx=config.effective_provider.fast_ctx,
         )
         log.info("Analyzed %s %s (%.1fs)", path_name or "note", label, time.monotonic() - t0)
         return result
@@ -287,7 +287,7 @@ def _create_source_summary_page(
 def ingest_note(
     path: Path,
     config: Config,
-    client: OllamaClient,
+    client: LLMClientProtocol,
     db: StateDB,
     rag=None,  # Optional RAGStore, injected in Phase 2
     existing_topics: list[str] | None = None,  # existing concept names for prompt
@@ -392,7 +392,7 @@ def ingest_note(
 
 def ingest_all(
     config: Config,
-    client: OllamaClient,
+    client: LLMClientProtocol,
     db: StateDB,
     rag=None,
     force: bool = False,

@@ -18,7 +18,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from ..config import Config
-from ..ollama_client import OllamaClient
+from ..protocols import LLMClientProtocol
 from ..state import StateDB
 
 log = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ class PipelineOrchestrator:
     pipeline lock before calling run() — this class does NOT lock internally.
     """
 
-    def __init__(self, config: Config, client: OllamaClient, db: StateDB) -> None:
+    def __init__(self, config: Config, client: LLMClientProtocol, db: StateDB) -> None:
         self.config = config
         self.client = client
         self.db = db
@@ -206,13 +206,13 @@ class PipelineOrchestrator:
 
 def _run_compile(
     config: Config,
-    client: OllamaClient,
+    client: LLMClientProtocol,
     db: StateDB,
     concepts: list[str] | None,
     dry_run: bool,
 ) -> tuple[list[Path], list[FailureRecord], dict[str, float]]:
     """Run compile_concepts and classify failures by reason."""
-    from ..ollama_client import OllamaError
+    from ..openai_compat_client import LLMError
     from ..pipeline.compile import compile_concepts
 
     try:
@@ -223,9 +223,9 @@ def _run_compile(
             dry_run=dry_run,
             concepts=concepts,
         )
-    except OllamaError as e:
+    except LLMError as e:
         # Connection-level failure — all concepts are transient
-        log.error("Ollama connection error during compile: %s", e)
+        log.error("LLM connection error during compile: %s", e)
         all_concepts = concepts or db.concepts_needing_compile()
         return (
             [],
@@ -239,7 +239,7 @@ def _run_compile(
     # Classify individual concept failures
     # compile_concepts returns bare names — we can't know the exact reason
     # per-concept without changing its return type. Use UNKNOWN for now;
-    # transient failures (timeouts) will bubble up as OllamaError above.
+    # transient failures (timeouts) will bubble up as LLMError above.
     failure_records = [
         FailureRecord(concept=name, reason=FailureReason.UNKNOWN) for name in failed_names
     ]

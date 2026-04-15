@@ -26,7 +26,7 @@ import frontmatter as fm_lib
 
 from ..config import Config
 from ..models import ArticlePlan, CompilePlan, SingleArticle, WikiArticleRecord
-from ..ollama_client import OllamaClient
+from ..protocols import LLMClientProtocol
 from ..sanitize import sanitize_tags
 from ..state import StateDB
 from ..structured_output import StructuredOutputError, request_structured
@@ -301,7 +301,7 @@ def _write_concept_prompt(
 
 def compile_concepts(
     config: Config,
-    client: OllamaClient,
+    client: LLMClientProtocol,
     db: StateDB,
     force: bool = False,
     dry_run: bool = False,
@@ -392,8 +392,8 @@ def compile_concepts(
                     model_class=SingleArticle,
                     model=config.models.fast,
                     system=_STUB_WRITE_SYSTEM,
-                    num_ctx=config.ollama.fast_ctx,
-                    num_predict=config.ollama.fast_ctx // 2,
+                    num_ctx=config.effective_provider.fast_ctx,
+                    num_predict=config.effective_provider.fast_ctx // 2,
                 )
             except StructuredOutputError as e:
                 log.error("Failed to write stub '%s': %s", name, e)
@@ -417,7 +417,7 @@ def compile_concepts(
 
         # Gather source material within context budget
         sources_text, resolved_paths = _gather_sources(
-            source_paths, config.vault, max_chars=config.ollama.heavy_ctx // 2
+            source_paths, config.vault, max_chars=config.effective_provider.heavy_ctx // 2
         )
         if not resolved_paths:
             log.warning("No readable sources for concept '%s', skipping", name)
@@ -452,8 +452,8 @@ def compile_concepts(
                 model_class=SingleArticle,
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
-                num_ctx=config.ollama.heavy_ctx,
-                num_predict=config.ollama.heavy_ctx // 2,
+                num_ctx=config.effective_provider.heavy_ctx,
+                num_predict=config.effective_provider.heavy_ctx // 2,
             )
         except StructuredOutputError as e:
             log.error("Failed to write '%s': %s", name, e)
@@ -514,7 +514,7 @@ def _write_prompt_legacy(article: ArticlePlan, sources: str, existing_titles: li
 
 def compile_notes(
     config: Config,
-    client: OllamaClient,
+    client: LLMClientProtocol,
     db: StateDB,
     rag=None,
     source_paths: list[str] | None = None,
@@ -559,7 +559,7 @@ def compile_notes(
             model_class=CompilePlan,
             model=config.models.fast,
             system=_PLAN_SYSTEM,
-            num_ctx=config.ollama.fast_ctx,
+            num_ctx=config.effective_provider.fast_ctx,
         )
     except StructuredOutputError as e:
         log.error("Planning failed: %s", e)
@@ -593,7 +593,7 @@ def compile_notes(
         sources_text, resolved_paths = _gather_sources(
             relevant,
             config.vault,
-            max_chars=config.ollama.heavy_ctx // 2,
+            max_chars=config.effective_provider.heavy_ctx // 2,
         )
 
         write_prompt = _write_prompt_legacy(article, sources_text, existing_titles)
@@ -605,8 +605,8 @@ def compile_notes(
                 model_class=SingleArticle,
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
-                num_ctx=config.ollama.heavy_ctx,
-                num_predict=config.ollama.heavy_ctx // 2,
+                num_ctx=config.effective_provider.heavy_ctx,
+                num_predict=config.effective_provider.heavy_ctx // 2,
             )
         except StructuredOutputError as e:
             log.error("Failed to write '%s': %s", article.title, e)

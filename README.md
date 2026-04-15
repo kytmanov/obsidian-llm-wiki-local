@@ -4,7 +4,7 @@
 
 Drop a markdown file into a folder. The pipeline reads it, extracts concepts, and creates or updates wiki articles with the new knowledge. Reject a draft and explain why — the next compile addresses your feedback. Over time your wiki compounds: every note you add (and every draft you review) makes the whole smarter.
 
-**100% local. No cloud, no API keys, no telemetry.** Just [Ollama](https://ollama.com) running on your machine.
+**Local-first, provider-flexible.** Runs 100% locally with [Ollama](https://ollama.com) by default. Also works with any OpenAI-compatible endpoint — Groq, Together AI, LM Studio, vLLM, Azure OpenAI, and [more](#providers).
 
 ---
 
@@ -44,7 +44,8 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
-- **Offline test suite** — all 322 tests run without Ollama
+- **Multi-provider** — swap Ollama for Groq, Together AI, LM Studio, vLLM, Azure OpenAI, or any OpenAI-compatible endpoint via `olw setup`
+- **Offline test suite** — all 373 tests run without Ollama or any provider
 
 ---
 
@@ -90,17 +91,32 @@ ollama pull qwen2.5:14b     # heavy model — article writing (optional, 7B+ rec
 olw setup
 ```
 
-An interactive wizard configures your Ollama URL, fast and heavy models, and an optional default vault path. Takes ~30 seconds.
+An interactive wizard selects a provider, configures the URL and optional API key, picks fast and heavy models, and sets an optional default vault. Takes ~30 seconds.
 
 ```
 ╭──────────────────────────────────────────────────╮
-│      obsidian-llm-wiki  ·  first run setup       │
+│      obsidian-llm-wiki  ·  setup                 │
 ╰──────────────────────────────────────────────────╯
 
-  Step 1/4  Ollama connection
-    Trying http://localhost:11434 …  ✓ connected
+  Step 1  Provider
 
-  Step 2/4  Fast model (analysis · 3–8B recommended)
+    Local (no API key needed):
+       1. Ollama          http://localhost:11434  [default]
+       2. LM Studio       http://localhost:1234/v1
+       3. vLLM            http://localhost:8000/v1
+       ...
+    Cloud (API key required):
+      10. Groq            https://api.groq.com/openai/v1
+      11. Together AI     https://api.together.xyz/v1
+      ...
+
+    Select provider (number or name) [1]: _
+
+  Step 2  URL
+    Base URL [http://localhost:11434]: _
+    ✓ connected
+
+  Step 3  Fast model  (analysis & routing · 3–8B recommended)
     #  Model           Size
     1  gemma4:e4b      9.6 GB
     2  phi4-mini       2.5 GB
@@ -108,7 +124,7 @@ An interactive wizard configures your Ollama URL, fast and heavy models, and an 
   ...
 ```
 
-Settings are saved to `~/.config/olw/config.toml` (Mac/Linux) or `%APPDATA%\olw\config.toml` (Windows).
+Settings are saved to `~/.config/olw/config.toml` (Mac/Linux) or `%APPDATA%\olw\config.toml` (Windows). API keys are stored only in this user-private file, never in `wiki.toml`.
 
 ### 4. Set up your vault
 
@@ -266,11 +282,21 @@ fast = "gemma4:e4b"        # extraction, analysis, query routing
 heavy = "qwen2.5:14b"     # article generation, Q&A answers
 # Single-model: set heavy = fast
 
+# ── Local Ollama (default) ────────────────────────────────────────────────────
 [ollama]
 url = "http://localhost:11434"   # supports LAN: http://192.168.1.x:11434
 timeout = 600
 fast_ctx = 16384                 # context window for fast model (tokens)
 heavy_ctx = 32768                # context window for heavy model (tokens)
+
+# ── Any other provider (replaces [ollama] when present) ──────────────────────
+# [provider]
+# name = "groq"                              # or lm_studio, vllm, together, azure, custom …
+# url  = "https://api.groq.com/openai/v1"
+# timeout = 120
+# fast_ctx = 8192
+# heavy_ctx = 32768
+# azure_api_version = "2024-02-15-preview"  # Azure only
 
 [pipeline]
 auto_approve = false             # true = skip draft review
@@ -280,6 +306,8 @@ max_concepts_per_source = 8      # limit concepts extracted per note
 watch_debounce = 3.0             # seconds after last file event before processing
 ingest_parallel = false          # true = parallel chunk analysis (needs OLLAMA_NUM_PARALLEL>=4)
 ```
+
+> **API keys** are never stored in `wiki.toml`. They are read at runtime from the provider-specific env var (e.g. `GROQ_API_KEY`), the generic `OLW_API_KEY` env var, or the `api_key` field in `~/.config/olw/config.toml` (written by `olw setup`).
 
 ### Tuning context windows
 
@@ -324,7 +352,7 @@ After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to 
 
 | Command | Description |
 |---------|-------------|
-| `olw setup` | Interactive setup wizard (first run) |
+| `olw setup` | Interactive setup wizard: pick provider, models, vault |
 | `olw init PATH` | Create vault structure and git repo |
 | `olw init PATH --existing` | Adopt an existing Obsidian vault |
 | `olw doctor` | Check Ollama, models, vault structure |
@@ -359,15 +387,47 @@ All commands accept `--vault PATH` or the env var `OLW_VAULT`.
 
 ---
 
+## Providers
+
+Run `olw setup` to pick a provider interactively. All providers are also configurable directly in `wiki.toml`.
+
+| Provider | Type | Embeddings | Notes |
+|----------|------|-----------|-------|
+| **Ollama** | local | ✓ | default; full offline |
+| LM Studio | local | ✓ | |
+| vLLM | local | ✓ | |
+| llama.cpp | local | — | |
+| LocalAI | local | ✓ | |
+| TGI | local | — | |
+| SGLang | local | ✓ | |
+| Llamafile | local | — | |
+| Lemonade | local | — | |
+| **Groq** | cloud | — | fast inference, free tier |
+| Together AI | cloud | ✓ | |
+| Fireworks AI | cloud | ✓ | |
+| DeepInfra | cloud | ✓ | |
+| OpenRouter | cloud | — | routes to many models |
+| Mistral AI | cloud | ✓ | |
+| DeepSeek | cloud | — | |
+| SiliconFlow | cloud | ✓ | |
+| Perplexity | cloud | — | |
+| xAI (Grok) | cloud | — | |
+| Azure OpenAI | cloud | ✓ | see `azure_api_version` |
+| Custom | any | — | enter URL manually |
+
+RAG (embeddings) requires a provider that supports `/v1/embeddings`. The default index-based query works with all providers.
+
+---
+
 ## Model recommendations
 
-| Role | Recommended | Minimum |
-|------|-------------|---------|
-| Fast (analysis + routing) | `gemma4:e4b`, `llama3.2:3b` | any 3B with JSON format |
-| Heavy (article writing) | `qwen2.5:14b`, `llama3.1:8b` | any 7B |
-| Single model (everything) | `llama3.1:8b`, `mistral:7b` | any 7B |
+| Role | Ollama | Cloud |
+|------|--------|-------|
+| Fast (analysis + routing) | `gemma4:e4b`, `llama3.2:3b` | `llama-3.1-8b-instant` (Groq), `mistral-7b` |
+| Heavy (article writing) | `qwen2.5:14b`, `llama3.1:8b` | `llama-3.3-70b` (Groq), `mistral-large` |
+| Single model (everything) | `llama3.1:8b`, `mistral:7b` | any 7B+ |
 
-Any [Ollama model](https://ollama.com/library) with JSON format support works. The tool degrades gracefully with smaller models — they produce shorter, simpler articles but the pipeline still functions.
+Any model with JSON format / `response_format: json_object` support works. The tool degrades gracefully with smaller models.
 
 ---
 
@@ -468,6 +528,31 @@ Or manually block it:
 # Mark as blocked so compile skips it
 olw status   # shows blocked concepts
 ```
+
+---
+
+**Q: Can I use a cloud provider like Groq or Together AI instead of Ollama?**
+
+Yes. Run `olw setup` and select the provider from the numbered list. Enter your API key when prompted — it is stored only in `~/.config/olw/config.toml`. Alternatively set the provider-specific env var before each command:
+
+```bash
+export GROQ_API_KEY=gsk_...
+olw run
+```
+
+The pipeline, vault structure, and all `olw` commands work identically regardless of provider.
+
+---
+
+**Q: I changed providers in `olw setup` but `wiki.toml` still shows `[ollama]`.**
+
+Re-run `olw init` on your vault to sync the global config into `wiki.toml`:
+
+```bash
+olw init ~/my-wiki
+```
+
+For existing vaults with a `[ollama]` section you can also add a `[provider]` block manually — it takes precedence over `[ollama]` when present.
 
 ---
 

@@ -9,6 +9,8 @@ import logging
 
 import httpx
 
+from .openai_compat_client import LLMError
+
 log = logging.getLogger(__name__)
 
 _STARTUP_HINT = (
@@ -21,7 +23,7 @@ _STARTUP_HINT = (
 )
 
 
-class OllamaError(Exception):
+class OllamaError(LLMError):
     pass
 
 

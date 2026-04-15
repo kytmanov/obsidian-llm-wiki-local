@@ -221,7 +221,7 @@ def test_setup_reset_clears_config(runner: CliRunner, cfg_dir: Path):
     result = runner.invoke(
         cli,
         ["setup", "--reset"],
-        input="\n\n\n\n",
+        input="\n\n\n\n\n",
         catch_exceptions=False,
     )
     assert result.exit_code == 0
@@ -245,7 +245,7 @@ def test_setup_wizard_saves_config(runner: CliRunner, cfg_dir: Path):
         result = runner.invoke(
             cli,
             ["setup"],
-            input="\ngemma4:e4b\nqwen2.5:14b\n\n",  # URL default, fast, heavy, no vault
+            input="\n\ngemma4:e4b\nqwen2.5:14b\n\n",  # provider default, URL default, fast, heavy, no vault
             catch_exceptions=False,
         )
 
@@ -270,7 +270,7 @@ def test_setup_wizard_model_number_selection(runner: CliRunner, cfg_dir: Path):
         result = runner.invoke(
             cli,
             ["setup"],
-            input="\n1\n2\n\n",  # URL default, pick #1 fast, pick #2 heavy, no vault
+            input="\n\n1\n2\n\n",  # provider default, URL default, pick #1 fast, pick #2 heavy, no vault
             catch_exceptions=False,
         )
 
@@ -293,7 +293,7 @@ def test_setup_wizard_whitespace_input_uses_default(runner: CliRunner, cfg_dir: 
         result = runner.invoke(
             cli,
             ["setup"],
-            input="\n   \n   \n\n",  # URL default, spaces for fast, spaces for heavy, no vault
+            input="\n\n   \n   \n\n",  # provider default, URL default, spaces for fast, spaces for heavy, no vault
             catch_exceptions=False,
         )
 
@@ -318,7 +318,7 @@ def test_setup_wizard_with_vault(runner: CliRunner, cfg_dir: Path, tmp_path: Pat
         result = runner.invoke(
             cli,
             ["setup"],
-            input=f"\ngemma4:e4b\nqwen2.5:14b\n{vault}\n",
+            input=f"\n\ngemma4:e4b\nqwen2.5:14b\n{vault}\n",
             catch_exceptions=False,
         )
 
