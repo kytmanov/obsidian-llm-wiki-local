@@ -118,9 +118,12 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
     from .global_config import load_global_config
 
     gcfg = load_global_config()
-    fast = gcfg.fast_model if gcfg and gcfg.fast_model else "gemma4:e4b"
-    heavy = gcfg.heavy_model if gcfg and gcfg.heavy_model else "qwen2.5:14b"
     provider_name = gcfg.provider_name if gcfg and gcfg.provider_name else "ollama"
+    # Only fall back to Ollama-specific model names when using Ollama; cloud providers
+    # must have been configured explicitly via `olw setup`.
+    _ollama = provider_name == "ollama"
+    fast = gcfg.fast_model if gcfg and gcfg.fast_model else ("gemma4:e4b" if _ollama else "")
+    heavy = gcfg.heavy_model if gcfg and gcfg.heavy_model else ("qwen2.5:14b" if _ollama else "")
     provider_url = gcfg.provider_url if gcfg and gcfg.provider_url else None
     ollama_url = gcfg.ollama_url if gcfg and gcfg.ollama_url else "http://localhost:11434"
     effective_url = provider_url or ollama_url
@@ -211,7 +214,14 @@ def _sync_wiki_toml_models(
     for section in ("ollama", "provider"):
         text = _replace_in_section(text, section, "url", ollama_url)
     if provider_name is not None:
-        text = _replace_in_section(text, "provider", "name", provider_name)
+        if "[provider]" not in text:
+            console.print(
+                f"  [yellow]Warning:[/yellow] wiki.toml has no [provider] section — "
+                f"provider '{provider_name}' not applied. "
+                f"Delete wiki.toml and re-run [bold]olw init[/bold] to regenerate it."
+            )
+        else:
+            text = _replace_in_section(text, "provider", "name", provider_name)
 
     if text != original:
         toml_path.write_text(text, encoding="utf-8")
@@ -499,8 +509,15 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             )
 
         # ── Default model names per provider ──────────────────────────────────
+        # For non-Ollama providers, leave defaults empty — model names are
+        # provider-specific and must be entered by the user.
         default_fast = "gemma4:e4b" if chosen_name == "ollama" else ""
         default_heavy = "qwen2.5:14b" if chosen_name == "ollama" else ""
+        if chosen_name != "ollama" and not connected:
+            console.print(
+                "    [dim]Tip: enter the model name exactly as the provider lists it "
+                "(e.g. llama-3.1-70b-versatile for Groq).[/dim]"
+            )
 
         step_offset = 1 if needs_key_prompt else 0
 
@@ -538,6 +555,17 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             vault_path = str(Path(vault_input).expanduser().resolve())
 
         # ── Save ──────────────────────────────────────────────────────────────
+        # Preserve existing azure_api_version so re-running setup doesn't reset it.
+        existing_cfg = load_global_config()
+        if chosen_name == "azure":
+            azure_api_ver = (
+                existing_cfg.azure_api_version
+                if existing_cfg and existing_cfg.azure_api_version
+                else "2024-02-15-preview"
+            )
+        else:
+            azure_api_ver = None
+
         # Keep ollama_url for backward compat when Ollama is selected
         cfg = GlobalConfig(
             vault=vault_path,
@@ -547,7 +575,7 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             provider_name=chosen_name,
             provider_url=provider_url,
             api_key=api_key,
-            azure_api_version="2024-02-15-preview" if chosen_name == "azure" else None,
+            azure_api_version=azure_api_ver,
         )
         save_global_config(cfg)
 

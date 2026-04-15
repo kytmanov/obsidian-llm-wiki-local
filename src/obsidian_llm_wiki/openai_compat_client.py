@@ -82,6 +82,19 @@ class OpenAICompatClient:
     def _chat_url(self) -> str:
         return self._api_url("chat/completions")
 
+    def _models_url(self) -> str:
+        """Return the correct models/health endpoint URL.
+
+        Azure base_url ends at the deployment level, so /models appended there
+        gives an invalid path. Derive the resource-level URL by stripping
+        everything from /openai/ onwards, then append /openai/models.
+        """
+        if self._azure:
+            idx = self.base_url.find("/openai/")
+            resource = self.base_url[:idx] if idx >= 0 else self.base_url
+            return f"{resource}/openai/models?api-version={self._azure_api_version}"
+        return self._api_url("models")
+
     def _wrap_error(self, exc: Exception, context: str = "") -> LLMError:
         prefix = f"{self.provider_name}: " if self.provider_name else ""
         if isinstance(exc, httpx.ConnectError):
@@ -110,7 +123,7 @@ class OpenAICompatClient:
 
     def healthcheck(self) -> bool:
         try:
-            resp = self._client.get(self._api_url("models"), timeout=5)
+            resp = self._client.get(self._models_url(), timeout=5)
             # 200 = healthy + auth ok; 401 = service running but wrong key
             return resp.status_code in (200, 401)
         except (httpx.ConnectError, httpx.TimeoutException):
@@ -132,7 +145,7 @@ class OpenAICompatClient:
 
     def list_models(self) -> list[str]:
         try:
-            resp = self._client.get(self._api_url("models"))
+            resp = self._client.get(self._models_url())
             resp.raise_for_status()
             return [m["id"] for m in resp.json().get("data", [])]
         except (httpx.HTTPError, KeyError, ValueError):
@@ -188,9 +201,9 @@ class OpenAICompatClient:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             raise self._wrap_error(e) from e
-        except httpx.ConnectError as e:
-            raise self._wrap_error(e) from e
         except httpx.TimeoutException as e:
+            raise self._wrap_error(e) from e
+        except httpx.RequestError as e:
             raise self._wrap_error(e) from e
 
         try:
@@ -219,9 +232,9 @@ class OpenAICompatClient:
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
             raise self._wrap_error(e) from e
-        except httpx.ConnectError as e:
-            raise self._wrap_error(e) from e
         except httpx.TimeoutException as e:
+            raise self._wrap_error(e) from e
+        except httpx.RequestError as e:
             raise self._wrap_error(e) from e
 
         # OpenAI API may return embeddings out of order — sort by index

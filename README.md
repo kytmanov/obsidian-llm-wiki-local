@@ -355,7 +355,7 @@ After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to 
 | `olw setup` | Interactive setup wizard: pick provider, models, vault |
 | `olw init PATH` | Create vault structure and git repo |
 | `olw init PATH --existing` | Adopt an existing Obsidian vault |
-| `olw doctor` | Check Ollama, models, vault structure |
+| `olw doctor` | Check provider connectivity, models, vault structure |
 | `olw run` | Full pipeline: ingest → compile → lint → [approve] |
 | `olw run --auto-approve` | Full pipeline, publish without review |
 | `olw run --dry-run` | Report what would happen, make no changes |
