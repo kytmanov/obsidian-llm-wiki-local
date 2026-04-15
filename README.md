@@ -5,6 +5,9 @@
 Drop a markdown file into a folder. The pipeline reads it, extracts concepts, and creates or updates wiki articles with the new knowledge. Reject a draft and explain why — the next compile addresses your feedback. Over time your wiki compounds: every note you add (and every draft you review) makes the whole smarter.
 
 **Local-first, provider-flexible.** Runs 100% locally with [Ollama](https://ollama.com) by default. Also works with any OpenAI-compatible endpoint — Groq, Together AI, LM Studio, vLLM, Azure OpenAI, and [more](#providers).
+<p align="center">
+<img width="400" height="390" alt="image" src="https://github.com/user-attachments/assets/0b3998bd-af4d-4f3f-a2da-8334a0e81711"/>
+</p>
 
 ---
 
