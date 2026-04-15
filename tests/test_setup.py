@@ -245,7 +245,8 @@ def test_setup_wizard_saves_config(runner: CliRunner, cfg_dir: Path):
         result = runner.invoke(
             cli,
             ["setup"],
-            input="\n\ngemma4:e4b\nqwen2.5:14b\n\n",  # provider default, URL default, fast, heavy, no vault
+            # provider default, URL default, fast, heavy, no vault
+            input="\n\ngemma4:e4b\nqwen2.5:14b\n\n",
             catch_exceptions=False,
         )
 
@@ -270,7 +271,8 @@ def test_setup_wizard_model_number_selection(runner: CliRunner, cfg_dir: Path):
         result = runner.invoke(
             cli,
             ["setup"],
-            input="\n\n1\n2\n\n",  # provider default, URL default, pick #1 fast, pick #2 heavy, no vault
+            # provider default, URL default, pick #1 fast, pick #2 heavy, no vault
+            input="\n\n1\n2\n\n",
             catch_exceptions=False,
         )
 
@@ -293,7 +295,8 @@ def test_setup_wizard_whitespace_input_uses_default(runner: CliRunner, cfg_dir: 
         result = runner.invoke(
             cli,
             ["setup"],
-            input="\n\n   \n   \n\n",  # provider default, URL default, spaces for fast, spaces for heavy, no vault
+            # provider default, URL default, spaces for fast, spaces for heavy, no vault
+            input="\n\n   \n   \n\n",
             catch_exceptions=False,
         )
 

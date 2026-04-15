@@ -169,7 +169,7 @@ def request_structured(
         client:      LLM client (OllamaClient or OpenAICompatClient)
         prompt:      User-facing prompt
         model_class: Pydantic model to parse response into
-        model:       Ollama model name
+        model:       Model name (passed to the LLM client)
         system:      Optional domain context (prepended before schema instruction)
         num_ctx:     Context window size
         max_retries: How many retry attempts after initial failure

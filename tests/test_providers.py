@@ -13,7 +13,6 @@ import pytest
 
 from obsidian_llm_wiki.openai_compat_client import LLMError, OpenAICompatClient
 from obsidian_llm_wiki.providers import (
-    PROVIDER_REGISTRY,
     get_provider,
     list_all_providers,
     list_cloud_providers,

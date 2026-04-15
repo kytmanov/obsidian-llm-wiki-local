@@ -72,11 +72,15 @@ class OpenAICompatClient:
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{path.lstrip('/')}"
 
-    def _chat_url(self) -> str:
-        url = self._url("chat/completions")
+    def _api_url(self, path: str) -> str:
+        """Like _url() but appends ?api-version= for Azure endpoints."""
+        url = self._url(path)
         if self._azure:
             url = f"{url}?api-version={self._azure_api_version}"
         return url
+
+    def _chat_url(self) -> str:
+        return self._api_url("chat/completions")
 
     def _wrap_error(self, exc: Exception, context: str = "") -> LLMError:
         prefix = f"{self.provider_name}: " if self.provider_name else ""
@@ -116,7 +120,7 @@ class OpenAICompatClient:
 
     def healthcheck(self) -> bool:
         try:
-            resp = self._client.get(self._url("models"), timeout=5)
+            resp = self._client.get(self._api_url("models"), timeout=5)
             # 200 = healthy + auth ok; 401 = service running but wrong key
             return resp.status_code in (200, 401)
         except (httpx.ConnectError, httpx.TimeoutException):
@@ -138,7 +142,7 @@ class OpenAICompatClient:
 
     def list_models(self) -> list[str]:
         try:
-            resp = self._client.get(self._url("models"))
+            resp = self._client.get(self._api_url("models"))
             resp.raise_for_status()
             return [m["id"] for m in resp.json().get("data", [])]
         except (httpx.HTTPError, KeyError, ValueError):
@@ -219,7 +223,7 @@ class OpenAICompatClient:
             )
         try:
             resp = self._client.post(
-                self._url("embeddings"),
+                self._api_url("embeddings"),
                 json={"model": model, "input": texts},
             )
             resp.raise_for_status()
@@ -231,9 +235,14 @@ class OpenAICompatClient:
             raise self._wrap_error(e) from e
 
         # OpenAI API may return embeddings out of order — sort by index
-        data = resp.json().get("data", [])
-        data.sort(key=lambda x: x.get("index", 0))
-        return [item["embedding"] for item in data]
+        try:
+            data = resp.json().get("data", [])
+            data.sort(key=lambda x: x.get("index", 0))
+            return [item["embedding"] for item in data]
+        except (ValueError, KeyError) as e:
+            raise LLMError(
+                f"{self.provider_name}: unexpected embeddings response: {resp.text[:200]}"
+            ) from e
 
     def embed(self, text: str, model: str = "nomic-embed-text") -> list[float]:
         return self.embed_batch([text], model=model)[0]

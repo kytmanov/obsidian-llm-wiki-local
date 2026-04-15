@@ -179,6 +179,9 @@ def _sync_wiki_toml_models(
 
     Preserves all other settings (pipeline, rag, etc.) so user customisations
     are not lost. Only updates fields that come from global config.
+
+    URL is only updated within the [ollama] or [provider] section, never globally,
+    so switching providers cannot overwrite unrelated url= fields.
     """
     import re
 
@@ -194,11 +197,21 @@ def _sync_wiki_toml_models(
             flags=re.MULTILINE,
         )
 
+    def _replace_in_section(t: str, section: str, key: str, value: str) -> str:
+        """Replace key=value only within the named TOML section."""
+        escaped_val = value.replace("\\", "\\\\").replace('"', '\\"')
+        # Match the section header then capture everything until the next section or EOF
+        pattern = rf'(\[{re.escape(section)}\][^\[]*?)^({re.escape(key)}\s*=\s*)".+"'
+        replacement = rf'\1\2"{escaped_val}"'
+        return re.sub(pattern, replacement, t, flags=re.MULTILINE | re.DOTALL)
+
     text = _replace_value(text, "fast", fast)
     text = _replace_value(text, "heavy", heavy)
-    text = _replace_value(text, "url", ollama_url)
+    # Update URL only in [ollama] or [provider] sections to avoid clobbering other urls
+    for section in ("ollama", "provider"):
+        text = _replace_in_section(text, section, "url", ollama_url)
     if provider_name is not None:
-        text = _replace_value(text, "name", provider_name)
+        text = _replace_in_section(text, "provider", "name", provider_name)
 
     if text != original:
         toml_path.write_text(text, encoding="utf-8")
@@ -308,7 +321,8 @@ def _pick_model(
 @cli.command()
 @click.option("--non-interactive", is_flag=True, help="Print current config and exit")
 @click.option("--reset", is_flag=True, help="Clear saved config and re-run wizard")
-@click.option("--provider", "provider_preset", default=None, help="Skip provider selection (e.g. groq, lm_studio)")
+@click.option("--provider", "provider_preset", default=None,
+              help="Skip provider selection (e.g. groq, lm_studio)")
 def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
     """Interactive wizard: configure provider, models, and default vault."""
     from .global_config import GlobalConfig, load_global_config, save_global_config
@@ -325,7 +339,8 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
         table = Table(title="Global config", show_header=False, box=None, padding=(0, 2))
         table.add_column("Key", style="bold")
         table.add_column("Value")
-        table.add_row("Provider", gcfg.provider_name or gcfg.ollama_url and "ollama" or "[dim]not set[/dim]")
+        prov_display = gcfg.provider_name or (gcfg.ollama_url and "ollama") or "[dim]not set[/dim]"
+        table.add_row("Provider", prov_display)
         table.add_row("URL", gcfg.provider_url or gcfg.ollama_url or "[dim]not set[/dim]")
         table.add_row("API key", "***" if gcfg.api_key else "[dim]not set[/dim]")
         table.add_row("Fast model", gcfg.fast_model or "[dim]not set[/dim]")
@@ -359,13 +374,14 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
         console.print()
 
         all_providers = list_all_providers()
-        total_steps = 5  # provider, url, [api key], fast model, heavy model, vault
 
         # ── Step 1 — Provider selection ───────────────────────────────────────
         if provider_preset:
             chosen_prov = get_provider(provider_preset)
             if chosen_prov is None:
-                console.print(f"    [yellow]Unknown provider '{provider_preset}', using Ollama.[/yellow]")
+                console.print(
+                    f"    [yellow]Unknown provider '{provider_preset}', using Ollama.[/yellow]"
+                )
                 chosen_prov = PROVIDER_REGISTRY["ollama"]
             chosen_name = chosen_prov.name
         else:
@@ -374,7 +390,6 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             # Build numbered list
             local_provs = [p for p in all_providers if p.is_local]
             cloud_provs = [p for p in all_providers if not p.is_local and p.name != "custom"]
-            custom_prov = PROVIDER_REGISTRY["custom"]
 
             console.print("    [bold]Local[/bold] (no API key needed):")
             idx_map: dict[int, str] = {}
@@ -398,7 +413,9 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             idx_map[counter] = "custom"
 
             console.print()
-            raw = Prompt.ask("    Select provider (number or name)", default="1", console=console).strip()
+            raw = Prompt.ask(
+                "    Select provider (number or name)", default="1", console=console
+            ).strip()
 
             if raw.isdigit():
                 num = int(raw)
@@ -429,12 +446,20 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             )
             sys.exit(1)
 
-        # ── Step 3 — API key (cloud providers only) ───────────────────────────
+        # ── Step 3 — API key (cloud + custom providers) ───────────────────────
+        import os
+
+        needs_key_prompt = chosen_prov.requires_auth or chosen_name == "custom"
         api_key: str | None = None
-        if chosen_prov.requires_auth:
+        if needs_key_prompt:
             console.print()
             console.print("  [bold]Step 3[/bold]  API key")
-            env_hint = f"  [dim](or set {chosen_prov.env_var} env var)[/dim]" if chosen_prov.env_var else ""
+            if chosen_prov.env_var:
+                env_hint = f"  [dim](or set {chosen_prov.env_var} env var)[/dim]"
+            elif chosen_name == "custom":
+                env_hint = "  [dim](optional — press Enter to skip)[/dim]"
+            else:
+                env_hint = ""
             console.print(f"    API key{env_hint}")
             raw_key = Prompt.ask("    Key", default="", password=True, console=console).strip()
             api_key = raw_key if raw_key else None
@@ -447,7 +472,6 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
         else:
             from .openai_compat_client import OpenAICompatClient
 
-            import os
             resolved_key = api_key
             if not resolved_key and chosen_prov.env_var:
                 resolved_key = os.environ.get(chosen_prov.env_var)
@@ -464,7 +488,7 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             )
         connected = temp_client.healthcheck()
         if connected:
-            console.print(f"    [green]✓ connected[/green]")
+            console.print("    [green]✓ connected[/green]")
         else:
             console.print(
                 f"    [yellow]Warning:[/yellow] Cannot reach {provider_url} — continuing anyway."
@@ -474,7 +498,7 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
         default_fast = "gemma4:e4b" if chosen_name == "ollama" else ""
         default_heavy = "qwen2.5:14b" if chosen_name == "ollama" else ""
 
-        step_offset = 1 if chosen_prov.requires_auth else 0
+        step_offset = 1 if needs_key_prompt else 0
 
         # ── Step 4 — Fast model ───────────────────────────────────────────────
         fast_model = _pick_model(
@@ -496,10 +520,13 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             connected=connected,
         )
 
+        temp_client.close()
+
         # ── Final step — Default vault ────────────────────────────────────────
         console.print()
+        step_label = f"Step {5 + step_offset}"
         console.print(
-            f"  [bold]Step {5 + step_offset}[/bold]  Default vault path  [dim](press Enter to skip)[/dim]"
+            f"  [bold]{step_label}[/bold]  Default vault path  [dim](press Enter to skip)[/dim]"
         )
         vault_input = Prompt.ask("    Vault path", default="", console=console)
         vault_path: str | None = None

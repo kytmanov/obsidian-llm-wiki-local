@@ -46,7 +46,7 @@ def default_wiki_toml(
         timeout_int = int(provider_timeout)
         provider_section = (
             f"[provider]\n"
-            f'name = "{provider_name}"\n'
+            f"name = {_toml_quote(provider_name)}\n"
             f"url = {_toml_quote(url)}\n"
             f"timeout = {timeout_int}\n"
             f"fast_ctx = 8192                   # context window hint (tokens)\n"
@@ -54,7 +54,7 @@ def default_wiki_toml(
         )
         if provider_name == "azure":
             api_ver = azure_api_version or "2024-02-15-preview"
-            provider_section += f'azure_api_version = "{api_ver}"\n'
+            provider_section += f"azure_api_version = {_toml_quote(api_ver)}\n"
     return (
         f"[models]\n"
         f"fast = {_toml_quote(fast_model)}\n"
