@@ -125,6 +125,30 @@ def test_run_compile_unknown_failure_per_concept(config, db):
     assert failures[0].concept == "Fails"
 
 
+def test_run_compile_bad_request_not_transient(config, db):
+    """LLMBadRequestError from compile_concepts → UNKNOWN, not TRANSIENT (non-retryable)."""
+    import obsidian_llm_wiki.pipeline.compile as compile_mod
+    from obsidian_llm_wiki.openai_compat_client import LLMBadRequestError
+
+    original = compile_mod.compile_concepts
+
+    def raise_bad_request(**kwargs):
+        raise LLMBadRequestError("HTTP 400: context too long")
+
+    compile_mod.compile_concepts = raise_bad_request
+    try:
+        drafts, failures, _ = _run_compile(
+            config, make_mock_client(), db, concepts=["Huge"], dry_run=False
+        )
+    finally:
+        compile_mod.compile_concepts = original
+
+    assert drafts == []
+    assert len(failures) == 1
+    assert failures[0].concept == "Huge"
+    assert failures[0].reason == FailureReason.UNKNOWN  # not TRANSIENT — do not retry
+
+
 # ── PipelineOrchestrator.run ──────────────────────────────────────────────────
 
 

@@ -381,3 +381,34 @@ def test_compile_concepts_stub_failure_adds_to_failed(config, db):
 
     drafts, failed, _ = compile_concepts(config, client, db)
     assert "Bad Stub" in failed
+
+
+def test_compile_concepts_stub_llm_bad_request_adds_to_failed(config, db):
+    """LLMBadRequestError during stub compile → concept in failed, no crash."""
+    from obsidian_llm_wiki.openai_compat_client import LLMBadRequestError
+
+    db.add_stub("Context Overflow Stub")
+    client = make_mock_client()
+    client.generate.side_effect = LLMBadRequestError("HTTP 400: context too long")
+
+    drafts, failed, _ = compile_concepts(config, client, db)
+    assert "Context Overflow Stub" in failed
+    assert drafts == []
+
+
+def test_compile_concepts_article_llm_bad_request_adds_to_failed(config, db):
+    """LLMBadRequestError during article compile → concept in failed, no crash."""
+    from obsidian_llm_wiki.openai_compat_client import LLMBadRequestError
+
+    db.upsert_raw(RawNoteRecord(path="raw/src.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/src.md", ["Heavy Concept"])
+    (config.vault / "raw" / "src.md").write_text(
+        "---\ntitle: Source\n---\nContent about Heavy Concept."
+    )
+
+    client = make_mock_client()
+    client.generate.side_effect = LLMBadRequestError("HTTP 400: n_keep > ctx")
+
+    drafts, failed, _ = compile_concepts(config, client, db)
+    assert "Heavy Concept" in failed
+    assert drafts == []

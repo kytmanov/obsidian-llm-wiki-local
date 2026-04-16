@@ -212,7 +212,7 @@ def _run_compile(
     dry_run: bool,
 ) -> tuple[list[Path], list[FailureRecord], dict[str, float]]:
     """Run compile_concepts and classify failures by reason."""
-    from ..openai_compat_client import LLMError
+    from ..openai_compat_client import LLMBadRequestError, LLMError
     from ..pipeline.compile import compile_concepts
 
     try:
@@ -222,6 +222,18 @@ def _run_compile(
             db=db,
             dry_run=dry_run,
             concepts=concepts,
+        )
+    except LLMBadRequestError as e:
+        # Bad request (HTTP 400) — non-retryable; mark all as UNKNOWN not TRANSIENT
+        log.error("LLM bad request during compile: %s", e)
+        all_concepts = concepts or db.concepts_needing_compile()
+        return (
+            [],
+            [
+                FailureRecord(concept=c, reason=FailureReason.UNKNOWN, error_msg=str(e))
+                for c in all_concepts
+            ],
+            {},
         )
     except LLMError as e:
         # Connection-level failure — all concepts are transient
