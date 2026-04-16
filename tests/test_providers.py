@@ -271,10 +271,10 @@ def test_generate_chained_response_format_then_nkeep():
     def fake_post(url, json=None, **kw):
         call_count["n"] += 1
         if call_count["n"] == 1:
-            return rf_resp    # has response_format + max_tokens → 400 rf error
+            return rf_resp  # has response_format + max_tokens → 400 rf error
         if call_count["n"] == 2:
             return nkeep_resp  # has max_tokens, no response_format → 400 nkeep
-        return good_resp       # no response_format, no max_tokens → 200
+        return good_resp  # no response_format, no max_tokens → 200
 
     payloads = []
 
