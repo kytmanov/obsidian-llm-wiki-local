@@ -26,6 +26,7 @@ import frontmatter as fm_lib
 
 from ..config import Config
 from ..models import ArticlePlan, CompilePlan, SingleArticle, WikiArticleRecord
+from ..openai_compat_client import LLMError
 from ..protocols import LLMClientProtocol
 from ..sanitize import sanitize_tags
 from ..state import StateDB
@@ -81,6 +82,14 @@ _BUDGET_OUTPUT = 1800  # room for generated content
 _BUDGET_SAFETY = 200  # buffer
 
 _QUALITY_BONUS = {"high": 0.25, "medium": 0.1, "low": 0.0}
+
+# Max tokens to request for article / stub generation.
+# Real-world articles peak at ~2000 words ≈ 3000 tokens; 4096 gives headroom.
+# Keeping these well below typical model context windows avoids LM Studio's
+# "tokens to keep from initial prompt > context length" error (triggered when
+# max_tokens >= model's loaded n_ctx).
+_MAX_ARTICLE_PREDICT = 4096  # covers ~2700 word articles
+_MAX_STUB_PREDICT = 512  # stubs capped at 150 words ≈ 200 tokens
 
 
 def _content_hash(text: str) -> str:
@@ -393,9 +402,9 @@ def compile_concepts(
                     model=config.models.fast,
                     system=_STUB_WRITE_SYSTEM,
                     num_ctx=config.effective_provider.fast_ctx,
-                    num_predict=config.effective_provider.fast_ctx // 2,
+                    num_predict=_MAX_STUB_PREDICT,
                 )
-            except StructuredOutputError as e:
+            except (StructuredOutputError, LLMError) as e:
                 log.error("Failed to write stub '%s': %s", name, e)
                 failed.append(name)
                 continue
@@ -453,9 +462,9 @@ def compile_concepts(
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
                 num_ctx=config.effective_provider.heavy_ctx,
-                num_predict=config.effective_provider.heavy_ctx // 2,
+                num_predict=_MAX_ARTICLE_PREDICT,
             )
-        except StructuredOutputError as e:
+        except (StructuredOutputError, LLMError) as e:
             log.error("Failed to write '%s': %s", name, e)
             failed.append(name)
             continue
@@ -561,7 +570,7 @@ def compile_notes(
             system=_PLAN_SYSTEM,
             num_ctx=config.effective_provider.fast_ctx,
         )
-    except StructuredOutputError as e:
+    except (StructuredOutputError, LLMError) as e:
         log.error("Planning failed: %s", e)
         return [], ["__planning_failed__"]
 
@@ -606,9 +615,9 @@ def compile_notes(
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
                 num_ctx=config.effective_provider.heavy_ctx,
-                num_predict=config.effective_provider.heavy_ctx // 2,
+                num_predict=_MAX_ARTICLE_PREDICT,
             )
-        except StructuredOutputError as e:
+        except (StructuredOutputError, LLMError) as e:
             log.error("Failed to write '%s': %s", article.title, e)
             failed.append(article.title)
             continue

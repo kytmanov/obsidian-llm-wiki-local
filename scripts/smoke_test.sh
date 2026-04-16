@@ -1,22 +1,58 @@
 #!/usr/bin/env bash
-# smoke_test.sh — end-to-end test against a real Ollama instance
+# smoke_test.sh — end-to-end test against a real LLM backend
+#
+# Supports Ollama (default) and LM Studio (PROVIDER=lm_studio).
 #
 # Usage:
-#   ./scripts/smoke_test.sh                        # use default models
-#   FAST_MODEL=llama3.2:latest ./scripts/smoke_test.sh   # override models
+#   ./scripts/smoke_test.sh                              # Ollama, default models
+#   PROVIDER=lm_studio ./scripts/smoke_test.sh           # LM Studio
+#   PROVIDER=lm_studio FAST_MODEL=google/gemma-4-e4b ./scripts/smoke_test.sh
+#   FAST_MODEL=llama3.2:latest ./scripts/smoke_test.sh   # Ollama, custom model
 #   VAULT_DIR=/tmp/my-vault ./scripts/smoke_test.sh      # keep vault after run
-#   SKIP_PULL=1 ./scripts/smoke_test.sh            # skip ollama pull
+#   SKIP_PULL=1 ./scripts/smoke_test.sh                  # skip ollama pull
 #
 # Requirements:
 #   - uv (https://docs.astral.sh/uv/)
-#   - Ollama running (ollama serve)
+#   - Ollama running (ollama serve)  — OR —  LM Studio running with a model loaded
 
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
-FAST_MODEL="${FAST_MODEL:-gemma4:e4b}"
-HEAVY_MODEL="${HEAVY_MODEL:-gemma4:e4b}"
-OLLAMA_URL="${OLLAMA_URL:-http://localhost:11434}"
+PROVIDER="${PROVIDER:-ollama}"
+
+case "$PROVIDER" in
+    ollama)
+        # OLLAMA_URL kept for backward compatibility
+        PROVIDER_URL="${PROVIDER_URL:-${OLLAMA_URL:-http://localhost:11434}}"
+        FAST_MODEL="${FAST_MODEL:-gemma4:e4b}"
+        HEAVY_MODEL="${HEAVY_MODEL:-gemma4:e4b}"
+        FAST_CTX=8192
+        HEAVY_CTX=16384
+        ;;
+    lm_studio)
+        PROVIDER_URL="${PROVIDER_URL:-http://localhost:1234/v1}"
+        FAST_MODEL="${FAST_MODEL:-google/gemma-4-e4b}"
+        HEAVY_MODEL="${HEAVY_MODEL:-google/gemma-4-e4b}"
+        FAST_CTX=8192
+        # Keep output budget + input within 8192: source uses heavy_ctx//2 tokens,
+        # output uses _MAX_ARTICLE_PREDICT=4096. Total = 4096+4096+~800 overhead > 8192.
+        # Use 8192 so _gather_sources truncates aggressively enough for short test notes.
+        HEAVY_CTX=8192
+        ;;
+    *)
+        # Generic OpenAI-compatible provider — caller must set PROVIDER_URL and models
+        PROVIDER_URL="${PROVIDER_URL:-}"
+        FAST_MODEL="${FAST_MODEL:-}"
+        HEAVY_MODEL="${HEAVY_MODEL:-}"
+        FAST_CTX="${FAST_CTX:-8192}"
+        HEAVY_CTX="${HEAVY_CTX:-16384}"
+        if [[ -z "$PROVIDER_URL" || -z "$FAST_MODEL" ]]; then
+            echo "ERROR: PROVIDER=$PROVIDER requires PROVIDER_URL and FAST_MODEL to be set."
+            exit 1
+        fi
+        ;;
+esac
+
 SKIP_PULL="${SKIP_PULL:-0}"
 KEEP_VAULT="${KEEP_VAULT:-0}"
 
@@ -67,19 +103,29 @@ cleanup() {
 trap cleanup EXIT
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
-header "Prerequisites"
+header "Prerequisites (provider: $PROVIDER)"
 
 check "uv available" "command -v uv"
-check "Ollama reachable at $OLLAMA_URL" "curl -sf $OLLAMA_URL/api/tags"
 
-if [[ "$SKIP_PULL" == "0" ]]; then
-    info "Pulling models (skippable with SKIP_PULL=1)"
-    ollama pull "$FAST_MODEL"   || fail "Could not pull $FAST_MODEL"
-    ollama pull "$HEAVY_MODEL"  || fail "Could not pull $HEAVY_MODEL"
+if [[ "$PROVIDER" == "ollama" ]]; then
+    check "Ollama reachable at $PROVIDER_URL" "curl -sf $PROVIDER_URL/api/tags"
+
+    if [[ "$SKIP_PULL" == "0" ]]; then
+        info "Pulling models (skippable with SKIP_PULL=1)"
+        ollama pull "$FAST_MODEL"  || fail "Could not pull $FAST_MODEL"
+        if [[ "$FAST_MODEL" != "$HEAVY_MODEL" ]]; then
+            ollama pull "$HEAVY_MODEL" || fail "Could not pull $HEAVY_MODEL"
+        fi
+    fi
+
+    check "Fast model present: $FAST_MODEL"  "curl -sf $PROVIDER_URL/api/tags | grep -q '$FAST_MODEL'"
+    check "Heavy model present: $HEAVY_MODEL" "curl -sf $PROVIDER_URL/api/tags | grep -q '$HEAVY_MODEL'"
+else
+    # LM Studio and other OpenAI-compatible providers: just verify the endpoint is up.
+    # Model presence can't be checked reliably via /v1/models on all backends.
+    check "$PROVIDER reachable at $PROVIDER_URL" "curl -sf $PROVIDER_URL/models"
+    info "Model pull skipped ($PROVIDER manages its own models — load $FAST_MODEL in $PROVIDER before running)"
 fi
-
-check "Fast model present: $FAST_MODEL"  "curl -sf $OLLAMA_URL/api/tags | grep -q '$FAST_MODEL'"
-check "Heavy model present: $HEAVY_MODEL" "curl -sf $OLLAMA_URL/api/tags | grep -q '$HEAVY_MODEL'"
 
 # ── Install ───────────────────────────────────────────────────────────────────
 header "Install"
@@ -104,18 +150,19 @@ check ".olw/ created"          "test -d $VAULT_DIR/.olw"
 check "wiki.toml created"      "test -f $VAULT_DIR/wiki.toml"
 check "git repo initialised"   "test -d $VAULT_DIR/.git"
 
-# Override models in wiki.toml
-cat > "$VAULT_DIR/wiki.toml" <<TOML
+# Write provider-appropriate wiki.toml
+if [[ "$PROVIDER" == "ollama" ]]; then
+    cat > "$VAULT_DIR/wiki.toml" <<TOML
 [models]
 fast = "$FAST_MODEL"
 heavy = "$HEAVY_MODEL"
 embed = "nomic-embed-text"
 
 [ollama]
-url = "$OLLAMA_URL"
+url = "$PROVIDER_URL"
 timeout = 900
-fast_ctx = 8192
-heavy_ctx = 16384
+fast_ctx = $FAST_CTX
+heavy_ctx = $HEAVY_CTX
 
 [pipeline]
 auto_approve = false
@@ -127,7 +174,31 @@ chunk_size = 512
 chunk_overlap = 50
 similarity_threshold = 0.7
 TOML
-pass "wiki.toml configured (fast=$FAST_MODEL, heavy=$HEAVY_MODEL)"
+else
+    cat > "$VAULT_DIR/wiki.toml" <<TOML
+[models]
+fast = "$FAST_MODEL"
+heavy = "$HEAVY_MODEL"
+
+[provider]
+name = "$PROVIDER"
+url = "$PROVIDER_URL"
+timeout = 900
+fast_ctx = $FAST_CTX
+heavy_ctx = $HEAVY_CTX
+
+[pipeline]
+auto_approve = false
+auto_commit = true
+watch_debounce = 3.0
+
+[rag]
+chunk_size = 512
+chunk_overlap = 50
+similarity_threshold = 0.7
+TOML
+fi
+pass "wiki.toml configured (provider=$PROVIDER fast=$FAST_MODEL heavy=$HEAVY_MODEL)"
 
 # ── Doctor ───────────────────────────────────────────────────────────────────
 header "olw doctor"
@@ -195,7 +266,7 @@ RAW_HASH_2=$(shasum "$VAULT_DIR/raw/machine-learning-basics.md" | awk '{print $1
 
 # ── Ingest ────────────────────────────────────────────────────────────────────
 header "olw ingest --all"
-info "Calling Ollama ($FAST_MODEL) — may take 30-120s..."
+info "Calling $PROVIDER ($FAST_MODEL) — may take 30-120s..."
 
 $OLW ingest --all 2>&1
 
@@ -257,7 +328,7 @@ fi
 
 # ── Compile (concept-driven) ──────────────────────────────────────────────────
 header "olw compile (concept-driven)"
-info "Calling Ollama ($HEAVY_MODEL) — may take 2-5 min..."
+info "Calling $PROVIDER ($HEAVY_MODEL) — may take 2-5 min..."
 
 $OLW compile 2>&1
 
