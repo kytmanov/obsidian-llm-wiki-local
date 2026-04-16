@@ -35,6 +35,15 @@ class LLMError(Exception):
     """Base error for all LLM client failures (OllamaError inherits from this)."""
 
 
+class LLMBadRequestError(LLMError):
+    """HTTP 400 from the provider — usually bad input (prompt/context too long, etc.).
+
+    Unlike transient connection or rate-limit errors this is per-request and non-retryable
+    at the pipeline level, so compile_concepts catches it per-concept rather than aborting
+    the whole run.
+    """
+
+
 class OpenAICompatClient:
     def __init__(
         self,
@@ -107,6 +116,8 @@ class OpenAICompatClient:
             return LLMError(f"{prefix}Request timed out ({self._timeout}s). {context}")
         if isinstance(exc, httpx.HTTPStatusError):
             code = exc.response.status_code
+            if code == 400:
+                return LLMBadRequestError(f"{prefix}HTTP {code}: {exc.response.text[:200]}")
             if code == 401:
                 return LLMError(f"{prefix}HTTP 401 Unauthorized. Check your API key.")
             if code == 429:

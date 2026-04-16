@@ -46,7 +46,8 @@ case "$PROVIDER" in
         HEAVY_MODEL="${HEAVY_MODEL:-}"
         FAST_CTX="${FAST_CTX:-8192}"
         HEAVY_CTX="${HEAVY_CTX:-16384}"
-        if [[ -z "$PROVIDER_URL" || -z "$FAST_MODEL" ]]; then
+        HEAVY_MODEL="${HEAVY_MODEL:-$FAST_MODEL}"
+        if [[ -z "$PROVIDER_URL" || -z "$FAST_MODEL" || -z "$HEAVY_MODEL" ]]; then
             echo "ERROR: PROVIDER=$PROVIDER requires PROVIDER_URL and FAST_MODEL to be set."
             exit 1
         fi
@@ -118,8 +119,8 @@ if [[ "$PROVIDER" == "ollama" ]]; then
         fi
     fi
 
-    check "Fast model present: $FAST_MODEL"  "curl -sf $PROVIDER_URL/api/tags | grep -q '$FAST_MODEL'"
-    check "Heavy model present: $HEAVY_MODEL" "curl -sf $PROVIDER_URL/api/tags | grep -q '$HEAVY_MODEL'"
+    check "Fast model present: $FAST_MODEL"  "curl -sf $PROVIDER_URL/api/tags | grep -F -q '$FAST_MODEL'"
+    check "Heavy model present: $HEAVY_MODEL" "curl -sf $PROVIDER_URL/api/tags | grep -F -q '$HEAVY_MODEL'"
 else
     # LM Studio and other OpenAI-compatible providers: just verify the endpoint is up.
     # Model presence can't be checked reliably via /v1/models on all backends.

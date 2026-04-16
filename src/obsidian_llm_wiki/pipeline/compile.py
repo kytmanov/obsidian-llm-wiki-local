@@ -26,7 +26,7 @@ import frontmatter as fm_lib
 
 from ..config import Config
 from ..models import ArticlePlan, CompilePlan, SingleArticle, WikiArticleRecord
-from ..openai_compat_client import LLMError
+from ..openai_compat_client import LLMBadRequestError
 from ..protocols import LLMClientProtocol
 from ..sanitize import sanitize_tags
 from ..state import StateDB
@@ -402,9 +402,9 @@ def compile_concepts(
                     model=config.models.fast,
                     system=_STUB_WRITE_SYSTEM,
                     num_ctx=config.effective_provider.fast_ctx,
-                    num_predict=_MAX_STUB_PREDICT,
+                    num_predict=min(_MAX_STUB_PREDICT, config.effective_provider.fast_ctx),
                 )
-            except (StructuredOutputError, LLMError) as e:
+            except (StructuredOutputError, LLMBadRequestError) as e:
                 log.error("Failed to write stub '%s': %s", name, e)
                 failed.append(name)
                 continue
@@ -462,9 +462,9 @@ def compile_concepts(
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
                 num_ctx=config.effective_provider.heavy_ctx,
-                num_predict=_MAX_ARTICLE_PREDICT,
+                num_predict=min(_MAX_ARTICLE_PREDICT, config.effective_provider.heavy_ctx),
             )
-        except (StructuredOutputError, LLMError) as e:
+        except (StructuredOutputError, LLMBadRequestError) as e:
             log.error("Failed to write '%s': %s", name, e)
             failed.append(name)
             continue
@@ -570,7 +570,7 @@ def compile_notes(
             system=_PLAN_SYSTEM,
             num_ctx=config.effective_provider.fast_ctx,
         )
-    except (StructuredOutputError, LLMError) as e:
+    except (StructuredOutputError, LLMBadRequestError) as e:
         log.error("Planning failed: %s", e)
         return [], ["__planning_failed__"]
 
@@ -615,9 +615,9 @@ def compile_notes(
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
                 num_ctx=config.effective_provider.heavy_ctx,
-                num_predict=_MAX_ARTICLE_PREDICT,
+                num_predict=min(_MAX_ARTICLE_PREDICT, config.effective_provider.heavy_ctx),
             )
-        except (StructuredOutputError, LLMError) as e:
+        except (StructuredOutputError, LLMBadRequestError) as e:
             log.error("Failed to write '%s': %s", article.title, e)
             failed.append(article.title)
             continue

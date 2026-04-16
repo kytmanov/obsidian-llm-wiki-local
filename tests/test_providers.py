@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from obsidian_llm_wiki.openai_compat_client import LLMError, OpenAICompatClient
+from obsidian_llm_wiki.openai_compat_client import LLMBadRequestError, LLMError, OpenAICompatClient
 from obsidian_llm_wiki.providers import (
     get_provider,
     list_all_providers,
@@ -195,6 +195,107 @@ def test_generate_connect_error_raises_llmerror():
     with patch.object(client._client, "post", side_effect=httpx.ConnectError("refused")):
         with pytest.raises(LLMError, match="Cannot connect"):
             client.generate("p", model="m")
+
+
+def test_generate_400_raises_llm_bad_request_error():
+    """HTTP 400 is wrapped as LLMBadRequestError, not the generic LLMError."""
+    client = _make_client(supports_json_mode=False)
+    bad_resp = MagicMock()
+    bad_resp.status_code = 400
+    bad_resp.text = '{"error":"bad input"}'
+    bad_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "400", request=MagicMock(), response=bad_resp
+    )
+    with patch.object(client._client, "post", return_value=bad_resp):
+        with pytest.raises(LLMBadRequestError):
+            client.generate("p", model="m")
+
+
+def test_generate_nkeep_400_retry_strips_max_tokens():
+    """On 400 'tokens to keep' error, client retries without max_tokens."""
+    client = _make_client(supports_json_mode=False)
+
+    nkeep_resp = MagicMock()
+    nkeep_resp.status_code = 400
+    nkeep_resp.text = '{"error":"The number of tokens to keep from the initial prompt is greater"}'
+    nkeep_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "400", request=MagicMock(), response=nkeep_resp
+    )
+
+    good_resp = MagicMock()
+    good_resp.status_code = 200
+    good_resp.raise_for_status.return_value = None
+    good_resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+
+    payloads = []
+
+    def fake_post(url, json=None, **kw):
+        payloads.append(json)
+        return nkeep_resp if len(payloads) == 1 else good_resp
+
+    with patch.object(client._client, "post", side_effect=fake_post):
+        result = client.generate("p", model="m", num_predict=4096)
+
+    assert result == "ok"
+    assert len(payloads) == 2
+    assert "max_tokens" in payloads[0]
+    assert "max_tokens" not in payloads[1]
+
+
+def test_generate_chained_response_format_then_nkeep():
+    """Chained: first 400 strips response_format, second 400 strips max_tokens.
+    The final retry must not reintroduce response_format."""
+    client = _make_client(supports_json_mode=True)
+
+    rf_resp = MagicMock()
+    rf_resp.status_code = 400
+    rf_resp.text = '{"error":"response_format.type must be json_schema or text"}'
+    rf_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "400", request=MagicMock(), response=rf_resp
+    )
+
+    nkeep_resp = MagicMock()
+    nkeep_resp.status_code = 400
+    nkeep_resp.text = '{"error":"tokens to keep exceeds context length"}'
+    nkeep_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "400", request=MagicMock(), response=nkeep_resp
+    )
+
+    good_resp = MagicMock()
+    good_resp.status_code = 200
+    good_resp.raise_for_status.return_value = None
+    good_resp.json.return_value = {"choices": [{"message": {"content": "done"}}]}
+
+    call_count = {"n": 0}
+
+    def fake_post(url, json=None, **kw):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return rf_resp    # has response_format + max_tokens → 400 rf error
+        if call_count["n"] == 2:
+            return nkeep_resp  # has max_tokens, no response_format → 400 nkeep
+        return good_resp       # no response_format, no max_tokens → 200
+
+    payloads = []
+
+    def capturing_post(url, json=None, **kw):
+        payloads.append(json)
+        return fake_post(url, json=json, **kw)
+
+    with patch.object(client._client, "post", side_effect=capturing_post):
+        result = client.generate("p", model="m", format="json", num_predict=4096)
+
+    assert result == "done"
+    assert call_count["n"] == 3
+    # First request: has both fields
+    assert "response_format" in payloads[0]
+    assert "max_tokens" in payloads[0]
+    # Second request (after rf downgrade): no response_format, still has max_tokens
+    assert "response_format" not in payloads[1]
+    assert "max_tokens" in payloads[1]
+    # Third request (after nkeep downgrade): neither field
+    assert "response_format" not in payloads[2]
+    assert "max_tokens" not in payloads[2]
 
 
 def test_generate_timeout_raises_llmerror():
