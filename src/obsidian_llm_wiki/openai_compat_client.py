@@ -201,10 +201,12 @@ class OpenAICompatClient:
                     "%s: HTTP 400 with response_format, retrying without json mode",
                     self.provider_name,
                 )
-                current_payload = {k: v for k, v in current_payload.items() if k != "response_format"}
+                current_payload = {
+                    k: v for k, v in current_payload.items() if k != "response_format"
+                }
                 resp = self._client.post(self._chat_url(), json=current_payload)
 
-            # Auto-downgrade 2: n_keep > context error (LM Studio / llama.cpp) → retry without max_tokens
+            # Auto-downgrade 2: n_keep > context (LM Studio / llama.cpp) → retry without max_tokens
             if resp.status_code == 400 and "max_tokens" in current_payload:
                 err_text = resp.text.lower()
                 if "tokens to keep" in err_text or "n_keep" in err_text:
@@ -212,7 +214,9 @@ class OpenAICompatClient:
                         "%s: HTTP 400 n_keep error, retrying without max_tokens",
                         self.provider_name,
                     )
-                    current_payload = {k: v for k, v in current_payload.items() if k != "max_tokens"}
+                    current_payload = {
+                        k: v for k, v in current_payload.items() if k != "max_tokens"
+                    }
                     resp = self._client.post(self._chat_url(), json=current_payload)
 
             resp.raise_for_status()
