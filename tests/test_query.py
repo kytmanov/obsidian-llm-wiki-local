@@ -156,3 +156,19 @@ def test_run_query_passes_index_to_first_call(vault, config, db):
 
     first_call_prompt = client.generate.call_args_list[0].kwargs.get("prompt", "")
     assert "Special Topic" in first_call_prompt
+
+
+def test_query_answer_prompt_has_language_instruction(vault, config, db):
+    """Answer prompt must tell LLM to match user's question language."""
+    index_text = "# Wiki Index\n\n## Concepts\n- [[Topic]]\n"
+    _write_index(config, index_text)
+    _write_concept_page(config, "Topic")
+
+    selection_json = json.dumps({"pages": ["Topic"]})
+    answer_json = json.dumps({"answer": "Answer."})
+    client = _make_client(selection_json, answer_json)
+
+    run_query(config, client, db, "What is Topic?")
+
+    second_call_prompt = client.generate.call_args_list[1].kwargs.get("prompt", "")
+    assert "same language as the user's question" in second_call_prompt

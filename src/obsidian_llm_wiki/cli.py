@@ -861,44 +861,65 @@ def approve(vault_str, approve_all, files):
 
 @cli.command()
 @click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+@click.option("--all", "reject_all", is_flag=True, help="Reject all drafts in wiki/.drafts/")
 @click.option("--feedback", default="", help="Reason for rejection")
-@click.argument("file", type=click.Path(exists=True))
-def reject(vault_str, feedback, file):
-    """Discard a draft article and store rejection feedback for future recompiles."""
+@click.argument("files", nargs=-1, type=click.Path())
+def reject(vault_str, reject_all, feedback, files):
+    """Discard draft article(s) and store rejection feedback for future recompiles."""
     from .pipeline.compile import reject_draft
 
     config = _load_config(vault_str)
     db = _load_db(config)
 
-    if not feedback:
-        feedback = click.prompt("Reason for rejection?", default="")
+    if reject_all:
+        draft_paths = (
+            list(config.drafts_dir.rglob("*.md")) if config.drafts_dir.exists() else []
+        )
+        if not draft_paths:
+            console.print("[yellow]No drafts to reject.[/yellow]")
+            return
+        if not feedback:
+            feedback = click.prompt("Reason for rejecting all drafts?", default="")
+    elif files:
+        draft_paths = [Path(f).resolve() for f in files]
+        for p in draft_paths:
+            if not p.exists():
+                click.echo(f"File not found: {p}", err=True)
+                sys.exit(1)
+        if not feedback:
+            feedback = click.prompt("Reason for rejection?", default="")
+    else:
+        click.echo("Specify --all or provide file paths.", err=True)
+        sys.exit(1)
 
-    draft_path = Path(file)
-    # Peek at title before rejection (for user-facing message)
-    title = draft_path.stem
-    try:
-        from .vault import parse_note as _parse
+    from .vault import parse_note as _parse
 
-        meta, _ = _parse(draft_path)
-        title = meta.get("title", draft_path.stem)
-    except Exception:
-        pass
+    for draft_path in draft_paths:
+        title = draft_path.stem
+        try:
+            meta, _ = _parse(draft_path)
+            title = meta.get("title", draft_path.stem)
+        except Exception:
+            pass
 
-    reject_draft(draft_path, config, db, feedback=feedback)
-    console.print(f"[yellow]Draft rejected:[/yellow] {file}")
+        reject_draft(draft_path, config, db, feedback=feedback)
+        console.print(f"[yellow]Draft rejected:[/yellow] {draft_path.name}")
 
-    if feedback:
-        count = db.rejection_count(title)
-        if db.is_concept_blocked(title):
-            console.print(
-                f"[red]⚠ '{title}' blocked after {count} rejections. "
-                f'Use [bold]olw unblock "{title}"[/bold] to re-enable.[/red]'
-            )
-        else:
-            console.print(
-                f"[dim]Feedback saved. Next compile of '{title}' will address it. "
-                f"({count}/{db._REJECTION_CAP} rejections)[/dim]"
-            )
+        if feedback:
+            count = db.rejection_count(title)
+            if db.is_concept_blocked(title):
+                console.print(
+                    f"[red]⚠ '{title}' blocked after {count} rejections. "
+                    f'Use [bold]olw unblock "{title}"[/bold] to re-enable.[/red]'
+                )
+            else:
+                console.print(
+                    f"[dim]Feedback saved. Next compile of '{title}' will address it. "
+                    f"({count}/{db._REJECTION_CAP} rejections)[/dim]"
+                )
+
+    if len(draft_paths) > 1:
+        console.print(f"[green]Rejected {len(draft_paths)} draft(s).[/green]")
 
 
 # ── status ────────────────────────────────────────────────────────────────────

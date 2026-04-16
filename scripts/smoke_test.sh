@@ -338,6 +338,33 @@ if [[ "$SOURCE_COUNT" -gt 0 ]]; then
     check "source pages have concept wikilinks" "test '$CONCEPT_LINKS' -ge 1"
 fi
 
+# ── Language detection check ──────────────────────────────────────────────────
+header "Language detection (ingest)"
+
+cat > "$VAULT_DIR/raw/note-francais.md" <<'EOF'
+---
+title: Apprentissage automatique
+---
+
+L'apprentissage automatique est une branche de l'intelligence artificielle.
+Les algorithmes apprennent à partir des données sans être explicitement programmés.
+
+Les principales approches sont l'apprentissage supervisé, non supervisé et par renforcement.
+EOF
+
+$OLW ingest "$VAULT_DIR/raw/note-francais.md" 2>&1
+
+LANG_IN_DB=$(python3 - <<PYEOF
+import sqlite3
+conn = sqlite3.connect("$VAULT_DIR/.olw/state.db")
+row = conn.execute("SELECT language FROM raw_notes WHERE path='raw/note-francais.md'").fetchone()
+print(row[0] if row else "")
+conn.close()
+PYEOF
+)
+check "language column populated after ingest" "test -n \"$LANG_IN_DB\""
+info "Detected language: '$LANG_IN_DB'"
+
 # ── Compile (concept-driven) ──────────────────────────────────────────────────
 header "olw compile (concept-driven)"
 info "Calling $PROVIDER ($HEAVY_MODEL) — may take 2-5 min..."

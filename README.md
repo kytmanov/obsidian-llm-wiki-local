@@ -47,6 +47,7 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
+- **Multi-language** — automatically detects the language of each note at ingest time; articles are written in the detected language; override globally with `language = "en"` in `wiki.toml`
 - **Multi-provider** — swap Ollama for Groq, Together AI, LM Studio, vLLM, Azure OpenAI, or any OpenAI-compatible endpoint via `olw setup`
 - **Offline test suite** — all 373 tests run without Ollama or any provider
 
@@ -207,6 +208,27 @@ raw/note.md
 
 ---
 
+## Multi-language support
+
+`olw` detects the language of each raw note during ingest and stores it. At compile time, the article is written in that language — no configuration needed.
+
+**How it works:**
+
+1. **Ingest** — the fast model detects the primary language and stores an ISO 639-1 code (`en`, `fr`, `de`, …) per note in the state DB.
+2. **Compile** — when all source notes for a concept share the same language, the heavy model is instructed to write the article in that language. If sources are mixed, it falls back to matching the source text.
+3. **Config override** — set `language` in `wiki.toml` to force a specific output language for the whole vault, regardless of what the model detected.
+
+```toml
+[pipeline]
+language = "fr"   # all articles will be written in French
+```
+
+Leave `language` unset (the default) to let auto-detection drive it per concept.
+
+**Example:** a French note ingested alongside English notes produces a French article for French-only concepts and an English article for concepts sourced from English notes. Setting `language = "en"` forces everything to English.
+
+---
+
 ## Rejection feedback loop
 
 The core v0.2 feature. When you reject a draft:
@@ -308,6 +330,7 @@ auto_maintain = false            # true = run maintain checks after each compile
 max_concepts_per_source = 8      # limit concepts extracted per note
 watch_debounce = 3.0             # seconds after last file event before processing
 ingest_parallel = false          # true = parallel chunk analysis (needs OLLAMA_NUM_PARALLEL>=4)
+# language = "en"               # ISO 639-1 output language; autodetects from notes if unset
 ```
 
 > **API keys** are never stored in `wiki.toml`. They are read at runtime from the provider-specific env var (e.g. `GROQ_API_KEY`), the generic `OLW_API_KEY` env var, or the `api_key` field in `~/.config/olw/config.toml` (written by `olw setup`).
@@ -371,6 +394,8 @@ After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to 
 | `olw approve FILE` | Publish one draft |
 | `olw reject FILE` | Discard a draft (prompts for feedback) |
 | `olw reject FILE --feedback "..."` | Discard with feedback for next compile |
+| `olw reject --all` | Discard all drafts (prompts once for shared feedback) |
+| `olw reject --all --feedback "..."` | Discard all drafts with feedback |
 | `olw unblock "Concept"` | Re-enable a concept blocked after 5 rejections |
 | `olw maintain` | Health check + stubs + orphan and merge suggestions |
 | `olw maintain --fix` | Auto-fix issues and create stub articles |

@@ -30,7 +30,9 @@ log = logging.getLogger(__name__)
 
 _SYSTEM = (
     "You are a knowledge analyst. Read the provided note and extract structured information. "
-    "Be concise and accurate. Do not invent information not present in the note."
+    "Be concise and accurate. Do not invent information not present in the note. "
+    "Detect the primary language of the note and return its ISO 639-1 code in the 'language' field "
+    "(e.g. 'en', 'fr', 'de'). Use null if uncertain."
 )
 
 
@@ -82,11 +84,15 @@ def _merge_chunk_results(results: list[AnalysisResult]) -> AnalysisResult:
     quality_rank = {"high": 2, "medium": 1, "low": 0}
     min_result = min(results, key=lambda r: quality_rank.get(r.quality, 1))
 
+    # Use the first non-None detected language across chunks
+    merged_language = next((r.language for r in results if r.language), None)
+
     return AnalysisResult(
         summary=results[0].summary,
         key_concepts=all_concepts[:8],
         suggested_topics=all_topics[:5],
         quality=min_result.quality,
+        language=merged_language,
     )
 
 
@@ -369,6 +375,7 @@ def ingest_note(
             status="ingested",
             summary=result.summary,
             quality=result.quality,
+            language=result.language,
             ingested_at=datetime.now(),
         )
     )

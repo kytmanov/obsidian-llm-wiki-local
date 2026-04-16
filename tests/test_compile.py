@@ -9,6 +9,7 @@ import pytest
 from obsidian_llm_wiki.config import Config
 from obsidian_llm_wiki.models import RawNoteRecord
 from obsidian_llm_wiki.pipeline.compile import (
+    _resolve_language,
     _write_concept_prompt,
     _write_prompt_legacy,
     approve_drafts,
@@ -332,3 +333,58 @@ def test_compile_concepts_marks_sources_compiled(vault, config, db, fixtures_dir
 
     record = db.get_raw("raw/note.md")
     assert record.status == "compiled"
+
+
+# ── Language tests ─────────────────────────────────────────────────────────────
+
+
+def test_write_concept_prompt_no_language():
+    prompt = _write_concept_prompt("Topic", "source", [])
+    assert "same language as the source notes" in prompt
+
+
+def test_write_concept_prompt_with_language():
+    prompt = _write_concept_prompt("Topic", "source", [], language="fr")
+    assert "Output language: fr" in prompt
+    assert "same language as the source notes" not in prompt
+
+
+def test_write_prompt_legacy_no_language():
+    from obsidian_llm_wiki.models import ArticlePlan
+
+    plan = ArticlePlan(title="T", action="create", path="t.md", reasoning="r", source_paths=[])
+    prompt = _write_prompt_legacy(plan, "source", [])
+    assert "same language as the source notes" in prompt
+
+
+def test_write_prompt_legacy_with_language():
+    from obsidian_llm_wiki.models import ArticlePlan
+
+    plan = ArticlePlan(title="T", action="create", path="t.md", reasoning="r", source_paths=[])
+    prompt = _write_prompt_legacy(plan, "source", [], language="de")
+    assert "Output language: de" in prompt
+
+
+def test_resolve_language_uses_config_over_detected(config, db):
+    r = RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested", language="fr")
+    db.upsert_raw(r)
+    config.pipeline.language = "en"
+    assert _resolve_language(["raw/a.md"], db, config) == "en"
+
+
+def test_resolve_language_uses_detected_when_unambiguous(config, db):
+    for path, lang in [("raw/a.md", "fr"), ("raw/b.md", "fr")]:
+        db.upsert_raw(RawNoteRecord(path=path, content_hash=path, status="ingested", language=lang))
+    assert _resolve_language(["raw/a.md", "raw/b.md"], db, config) == "fr"
+
+
+def test_resolve_language_none_when_mixed(config, db):
+    for path, lang in [("raw/a.md", "fr"), ("raw/b.md", "de")]:
+        db.upsert_raw(RawNoteRecord(path=path, content_hash=path, status="ingested", language=lang))
+    assert _resolve_language(["raw/a.md", "raw/b.md"], db, config) is None
+
+
+def test_resolve_language_none_when_no_detected(config, db):
+    r = RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested", language=None)
+    db.upsert_raw(r)
+    assert _resolve_language(["raw/a.md"], db, config) is None

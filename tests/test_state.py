@@ -360,10 +360,10 @@ def test_approve_article_sets_timestamp(db):
 
 
 def test_schema_version_set_on_fresh_db(db):
-    """Fresh DB should have schema_version = 2."""
+    """Fresh DB should have schema_version = current."""
     row = db._conn.execute("SELECT version FROM schema_version").fetchone()
     assert row is not None
-    assert row[0] == 2
+    assert row[0] == 3
 
 
 def test_schema_version_idempotent(tmp_path):
@@ -373,11 +373,11 @@ def test_schema_version_idempotent(tmp_path):
     db1.close()
     db2 = StateDB(path)
     row = db2._conn.execute("SELECT version FROM schema_version").fetchone()
-    assert row[0] == 2
+    assert row[0] == 3
 
 
 def test_legacy_migration_from_v0(tmp_path):
-    """DB with no schema_version row and no approved_at column → migrates to v2."""
+    """DB with no schema_version row and no approved_at column → migrates to v3."""
     import sqlite3
 
     path = tmp_path / ".olw" / "state.db"
@@ -408,10 +408,10 @@ def test_legacy_migration_from_v0(tmp_path):
     conn.commit()
     conn.close()
 
-    # Opening via StateDB should apply v1 + v2 migrations
+    # Opening via StateDB should apply v1 + v2 + v3 migrations
     db = StateDB(path)
     row = db._conn.execute("SELECT version FROM schema_version").fetchone()
-    assert row[0] == 2
+    assert row[0] == 3
 
     # Verify v0.2 tables exist after migration
     tables = {
@@ -422,7 +422,29 @@ def test_legacy_migration_from_v0(tmp_path):
     assert "stubs" in tables
     assert "blocked_concepts" in tables
 
-    # Verify approved_at column added to wiki_articles
+    # Verify approved_at column added to wiki_articles (v2)
     cols = {r[1] for r in db._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()}
     assert "approved_at" in cols
     assert "approval_notes" in cols
+
+    # Verify language column added to raw_notes (v3)
+    raw_cols = {r[1] for r in db._conn.execute("PRAGMA table_info(raw_notes)").fetchall()}
+    assert "language" in raw_cols
+
+
+def test_upsert_note_stores_language(db):
+    r = RawNoteRecord(path="raw/note.md", content_hash="abc", status="ingested", language="fr")
+    db.upsert_raw(r)
+    got = db.get_raw("raw/note.md")
+    assert got.language == "fr"
+    assert db.get_note_language("raw/note.md") == "fr"
+
+
+def test_upsert_note_language_none(db):
+    r = RawNoteRecord(path="raw/note.md", content_hash="abc", status="ingested", language=None)
+    db.upsert_raw(r)
+    assert db.get_note_language("raw/note.md") is None
+
+
+def test_get_note_language_missing_path(db):
+    assert db.get_note_language("raw/nonexistent.md") is None

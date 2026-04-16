@@ -124,6 +124,7 @@ def run_query(
         f"Relevant wiki content:\n{context}\n\n"
         f"Question: {question}\n\n"
         "Answer using the wiki content. Use [[wikilinks]] when referencing wiki concepts. "
+        "Answer in the same language as the user's question. "
         'Return JSON: {"answer": "your full markdown answer here"}'
     )
     result = request_structured(

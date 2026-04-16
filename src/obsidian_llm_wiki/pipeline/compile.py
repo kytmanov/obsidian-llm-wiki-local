@@ -50,7 +50,8 @@ _ANNOTATION_MIN_SOURCES = 2
 
 _STUB_WRITE_SYSTEM = (
     "You are a wiki editor. Write a brief stub article for a wiki concept that was referenced "
-    "by other articles but has no source material yet. Keep it under 150 words. Be factual."
+    "by other articles but has no source material yet. Keep it under 150 words. Be factual. "
+    "Write in the same language as the surrounding wiki content."
 )
 
 _PLAN_SYSTEM = (
@@ -73,6 +74,14 @@ def _load_vault_schema(config: Config) -> str:
         except Exception:
             pass
     return ""
+
+
+def _resolve_language(sources: list[str], db: StateDB, config: Config) -> str | None:
+    """Return output language: config wins; else use detected if all sources agree."""
+    if config.pipeline.language:
+        return config.pipeline.language
+    langs = {db.get_note_language(s) for s in sources} - {None}
+    return langs.pop() if len(langs) == 1 else None
 
 
 # Token budget constants
@@ -282,13 +291,20 @@ def _write_concept_prompt(
     existing_content: str = "",
     vault_schema: str = "",
     rejection_history: list[str] | None = None,
+    language: str | None = None,
 ) -> str:
     titles_str = ", ".join(existing_titles[:50]) if existing_titles else "none yet"
+    lang_instruction = (
+        f"Output language: {language} (ISO 639-1).\n"
+        if language
+        else "Write in the same language as the source notes.\n"
+    )
     prompt = f'Write the wiki article: "{concept}"\n'
     if vault_schema:
         prompt += f"\nVAULT CONVENTIONS:\n{vault_schema}\n"
     prompt += (
-        f"\nIMPORTANT: Keep the content field under 800 words. Be concise.\n"
+        f"\n{lang_instruction}"
+        f"IMPORTANT: Keep the content field under 800 words. Be concise.\n"
         f"Tags must be lowercase, hyphen-separated, no spaces or special characters. "
         f"Good: machine-learning, quantum-computing. Bad: Machine Learning, C++.\n"
         f"Do NOT use inline hashtags (#tag) in the content body — use [[wikilinks]] only.\n"
@@ -450,8 +466,15 @@ def compile_concepts(
             [r["feedback"] for r in rejection_records] if rejection_records else None
         )
 
+        lang = _resolve_language([str(p) for p in resolved_paths], db, config)
         write_prompt = _write_concept_prompt(
-            name, sources_text, existing_titles, existing_content, vault_schema, rejection_history
+            name,
+            sources_text,
+            existing_titles,
+            existing_content,
+            vault_schema,
+            rejection_history,
+            language=lang,
         )
 
         try:
@@ -506,12 +529,23 @@ def _plan_prompt(
     )
 
 
-def _write_prompt_legacy(article: ArticlePlan, sources: str, existing_titles: list[str]) -> str:
+def _write_prompt_legacy(
+    article: ArticlePlan,
+    sources: str,
+    existing_titles: list[str],
+    language: str | None = None,
+) -> str:
     titles_str = ", ".join(existing_titles[:50]) if existing_titles else "none yet"
+    lang_instruction = (
+        f"Output language: {language} (ISO 639-1).\n"
+        if language
+        else "Write in the same language as the source notes.\n"
+    )
     return (
         f'Write the wiki article: "{article.title}"\n'
         f"Action: {article.action}\n"
         f"Reasoning: {article.reasoning}\n"
+        f"{lang_instruction}"
         f"IMPORTANT: Keep the content field under 800 words. Be concise.\n"
         f"Tags must be lowercase, hyphen-separated, no spaces or special characters. "
         f"Good: machine-learning, quantum-computing. Bad: Machine Learning, C++.\n"
@@ -605,7 +639,8 @@ def compile_notes(
             max_chars=config.effective_provider.heavy_ctx // 2,
         )
 
-        write_prompt = _write_prompt_legacy(article, sources_text, existing_titles)
+        lang = _resolve_language([str(p) for p in resolved_paths], db, config)
+        write_prompt = _write_prompt_legacy(article, sources_text, existing_titles, language=lang)
 
         try:
             result: SingleArticle = request_structured(

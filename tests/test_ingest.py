@@ -11,6 +11,7 @@ import pytest
 from obsidian_llm_wiki.config import Config
 from obsidian_llm_wiki.models import AnalysisResult
 from obsidian_llm_wiki.pipeline.ingest import (
+    _SYSTEM,
     _analyze_body,
     _build_analysis_prompt,
     _merge_chunk_results,
@@ -457,3 +458,48 @@ def test_analyze_body_parallel_mode(vault):
     result = _analyze_body(body, [], "long.md", client, config2)
     assert client.generate.call_count == -(-200 // 50)  # same chunk count
     assert isinstance(result, AnalysisResult)
+
+
+# ── Language tests ─────────────────────────────────────────────────────────────
+
+
+def test_system_prompt_contains_language_detection_instruction():
+    assert "ISO 639-1" in _SYSTEM
+    assert "language" in _SYSTEM
+
+
+def test_analysis_result_stores_language_in_db(vault, config, db):
+    path = _write_raw(vault, "french_note.md", "# Bonjour\n\nCeci est une note en français.")
+    analysis = json.dumps({
+        "summary": "A French note.",
+        "key_concepts": ["Bonjour"],
+        "suggested_topics": ["Salutations"],
+        "quality": "high",
+        "language": "fr",
+    })
+    client = _make_client(analysis)
+    ingest_note(path, config, client, db)
+    assert db.get_note_language("raw/french_note.md") == "fr"
+
+
+def test_analysis_result_language_none_stored(vault, config, db):
+    path = _write_raw(vault, "unknown.md", "# Mixed content\n\nSome text.")
+    analysis = json.dumps({
+        "summary": "Unknown language note.",
+        "key_concepts": ["Mixed"],
+        "suggested_topics": [],
+        "quality": "medium",
+        "language": None,
+    })
+    client = _make_client(analysis)
+    ingest_note(path, config, client, db)
+    assert db.get_note_language("raw/unknown.md") is None
+
+
+def test_merge_chunk_results_picks_first_detected_language():
+    make = lambda lang: AnalysisResult(  # noqa: E731
+        summary="s", key_concepts=[], suggested_topics=[], quality="high", language=lang
+    )
+    merged = _merge_chunk_results([make(None), make("de"), make("fr")])
+    assert merged.language == "de"
+

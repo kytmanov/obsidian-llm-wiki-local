@@ -7,6 +7,7 @@ Handles: dedup via content hash, partial failure recovery, resume.
 Schema versioning: schema_version table tracks migration level.
   v1 — initial (summary/quality columns on raw_notes)
   v2 — rejections, stubs, blocked_concepts tables; approved_at/approval_notes on wiki_articles
+  v3 — language column on raw_notes
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from .models import RawNoteRecord, WikiArticleRecord
 
-_CURRENT_SCHEMA_VERSION = 2
+_CURRENT_SCHEMA_VERSION = 3
 
 # Full current schema — idempotent (CREATE IF NOT EXISTS).
 # Fresh DBs get all tables + columns from here. Existing DBs use _VERSIONED_MIGRATIONS.
@@ -35,6 +36,7 @@ CREATE TABLE IF NOT EXISTS raw_notes (
     status      TEXT NOT NULL DEFAULT 'new',
     summary     TEXT,
     quality     TEXT,
+    language    TEXT,
     ingested_at TEXT,
     compiled_at TEXT,
     error       TEXT
@@ -111,6 +113,9 @@ _VERSIONED_MIGRATIONS: dict[int, list[str]] = {
            )""",
         "ALTER TABLE wiki_articles ADD COLUMN approved_at TEXT",
         "ALTER TABLE wiki_articles ADD COLUMN approval_notes TEXT",
+    ],
+    3: [
+        "ALTER TABLE raw_notes ADD COLUMN language TEXT",
     ],
 }
 
@@ -210,16 +215,17 @@ class StateDB:
         with self._tx():
             self._conn.execute(
                 """INSERT INTO raw_notes
-                       (path, content_hash, status, summary, quality,
+                       (path, content_hash, status, summary, quality, language,
                         ingested_at, compiled_at, error)
                    VALUES
-                       (:path, :content_hash, :status, :summary, :quality,
+                       (:path, :content_hash, :status, :summary, :quality, :language,
                         :ingested_at, :compiled_at, :error)
                    ON CONFLICT(path) DO UPDATE SET
                        content_hash=excluded.content_hash,
                        status=excluded.status,
                        summary=excluded.summary,
                        quality=excluded.quality,
+                       language=excluded.language,
                        ingested_at=excluded.ingested_at,
                        compiled_at=excluded.compiled_at,
                        error=excluded.error""",
@@ -229,6 +235,7 @@ class StateDB:
                     "status": record.status,
                     "summary": record.summary,
                     "quality": record.quality,
+                    "language": record.language,
                     "ingested_at": record.ingested_at.isoformat() if record.ingested_at else None,
                     "compiled_at": record.compiled_at.isoformat() if record.compiled_at else None,
                     "error": record.error,
@@ -253,6 +260,12 @@ class StateDB:
         else:
             rows = self._conn.execute("SELECT * FROM raw_notes").fetchall()
         return [_row_to_raw(r) for r in rows]
+
+    def get_note_language(self, path: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT language FROM raw_notes WHERE path = ?", (path,)
+        ).fetchone()
+        return row[0] if row else None
 
     def mark_raw_status(self, path: str, status: str, error: str | None = None) -> None:
         now = datetime.now().isoformat()
@@ -530,6 +543,7 @@ def _row_to_raw(row: sqlite3.Row) -> RawNoteRecord:
         status=row["status"],
         summary=row["summary"] if "summary" in keys else None,
         quality=row["quality"] if "quality" in keys else None,
+        language=row["language"] if "language" in keys else None,
         ingested_at=datetime.fromisoformat(row["ingested_at"]) if row["ingested_at"] else None,
         compiled_at=datetime.fromisoformat(row["compiled_at"]) if row["compiled_at"] else None,
         error=row["error"],

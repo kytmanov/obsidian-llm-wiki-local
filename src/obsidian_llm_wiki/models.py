@@ -29,6 +29,10 @@ class AnalysisResult(BaseModel):
     quality: Literal["high", "medium", "low"] = Field(
         description="Source quality: high=well-structured, medium=usable, low=noise"
     )
+    language: str | None = Field(
+        default=None,
+        description="ISO 639-1 language code of the note (e.g. 'en', 'fr', 'de'). Null if uncertain.",  # noqa: E501
+    )
 
 
 class ArticlePlan(BaseModel):
@@ -127,6 +131,7 @@ class RawNoteRecord(BaseModel):
     status: Literal["new", "ingested", "compiled", "failed"] = "new"
     summary: str | None = None
     quality: str | None = None
+    language: str | None = None
     ingested_at: datetime | None = None
     compiled_at: datetime | None = None
     error: str | None = None
