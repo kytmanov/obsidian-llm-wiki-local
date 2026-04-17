@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0] - 2026-04-16
+
+### Highlights
+
+**v0.4 makes `olw` smarter about where you are and what you're writing.** Notes are now analyzed in the language they were written in, and articles are compiled in the same language — no more English-only output in a multilingual vault. You can also reject an entire batch of drafts in one go. Two usability papercuts are fixed: the tool now finds your vault automatically when you're already inside it, and the review menu works correctly in all terminals.
+
+### New Features
+
+- **Multi-language support** — `olw ingest` detects the language of each note and stores it. `olw compile` then writes each article in the appropriate language: the detected language if all sources agree, the vault-wide `language` setting from `wiki.toml` if configured, or English as a fallback. French notes produce French articles, Japanese notes produce Japanese articles, and so on.
+
+- **`olw review --reject-all`** — Reject every pending draft in one step with a shared feedback message. Useful when a bad prompt version or wrong model produced a full batch of unusable drafts.
+
+- **Vault auto-detection** — Commands no longer fail when `--vault` is not passed and no default was saved in `olw setup`. If you're inside a vault directory (or any subdirectory), `olw` finds it automatically by walking up to the nearest `wiki.toml`. The "press Enter to skip" flow in setup now actually makes sense.
+
+### Bug Fixes
+
+- **Review menu shortcuts were invisible in some terminals** — The `olw review` action menu (`[a]pprove`, `[r]eject`, etc.) used Rich markup that silently ate the first letter of each word in terminals with limited style support, showing `pprove eject dit` instead. Prompts now render as plain text (`a=approve, r=reject, e=edit, ...`) and work correctly everywhere.
+
 ## [0.3.0] - 2026-04-15
 
 ### Highlights
