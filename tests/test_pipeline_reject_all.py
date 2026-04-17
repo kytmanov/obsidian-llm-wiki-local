@@ -100,11 +100,13 @@ def test_reject_all_then_recompile_uses_feedback(vault, config, db, runner):
     assert len(rej_b) == 1 and rej_b[0]["feedback"] == "wrong language"
 
     # Recompile — mock LLM, capture prompts
-    article_json = json.dumps({
-        "title": "Concept A",
-        "content": "Rewritten content.",
-        "tags": ["concept-a"],
-    })
+    article_json = json.dumps(
+        {
+            "title": "Concept A",
+            "content": "Rewritten content.",
+            "tags": ["concept-a"],
+        }
+    )
     client = MagicMock()
     client.generate.return_value = article_json
 

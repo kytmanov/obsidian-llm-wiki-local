@@ -41,13 +41,15 @@ def test_ingest_detects_and_stores_language(vault, config, db):
     path = vault / "raw" / "french.md"
     path.write_text("# Bonjour\n\nCeci est une note en français.")
 
-    analysis = json.dumps({
-        "summary": "A French note.",
-        "key_concepts": ["Bonjour"],
-        "suggested_topics": ["Salutations"],
-        "quality": "high",
-        "language": "fr",
-    })
+    analysis = json.dumps(
+        {
+            "summary": "A French note.",
+            "key_concepts": ["Bonjour"],
+            "suggested_topics": ["Salutations"],
+            "quality": "high",
+            "language": "fr",
+        }
+    )
     client = MagicMock()
     client.generate.return_value = analysis
 

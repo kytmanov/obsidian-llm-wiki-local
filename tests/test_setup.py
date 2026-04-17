@@ -181,9 +181,47 @@ def test_load_config_no_vault_exits(monkeypatch: pytest.MonkeyPatch, cfg_dir: Pa
     from obsidian_llm_wiki.cli import _load_config
 
     monkeypatch.delenv("OLW_VAULT", raising=False)
+    monkeypatch.chdir(cfg_dir)
     with pytest.raises(SystemExit) as exc:
         _load_config(None)
     assert exc.value.code == 1
+
+
+def test_load_config_detects_vault_from_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cfg_dir: Path
+):
+    """_load_config(None) detects vault when CWD contains wiki.toml."""
+    vault = tmp_path / "myvault"
+    vault.mkdir()
+    (vault / "wiki.toml").write_text(
+        '[models]\nfast = "gemma4:e4b"\nheavy = "gemma4:e4b"\n[ollama]\nurl = "http://localhost:11434"\n'
+    )
+    monkeypatch.delenv("OLW_VAULT", raising=False)
+    monkeypatch.chdir(vault)
+
+    from obsidian_llm_wiki.cli import _load_config
+
+    config = _load_config(None)
+    assert config.vault == vault
+
+
+def test_load_config_detects_vault_from_subdir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cfg_dir: Path
+):
+    """_load_config(None) walks up from a subdirectory to find wiki.toml."""
+    vault = tmp_path / "myvault"
+    subdir = vault / "raw" / "notes"
+    subdir.mkdir(parents=True)
+    (vault / "wiki.toml").write_text(
+        '[models]\nfast = "gemma4:e4b"\nheavy = "gemma4:e4b"\n[ollama]\nurl = "http://localhost:11434"\n'
+    )
+    monkeypatch.delenv("OLW_VAULT", raising=False)
+    monkeypatch.chdir(subdir)
+
+    from obsidian_llm_wiki.cli import _load_config
+
+    config = _load_config(None)
+    assert config.vault == vault
 
 
 # ── olw setup --non-interactive ───────────────────────────────────────────────

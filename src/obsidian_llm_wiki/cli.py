@@ -42,8 +42,16 @@ def _load_config(vault_str: str | None, **kwargs):
         vault_str = gcfg.vault if gcfg and gcfg.vault else None
 
     if not vault_str:
+        cwd = Path.cwd()
+        for parent in [cwd, *cwd.parents]:
+            if (parent / "wiki.toml").exists():
+                vault_str = str(parent)
+                break
+
+    if not vault_str:
         click.echo(
-            "Error: no vault specified. Use --vault, set OLW_VAULT, or run `olw setup`.",
+            "Error: no vault specified. Use --vault, set OLW_VAULT, run `olw setup`, "
+            "or cd into a vault directory.",
             err=True,
         )
         sys.exit(1)
@@ -872,9 +880,7 @@ def reject(vault_str, reject_all, feedback, files):
     db = _load_db(config)
 
     if reject_all:
-        draft_paths = (
-            list(config.drafts_dir.rglob("*.md")) if config.drafts_dir.exists() else []
-        )
+        draft_paths = list(config.drafts_dir.rglob("*.md")) if config.drafts_dir.exists() else []
         if not draft_paths:
             console.print("[yellow]No drafts to reject.[/yellow]")
             return
@@ -1386,7 +1392,7 @@ def review(vault_str):
             )
 
         console.print(table)
-        console.print("\n[dim]  [a] approve all  [x] reject all  [q] quit  or enter number[/dim]")
+        console.print("\n[dim]  Type: number=open draft, a=approve all, x=reject all, q=quit[/dim]")
         choice = click.prompt("\nChoice", prompt_suffix=" > ").strip().lower()
 
         if choice == "q":
@@ -1473,9 +1479,10 @@ def _review_single(
         # Show body
         console.print(Panel(body[:3000] + ("…" if len(body) > 3000 else ""), title="Draft"))
 
-        console.print("\n[dim]Actions:[/dim]")
-        console.print("[dim]  [a]pprove  [r]eject  [e]dit[/dim]")
-        console.print("[dim]  [d]iff vs published  [v]iew rejection diff  [s]kip[/dim]")
+        console.print(
+            "\n[dim]Type: a=approve, r=reject, e=edit, "
+            "d=diff vs published, v=rejection diff, s=skip[/dim]"
+        )
         raw_action = click.prompt("\nAction", prompt_suffix=" > ").strip()
         action = raw_action.lower()
 

@@ -68,7 +68,7 @@ def default_wiki_toml(
         f"watch_debounce = 3.0\n"
         f"max_concepts_per_source = 8\n"
         f"ingest_parallel = false   # true = parallel chunks\n"
-        f"# language = \"en\"  # ISO 639-1 output language; autodetects from notes if unset\n"
+        f'# language = "en"  # ISO 639-1 output language; autodetects from notes if unset\n'
     )
 
 

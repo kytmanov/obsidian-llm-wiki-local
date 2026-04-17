@@ -470,13 +470,15 @@ def test_system_prompt_contains_language_detection_instruction():
 
 def test_analysis_result_stores_language_in_db(vault, config, db):
     path = _write_raw(vault, "french_note.md", "# Bonjour\n\nCeci est une note en français.")
-    analysis = json.dumps({
-        "summary": "A French note.",
-        "key_concepts": ["Bonjour"],
-        "suggested_topics": ["Salutations"],
-        "quality": "high",
-        "language": "fr",
-    })
+    analysis = json.dumps(
+        {
+            "summary": "A French note.",
+            "key_concepts": ["Bonjour"],
+            "suggested_topics": ["Salutations"],
+            "quality": "high",
+            "language": "fr",
+        }
+    )
     client = _make_client(analysis)
     ingest_note(path, config, client, db)
     assert db.get_note_language("raw/french_note.md") == "fr"
@@ -484,13 +486,15 @@ def test_analysis_result_stores_language_in_db(vault, config, db):
 
 def test_analysis_result_language_none_stored(vault, config, db):
     path = _write_raw(vault, "unknown.md", "# Mixed content\n\nSome text.")
-    analysis = json.dumps({
-        "summary": "Unknown language note.",
-        "key_concepts": ["Mixed"],
-        "suggested_topics": [],
-        "quality": "medium",
-        "language": None,
-    })
+    analysis = json.dumps(
+        {
+            "summary": "Unknown language note.",
+            "key_concepts": ["Mixed"],
+            "suggested_topics": [],
+            "quality": "medium",
+            "language": None,
+        }
+    )
     client = _make_client(analysis)
     ingest_note(path, config, client, db)
     assert db.get_note_language("raw/unknown.md") is None
@@ -502,4 +506,3 @@ def test_merge_chunk_results_picks_first_detected_language():
     )
     merged = _merge_chunk_results([make(None), make("de"), make("fr")])
     assert merged.language == "de"
-
