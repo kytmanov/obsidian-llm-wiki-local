@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from obsidian_llm_wiki.models import RawNoteRecord, WikiArticleRecord
-from obsidian_llm_wiki.state import StateDB
+from obsidian_llm_wiki.state import StateDB, _CURRENT_SCHEMA_VERSION
 
 
 @pytest.fixture
@@ -363,7 +363,7 @@ def test_schema_version_set_on_fresh_db(db):
     """Fresh DB should have schema_version = current."""
     row = db._conn.execute("SELECT version FROM schema_version").fetchone()
     assert row is not None
-    assert row[0] == 3
+    assert row[0] == _CURRENT_SCHEMA_VERSION
 
 
 def test_schema_version_idempotent(tmp_path):
@@ -373,7 +373,7 @@ def test_schema_version_idempotent(tmp_path):
     db1.close()
     db2 = StateDB(path)
     row = db2._conn.execute("SELECT version FROM schema_version").fetchone()
-    assert row[0] == 3
+    assert row[0] == _CURRENT_SCHEMA_VERSION
 
 
 def test_legacy_migration_from_v0(tmp_path):
@@ -411,7 +411,7 @@ def test_legacy_migration_from_v0(tmp_path):
     # Opening via StateDB should apply v1 + v2 + v3 migrations
     db = StateDB(path)
     row = db._conn.execute("SELECT version FROM schema_version").fetchone()
-    assert row[0] == 3
+    assert row[0] == _CURRENT_SCHEMA_VERSION
 
     # Verify v0.2 tables exist after migration
     tables = {

@@ -159,10 +159,12 @@ class StateDB:
 
         if row is None:
             # No version record yet. Determine starting state by inspecting schema:
-            # If wiki_articles already has approved_at, this is a fresh DB created
-            # by the current _SCHEMA — all tables/columns exist, just record version.
-            cols = {r[1] for r in self._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()}
-            if "approved_at" in cols:
+            # Check that all columns from the current schema version exist so we
+            # don't skip migrations on a partially-upgraded DB (e.g. v2 DB with
+            # approved_at but no language column).
+            wiki_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()}
+            note_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(raw_notes)").fetchall()}
+            if "approved_at" in wiki_cols and "language" in note_cols:
                 with self._tx():
                     self._conn.execute(
                         "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",

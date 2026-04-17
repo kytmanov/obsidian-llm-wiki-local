@@ -290,8 +290,9 @@ if [[ "$SOURCE_COUNT" -gt 0 ]]; then
     check "source page has concept wikilinks" "grep -q '\[\[' \"$FIRST_SOURCE\""
 
     SRC_YAML_ERR=$(uv run --project "$REPO_DIR" python - "$FIRST_SOURCE" 2>/dev/null <<'PYEOF'
-import sys, frontmatter
+import sys
 try:
+    import frontmatter
     frontmatter.load(sys.argv[1])
 except Exception as e:
     print(f"error: {e}")
@@ -301,8 +302,9 @@ PYEOF
     check "source page YAML is parseable" "test -z \"$SRC_YAML_ERR\""
 
     SRC_ALIAS_ERR=$(uv run --project "$REPO_DIR" python - "$FIRST_SOURCE" 2>/dev/null <<'PYEOF'
-import sys, frontmatter
+import sys
 try:
+    import frontmatter
     m = frontmatter.load(sys.argv[1])
     aliases = m.get('aliases', [])
     assert isinstance(aliases, list), f'aliases not a list: {aliases!r}'
@@ -384,8 +386,9 @@ if [[ "$DRAFT_COUNT" -gt 0 ]]; then
     check "draft has ## Sources section" "grep -q '^## Sources' \"$FIRST_DRAFT\""
     check "draft has confidence field"   "grep -q 'confidence:' \"$FIRST_DRAFT\""
     DRAFT_YAML_OK=$(uv run --project "$REPO_DIR" python - "$FIRST_DRAFT" 2>/dev/null <<'PYEOF'
-import sys, frontmatter
+import sys
 try:
+    import frontmatter
     frontmatter.load(sys.argv[1])
 except Exception as e:
     print(f"error: {e}")
@@ -394,12 +397,17 @@ PYEOF
 )
     check "draft YAML is parseable" "test -z \"$DRAFT_YAML_OK\""
     DRAFT_TAG_BAD=$(uv run --project "$REPO_DIR" python - "$FIRST_DRAFT" 2>/dev/null <<'PYEOF'
-import sys, re, frontmatter
-m = frontmatter.load(sys.argv[1])
-valid_re = re.compile(r'^[a-z0-9][a-zA-Z0-9_/\-]*$')
-bad = [t for t in m.get('tags', []) if not isinstance(t, str) or ' ' in t or t != t.lower() or not valid_re.match(t)]
-if bad:
-    print(f"Bad tags: {bad}")
+import sys
+try:
+    import re, frontmatter
+    m = frontmatter.load(sys.argv[1])
+    valid_re = re.compile(r'^[a-z0-9][a-zA-Z0-9_/\-]*$')
+    bad = [t for t in m.get('tags', []) if not isinstance(t, str) or ' ' in t or t != t.lower() or not valid_re.match(t)]
+    if bad:
+        print(f"Bad tags: {bad}")
+        sys.exit(1)
+except Exception as e:
+    print(f"error: {e}")
     sys.exit(1)
 PYEOF
 )

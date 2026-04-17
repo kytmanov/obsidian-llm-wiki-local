@@ -8,9 +8,9 @@
 
 ### New Features
 
-- **Multi-language support** — `olw ingest` detects the language of each note and stores it. `olw compile` then writes each article in the appropriate language: the detected language if all sources agree, the vault-wide `language` setting from `wiki.toml` if configured, or English as a fallback. French notes produce French articles, Japanese notes produce Japanese articles, and so on.
+- **Multi-language support** — `olw ingest` detects the language of each note and stores it. `olw compile` then writes each article in the appropriate language: the detected language if all sources agree, or the vault-wide `language` setting from `wiki.toml` if configured. French notes produce French articles, Japanese notes produce Japanese articles, and so on.
 
-- **`olw review --reject-all`** — Reject every pending draft in one step with a shared feedback message. Useful when a bad prompt version or wrong model produced a full batch of unusable drafts.
+- **`olw reject --all`** — Reject every pending draft in one step with a shared feedback message. Useful when a bad prompt version or wrong model produced a full batch of unusable drafts.
 
 - **Vault auto-detection** — Commands no longer fail when `--vault` is not passed and no default was saved in `olw setup`. If you're inside a vault directory (or any subdirectory), `olw` finds it automatically by walking up to the nearest `wiki.toml`. The "press Enter to skip" flow in setup now actually makes sense.
 
