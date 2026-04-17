@@ -162,8 +162,12 @@ class StateDB:
             # Check that all columns from the current schema version exist so we
             # don't skip migrations on a partially-upgraded DB (e.g. v2 DB with
             # approved_at but no language column).
-            wiki_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()}
-            note_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(raw_notes)").fetchall()}
+            wiki_cols = {
+                r[1] for r in self._conn.execute("PRAGMA table_info(wiki_articles)").fetchall()
+            }
+            note_cols = {
+                r[1] for r in self._conn.execute("PRAGMA table_info(raw_notes)").fetchall()
+            }
             if "approved_at" in wiki_cols and "language" in note_cols:
                 with self._tx():
                     self._conn.execute(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from obsidian_llm_wiki.models import RawNoteRecord, WikiArticleRecord
-from obsidian_llm_wiki.state import StateDB, _CURRENT_SCHEMA_VERSION
+from obsidian_llm_wiki.state import _CURRENT_SCHEMA_VERSION, StateDB
 
 
 @pytest.fixture
