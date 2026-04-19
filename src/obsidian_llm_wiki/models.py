@@ -47,6 +47,13 @@ class AnalysisResult(BaseModel):
         description="ISO 639-1 language code of the note (e.g. 'en', 'fr', 'de'). Null if uncertain.",  # noqa: E501
     )
 
+    @field_validator("concepts", mode="before")
+    @classmethod
+    def coerce_concepts(cls, v: Any) -> list[Any]:
+        if not isinstance(v, list):
+            return v
+        return [{"name": item, "aliases": []} if isinstance(item, str) else item for item in v]
+
 
 class ArticlePlan(BaseModel):
     """Single entry in a CompilePlan — no content, just the roadmap."""
