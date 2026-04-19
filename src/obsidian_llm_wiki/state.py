@@ -247,8 +247,7 @@ class StateDB:
                 alias = alias.strip()
                 if alias and alias.lower() != name.lower():
                     self._conn.execute(
-                        "INSERT OR IGNORE INTO concept_aliases"
-                        " (concept_name, alias) VALUES (?, ?)",
+                        "INSERT OR IGNORE INTO concept_aliases (concept_name, alias) VALUES (?, ?)",
                         (name, alias),
                     )
         self._conn.commit()
