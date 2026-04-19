@@ -138,6 +138,72 @@ pass "uv sync"
 OLW="uv run --project $REPO_DIR olw"
 export OLW_VAULT="$VAULT_DIR"
 
+# ── Structured output resilience (PR #32 + _make_template recursion) ──────────
+# Pure-Python regression guard — runs without any LLM. Verifies:
+#   1. AnalysisResult.coerce_concepts wraps list[str] → list[Concept] (PR #32)
+#   2. Mixed list[str | dict] still validates
+#   3. _make_template renders list[Concept] as nested object example, not the
+#      array description string (root cause behind PR #32)
+#   4. request_structured end-to-end handles a string-concept LLM response
+header "Structured output resilience"
+
+_SO_SCRIPT=$(mktemp /tmp/olw_so_smoke.XXXXXX.py)
+cat > "$_SO_SCRIPT" <<'PYEOF'
+import json
+from unittest.mock import MagicMock
+
+from obsidian_llm_wiki.models import AnalysisResult
+from obsidian_llm_wiki.structured_output import _make_template, request_structured
+
+r = AnalysisResult(
+    summary="s",
+    concepts=["Foo", "Bar"],
+    suggested_topics=[],
+    quality="high",
+    language=None,
+)
+assert [c.name for c in r.concepts] == ["Foo", "Bar"]
+assert all(c.aliases == [] for c in r.concepts)
+
+r = AnalysisResult(
+    summary="s",
+    concepts=[{"name": "A", "aliases": ["a"]}, "B"],
+    suggested_topics=[],
+    quality="high",
+    language=None,
+)
+assert r.concepts[0].aliases == ["a"]
+assert r.concepts[1].name == "B" and r.concepts[1].aliases == []
+
+tpl = json.loads(_make_template(AnalysisResult))
+assert isinstance(tpl["concepts"][0], dict), tpl["concepts"]
+assert set(tpl["concepts"][0]) == {"name", "aliases"}
+
+fake = json.dumps({
+    "summary": "s",
+    "concepts": ["Alpha", "Beta"],
+    "suggested_topics": [],
+    "quality": "high",
+})
+client = MagicMock()
+client.generate.return_value = fake
+parsed = request_structured(
+    client=client,
+    prompt="x",
+    model_class=AnalysisResult,
+    model="fake",
+    max_retries=0,
+)
+assert [c.name for c in parsed.concepts] == ["Alpha", "Beta"]
+print("ok")
+PYEOF
+
+_SO_OUT=$(uv run --project "$REPO_DIR" python "$_SO_SCRIPT" 2>&1); _SO_RC=$?
+rm -f "$_SO_SCRIPT"
+if [[ $_SO_RC -ne 0 ]]; then echo "$_SO_OUT"; fi
+check "string-concept list coerced end-to-end (PR #32 + template fix)" \
+    "test $_SO_RC -eq 0"
+
 # ── Init ──────────────────────────────────────────────────────────────────────
 header "olw init"
 

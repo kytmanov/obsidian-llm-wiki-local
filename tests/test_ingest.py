@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from obsidian_llm_wiki.config import Config
-from obsidian_llm_wiki.models import AnalysisResult
+from obsidian_llm_wiki.models import AnalysisResult, Concept
 from obsidian_llm_wiki.pipeline.ingest import (
     _SYSTEM,
     _analyze_body,
@@ -516,3 +516,30 @@ def test_merge_chunk_results_picks_first_detected_language():
     )
     merged = _merge_chunk_results([make(None), make("de"), make("fr")])
     assert merged.language == "de"
+
+
+# ── AnalysisResult.coerce_concepts ────────────────────────────────────────────
+
+
+def test_analysis_result_coerces_string_concepts():
+    r = AnalysisResult(
+        summary="s",
+        concepts=["Foo", "Bar"],
+        suggested_topics=[],
+        quality="high",
+        language=None,
+    )
+    assert r.concepts == [Concept(name="Foo", aliases=[]), Concept(name="Bar", aliases=[])]
+
+
+def test_analysis_result_accepts_mixed_concepts():
+    r = AnalysisResult(
+        summary="s",
+        concepts=[{"name": "A", "aliases": ["a"]}, "B"],
+        suggested_topics=[],
+        quality="high",
+        language=None,
+    )
+    assert r.concepts[0].aliases == ["a"]
+    assert r.concepts[1].name == "B"
+    assert r.concepts[1].aliases == []

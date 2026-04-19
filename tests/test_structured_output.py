@@ -11,9 +11,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from obsidian_llm_wiki.models import AnalysisResult, CompilePlan, SingleArticle
+from obsidian_llm_wiki.models import AnalysisResult, CompilePlan, LintResult, SingleArticle
 from obsidian_llm_wiki.ollama_client import OllamaClient
-from obsidian_llm_wiki.structured_output import StructuredOutputError, request_structured
+from obsidian_llm_wiki.structured_output import (
+    StructuredOutputError,
+    _make_template,
+    request_structured,
+)
 
 
 def _client(response: str) -> OllamaClient:
@@ -221,3 +225,47 @@ def test_single_article_missing_required_field():
             model="qwen2.5:14b",
             max_retries=0,
         )
+
+
+# ── _make_template: nested object rendering ──────────────────────────────────
+
+
+def test_template_expands_nested_object_array():
+    """AnalysisResult.concepts is list[Concept] — template must show the object shape,
+    not the array's description string."""
+    template = json.loads(_make_template(AnalysisResult))
+    concepts = template["concepts"]
+    assert isinstance(concepts, list) and len(concepts) == 1
+    assert isinstance(concepts[0], dict)
+    assert set(concepts[0].keys()) == {"name", "aliases"}
+    assert isinstance(concepts[0]["aliases"], list)
+
+
+def test_template_expands_compile_plan_articles():
+    template = json.loads(_make_template(CompilePlan))
+    articles = template["articles"]
+    assert isinstance(articles[0], dict)
+    assert {"title", "action", "path", "reasoning", "source_paths"} <= set(articles[0].keys())
+    assert articles[0]["action"] == "create | update"
+
+
+def test_template_expands_lint_issues_with_enum():
+    template = json.loads(_make_template(LintResult))
+    issue = template["issues"][0]
+    assert isinstance(issue, dict)
+    assert "orphan" in issue["issue_type"]
+    assert issue["auto_fixable"] is True
+
+
+def test_template_primitive_array_keeps_description_hint():
+    """list[str] still rendered as legacy single-string hint (not object)."""
+    template = json.loads(_make_template(AnalysisResult))
+    assert template["suggested_topics"] == [
+        "Titles of wiki articles this note should feed into (max 5)"
+    ]
+
+
+def test_template_optional_field_keeps_outer_description():
+    """Optional[str] (anyOf[str, null]) must still carry the parent field description."""
+    template = json.loads(_make_template(AnalysisResult))
+    assert "ISO 639-1" in template["language"]

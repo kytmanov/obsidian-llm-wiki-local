@@ -549,17 +549,10 @@ olw init ~/my-wiki
 
 **Q: A concept keeps getting rejected — how do I stop it from recompiling?**
 
-After 5 rejections the concept is auto-blocked and excluded from future compiles. If it blocks earlier than you'd like:
+After 5 rejections with feedback (`olw reject --feedback "…"`), the concept is auto-blocked and excluded from future compiles. `olw status` lists blocked concepts. To re-enable one:
 
 ```bash
-olw unblock "Concept Name"   # re-enable
-```
-
-Or manually block it:
-
-```bash
-# Mark as blocked so compile skips it
-olw status   # shows blocked concepts
+olw unblock "Concept Name"
 ```
 
 ---

@@ -8,12 +8,15 @@ reliably produce valid JSON for them.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 from .sanitize import sanitize_tags
+
+log = logging.getLogger(__name__)
 
 # ── LLM Output Models (keep schemas small and flat) ──────────────────────────
 
@@ -52,6 +55,9 @@ class AnalysisResult(BaseModel):
     def coerce_concepts(cls, v: Any) -> list[Any]:
         if not isinstance(v, list):
             return v
+        n_coerced = sum(1 for item in v if isinstance(item, str))
+        if n_coerced:
+            log.debug("coerced %d/%d bare-string concepts to Concept objects", n_coerced, len(v))
         return [{"name": item, "aliases": []} if isinstance(item, str) else item for item in v]
 
 

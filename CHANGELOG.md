@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.1] - 2026-04-19
+
+### Highlights
+
+**v0.5.1 hardens the pipeline against a common quirk of small local models.** When the fast model returns `concepts` as a flat list of strings instead of `{name, aliases}` objects, ingest no longer fails — the payload is coerced transparently and the note proceeds. The root cause, an over-literal JSON template passed to the model, is also fixed so every `list[Model]` field benefits from the same resilience.
+
+### Bug Fixes
+
+- **String-concept tolerance (#32)** — `AnalysisResult` accepts a flat list of concept strings from the LLM and wraps them into `Concept` objects with empty aliases. Mixed payloads (some strings, some dicts) also validate. A `log.debug` line fires when coercion triggers, so the signal stays observable for prompt-tuning.
+- **Structured-output template renders nested objects** — the fill-in JSON example passed to the fast model now expands `list[Concept]`, `list[ArticlePlan]`, and `list[LintIssue]` into their real shape, including enum discriminator values. Previously the model saw only the array's description string and sometimes produced wrong item types. `Optional[...]` fields still carry their outer description through `anyOf`.
+
+### Changes
+
+- **Cleaner error when the vault path is missing** — `olw <cmd>` now prints a short, actionable message pointing at `olw init` or `olw setup` instead of surfacing a raw config-loading traceback.
+- **Smoke test**: new pre-LLM "Structured output resilience" block pins the validator + template + `request_structured` end-to-end against a stub client, so the class of failure above is caught in the installed artifact without requiring a running model.
+- README: concept-block rejection / `olw unblock` section trimmed and clarified.
+
 ## [0.5.0] - 2026-04-18
 
 ### Highlights

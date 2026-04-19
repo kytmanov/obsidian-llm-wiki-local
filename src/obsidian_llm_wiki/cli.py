@@ -55,7 +55,16 @@ def _load_config(vault_str: str | None, **kwargs):
             err=True,
         )
         sys.exit(1)
-    return Config.from_vault(Path(vault_str), **kwargs)
+    vault_path = Path(vault_str).expanduser().resolve()
+    if not vault_path.exists():
+        click.echo(
+            f"Error: vault path does not exist: {vault_path}\n"
+            f"Run `olw init {vault_path}` to create it, or re-run `olw setup` "
+            f"to update the default vault.",
+            err=True,
+        )
+        sys.exit(1)
+    return Config.from_vault(vault_path, **kwargs)
 
 
 def _load_db(config):

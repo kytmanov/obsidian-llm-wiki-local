@@ -44,28 +44,59 @@ class StructuredOutputError(Exception):
     pass
 
 
+def _resolve_ref(node: dict, defs: dict) -> dict:
+    if "$ref" in node:
+        key = node["$ref"].rsplit("/", 1)[-1]
+        return defs.get(key, {})
+    return node
+
+
+def _render_example(node: dict, defs: dict, field_name: str = "") -> object:
+    """Render a schema node as a fill-in JSON example value."""
+    node = _resolve_ref(node, defs)
+
+    if "anyOf" in node and "type" not in node:
+        outer_desc = node.get("description", "")
+        for alt in node["anyOf"]:
+            if alt.get("type") != "null":
+                if outer_desc and "description" not in alt:
+                    alt = {**alt, "description": outer_desc}
+                return _render_example(alt, defs, field_name)
+        return None
+
+    ftype = node.get("type")
+    desc = node.get("description", "")
+    enum = node.get("enum")
+
+    if enum:
+        return " | ".join(str(e) for e in enum)
+    if ftype == "array":
+        items = _resolve_ref(node.get("items", {}), defs)
+        if items.get("type") == "object" or "properties" in items:
+            return [_render_example(items, defs, field_name)]
+        return [desc[:60] or f"<{field_name} item>"]
+    if ftype == "object" or "properties" in node:
+        return {
+            sub_name: _render_example(sub, defs, sub_name)
+            for sub_name, sub in node.get("properties", {}).items()
+        }
+    if ftype in ("integer", "number"):
+        return 0
+    if ftype == "boolean":
+        return True
+    return desc[:80] or f"<{field_name}>"
+
+
 def _make_template(model_class: type[T]) -> str:
-    """Build a fill-in JSON example from model fields (simpler than raw JSON Schema)."""
+    """Build a fill-in JSON example from model fields (simpler than raw JSON Schema).
+
+    Recursively expands nested objects so small models see the real structure
+    for fields typed as `list[NestedModel]` instead of the array description.
+    """
     schema = model_class.model_json_schema()
+    defs = schema.get("$defs", {}) or schema.get("definitions", {})
     props = schema.get("properties", {})
-
-    template: dict = {}
-    for field_name, field_schema in props.items():
-        ftype = field_schema.get("type", "string")
-        desc = field_schema.get("description", "")
-        enum = field_schema.get("enum")
-
-        if enum:
-            template[field_name] = " | ".join(str(e) for e in enum)
-        elif ftype == "array":
-            template[field_name] = [desc[:60] or f"<{field_name} item>"]
-        elif ftype in ("integer", "number"):
-            template[field_name] = 0
-        elif ftype == "boolean":
-            template[field_name] = True
-        else:
-            template[field_name] = desc[:80] or f"<{field_name}>"
-
+    template = {name: _render_example(sub, defs, name) for name, sub in props.items()}
     return json.dumps(template, indent=2)
 
 
