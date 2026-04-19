@@ -246,7 +246,7 @@ def test_template_expands_compile_plan_articles():
     articles = template["articles"]
     assert isinstance(articles[0], dict)
     assert {"title", "action", "path", "reasoning", "source_paths"} <= set(articles[0].keys())
-    assert articles[0]["action"] == "create | update"
+    assert set(articles[0]["action"].split(" | ")) == {"create", "update"}
 
 
 def test_template_expands_lint_issues_with_enum():

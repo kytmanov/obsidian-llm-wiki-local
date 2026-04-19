@@ -47,7 +47,8 @@ class StructuredOutputError(Exception):
 def _resolve_ref(node: dict, defs: dict) -> dict:
     if "$ref" in node:
         key = node["$ref"].rsplit("/", 1)[-1]
-        return defs.get(key, {})
+        resolved = defs.get(key)
+        return resolved if isinstance(resolved, dict) else node
     return node
 
 

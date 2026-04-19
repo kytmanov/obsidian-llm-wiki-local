@@ -147,7 +147,7 @@ export OLW_VAULT="$VAULT_DIR"
 #   4. request_structured end-to-end handles a string-concept LLM response
 header "Structured output resilience"
 
-_SO_SCRIPT=$(mktemp /tmp/olw_so_smoke.XXXXXX.py)
+_SO_SCRIPT=$(mktemp /tmp/olw_so_smoke.XXXXXX)
 cat > "$_SO_SCRIPT" <<'PYEOF'
 import json
 from unittest.mock import MagicMock

@@ -64,6 +64,14 @@ def _load_config(vault_str: str | None, **kwargs):
             err=True,
         )
         sys.exit(1)
+    if not vault_path.is_dir():
+        click.echo(
+            f"Error: vault path is not a directory: {vault_path}\n"
+            "A vault is a directory containing wiki.toml. "
+            "Point --vault / OLW_VAULT at the parent directory instead.",
+            err=True,
+        )
+        sys.exit(1)
     return Config.from_vault(vault_path, **kwargs)
 
 
