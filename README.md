@@ -40,16 +40,17 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Rich review interface** — `olw review` lists drafts ranked by rejection count, shows diffs vs published and vs the last rejected version
 - **Pipeline orchestrator** — `olw run` runs ingest → compile → lint → [approve] as one command with timing and failure classification
 - **Selective recompile** — after a file save, only concepts linked to that source are recompiled (not the entire wiki)
-- **Self-maintenance** — `olw maintain` creates stub articles for broken wikilinks, suggests orphan link fixes, and warns about low-quality source distribution
+- **Self-maintenance** — `olw maintain --fix` repairs broken wikilinks via the alias map, creates stub articles for genuinely missing targets, and normalizes `[[Alias]]` links across published pages to `[[Canonical|Alias]]`
 - **Manual edit protection** — edited an article by hand? The compiler detects the change and skips it
 - **Source traceability** — every article links back to the raw notes it was built from
 - **File watcher** — `olw watch` auto-processes anything dropped into `raw/`
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
+- **Concept aliases** — aliases (e.g. `PC` for "Program Counter") are extracted at ingest, written to each article's frontmatter, and used to resolve queries and repair broken wikilinks (`olw maintain --fix` rewrites `[[PC]]` to `[[Program Counter|PC]]`)
 - **Multi-language** — automatically detects the language of each note at ingest time; articles are written in the detected language; override globally with `language = "en"` in `wiki.toml`
 - **Multi-provider** — swap Ollama for Groq, Together AI, LM Studio, vLLM, Azure OpenAI, or any OpenAI-compatible endpoint via `olw setup`
-- **Offline test suite** — all 373 tests run without Ollama or any provider
+- **Offline test suite** — all 418 tests run without Ollama or any provider
 
 ---
 
@@ -398,7 +399,7 @@ After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to 
 | `olw reject --all --feedback "..."` | Discard all drafts with feedback |
 | `olw unblock "Concept"` | Re-enable a concept blocked after 5 rejections |
 | `olw maintain` | Health check + stubs + orphan and merge suggestions |
-| `olw maintain --fix` | Auto-fix issues and create stub articles |
+| `olw maintain --fix` | Repair broken alias links, create stubs, normalize alias wikilinks |
 | `olw maintain --dry-run` | Report issues without making changes |
 | `olw status` | Show pipeline state and pending drafts |
 | `olw status --failed` | List failed notes with error messages |
@@ -479,10 +480,14 @@ uv sync --group dev
 uv run pytest
 ```
 
-For the full end-to-end smoke test (requires a running Ollama instance):
+For the full end-to-end smoke test (requires a running provider):
 
 ```bash
-OLLAMA_URL=http://localhost:11434 bash scripts/smoke_test.sh
+# Ollama (default)
+bash scripts/smoke_test.sh
+
+# LM Studio or any other OpenAI-compatible endpoint
+PROVIDER=lm_studio bash scripts/smoke_test.sh
 ```
 
 ---

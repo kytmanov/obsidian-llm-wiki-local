@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.5.0] - 2026-04-18
+
+### Highlights
+
+**v0.5 makes the wiki resilient to the natural way humans refer to concepts.** When you write about "Program Counter" once and later mention "PC", `olw` now recognizes they're the same thing. Aliases are extracted at ingest, stored alongside articles, and used everywhere the pipeline resolves a concept name — so broken links to common abbreviations get repaired automatically, and queries using either form land on the right article.
+
+### New Features
+
+- **Concept aliases** — during ingest, the fast model extracts short aliases for each concept (e.g. "Program Counter (PC)" → alias `PC`). Aliases are stored in the state DB and written into each article's `aliases:` frontmatter, so Obsidian picks them up for its own link suggestions.
+
+- **Alias-aware link repair** — `olw maintain --fix` now rewrites broken `[[Alias]]` wikilinks to `[[Canonical|Alias]]` when an unambiguous alias is known. Links inside code fences are left untouched. Still-unresolvable targets fall through to stub creation as before.
+
+- **Alias-aware queries and health checks** — `olw query` resolves page routes through the alias map when the canonical name misses, and `olw lint` counts alias forms as valid links so they don't get flagged as broken.
+
+- **`olw status --failed`** — filter the status report to only failed notes with their error messages. Useful when triaging after a bulk ingest.
+
+### Changes
+
+- The auto-generated wiki index is now `wiki/index.md` (lowercase). Vaults created before v0.5 with `wiki/INDEX.md` are handled transparently — no manual rename needed.
+- Smoke test suite expanded: 105 end-to-end assertions now cover lint issue-type coverage, `maintain --fix` idempotency, stub frontmatter shape, legacy-compile bit-rot, and the `status --failed` filter.
+
+### Breaking Changes
+
+None. Existing vaults upgrade automatically on first `olw` run: the DB gains a `concept_aliases` table, aliases are backfilled from current concept titles (deterministic, no LLM calls), and any legacy `INDEX.md` is treated like the new lowercase form.
+
 ## [0.4.0] - 2026-04-16
 
 ### Highlights
