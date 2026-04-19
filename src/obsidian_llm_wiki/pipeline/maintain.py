@@ -22,6 +22,8 @@ from ..config import Config
 from ..models import LintIssue
 from ..state import StateDB
 from ..vault import (
+    _mask_code_blocks,
+    _restore_code_blocks,
     atomic_write,
     list_wiki_articles,
     normalize_wikilinks,
@@ -91,6 +93,8 @@ def fix_broken_links(
             continue
 
         original_body = body
+        # Mask code fences so repair doesn't rewrite [[...]] inside ```code``` or `inline`.
+        masked_body, spans = _mask_code_blocks(body)
         repaired_in_file: list[tuple[str, str]] = []
         still_broken_in_file: list[LintIssue] = []
 
@@ -122,12 +126,14 @@ def fix_broken_links(
 
                 return _rewrite
 
-            new_body = _WIKILINK_REPAIR_RE.sub(_make_rewriter(target, canonical), body)
-            if new_body != body:
+            new_masked = _WIKILINK_REPAIR_RE.sub(_make_rewriter(target, canonical), masked_body)
+            if new_masked != masked_body:
                 repaired_in_file.append((f"[[{target}]]", f"[[{canonical}|{target}]]"))
-                body = new_body
+                masked_body = new_masked
             else:
                 still_broken_in_file.append(issue)
+
+        body = _restore_code_blocks(masked_body, spans)
 
         if body != original_body:
             if dry_run:

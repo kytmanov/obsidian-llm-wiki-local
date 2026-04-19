@@ -107,7 +107,12 @@ def _build_title_index(config: Config, db: StateDB | None = None) -> dict[str, P
             title = meta.get("title", "")
             if title:
                 index[title.lower()] = md
-            for alias in meta.get("aliases", []):
+            aliases = meta.get("aliases", [])
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            elif not isinstance(aliases, list):
+                aliases = []
+            for alias in aliases:
                 if isinstance(alias, str) and alias.strip():
                     alias_targets.setdefault(alias.strip().lower(), []).append(md)
         except Exception:

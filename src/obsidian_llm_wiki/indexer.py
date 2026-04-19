@@ -63,7 +63,8 @@ def generate_index(config: Config, db: StateDB) -> Path:
     known_titles = {a.title for a in concept_articles}
     if config.wiki_dir.exists():
         for md in sorted(config.wiki_dir.glob("*.md")):
-            if md.name == "index.md" or md.name == "log.md":
+            # Skip index + log (any case, covers legacy INDEX.md from pre-v0.5 vaults)
+            if md.name.lower() in ("index.md", "log.md"):
                 continue
             try:
                 meta, _ = parse_note(md)

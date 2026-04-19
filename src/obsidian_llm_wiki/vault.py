@@ -281,6 +281,7 @@ def normalize_wikilinks(body: str, alias_map: dict[str, str], known_titles: set[
     - Code blocks are protected from rewrites.
     """
     masked, spans = _mask_code_blocks(body)
+    known_lower = {t.lower() for t in known_titles}
 
     def _rewrite(m: re.Match) -> str:
         target = m.group(1).strip()
@@ -288,7 +289,7 @@ def normalize_wikilinks(body: str, alias_map: dict[str, str], known_titles: set[
         display = m.group(3)  # may be None
 
         # Already a known canonical title → leave unchanged
-        if target.lower() in {t.lower() for t in known_titles}:
+        if target.lower() in known_lower:
             return m.group(0)
 
         # Try alias map

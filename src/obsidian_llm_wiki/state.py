@@ -192,12 +192,13 @@ class StateDB:
                         "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3)"
                     )
                 current_version = 3
-            # Existing DB with no version tracking — start from 0, apply all migrations.
-            with self._tx():
-                self._conn.execute(
-                    "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 0)"
-                )
-            current_version = 0
+            else:
+                # Existing DB with no version tracking — start from 0, apply all migrations.
+                with self._tx():
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 0)"
+                    )
+                current_version = 0
         else:
             current_version = row[0]
 
@@ -245,14 +246,11 @@ class StateDB:
             for alias in aliases:
                 alias = alias.strip()
                 if alias and alias.lower() != name.lower():
-                    try:
-                        self._conn.execute(
-                            "INSERT OR IGNORE INTO concept_aliases"
-                            " (concept_name, alias) VALUES (?, ?)",
-                            (name, alias),
-                        )
-                    except Exception:
-                        pass
+                    self._conn.execute(
+                        "INSERT OR IGNORE INTO concept_aliases"
+                        " (concept_name, alias) VALUES (?, ?)",
+                        (name, alias),
+                    )
         self._conn.commit()
 
     def close(self) -> None:
@@ -385,7 +383,7 @@ class StateDB:
                 )
 
     def get_aliases(self, concept_name: str) -> list[str]:
-        """All aliases stored for a concept (case-sensitive match on concept_name)."""
+        """All aliases stored for a concept (case-insensitive match on concept_name)."""
         rows = self._conn.execute(
             "SELECT alias FROM concept_aliases WHERE lower(concept_name) = lower(?) ORDER BY alias",
             (concept_name,),
