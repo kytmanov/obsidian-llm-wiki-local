@@ -258,6 +258,28 @@ def _init_existing(vault: Path, non_interactive: bool) -> None:
 
     _write_vault_schema(vault)
     _write_index(vault)
+    _cleanup_legacy_index(vault)
+
+
+def _cleanup_legacy_index(vault: Path) -> None:
+    """Remove wiki/INDEX.md if it's the bootstrap stub and is distinct from wiki/index.md."""
+    old = vault / "wiki" / "INDEX.md"
+    new = vault / "wiki" / "index.md"
+    if not old.exists():
+        return
+    # On case-insensitive FS old and new are the same file — don't delete
+    if new.exists():
+        try:
+            if old.samefile(new):
+                return
+        except OSError:
+            return
+    try:
+        content = old.read_text(encoding="utf-8")
+        if content == _INDEX_STUB:
+            old.unlink()
+    except Exception:
+        pass
 
 
 def _write_vault_schema(vault: Path) -> None:
@@ -277,14 +299,17 @@ def _write_vault_schema(vault: Path) -> None:
         )
 
 
+_INDEX_STUB = (
+    "---\ntitle: Index\ntags: [index]\nstatus: published\n---\n\n"
+    "# Wiki Index\n\n_Updated automatically by olw._\n"
+)
+
+
 def _write_index(vault: Path) -> None:
-    index = vault / "wiki" / "INDEX.md"
+    index = vault / "wiki" / "index.md"
     if not index.exists():
         index.parent.mkdir(parents=True, exist_ok=True)
-        index.write_text(
-            "---\ntitle: Index\ntags: [index]\nstatus: published\n---\n\n"
-            "# Wiki Index\n\n_Updated automatically by olw._\n"
-        )
+        index.write_text(_INDEX_STUB)
 
 
 # ── setup ─────────────────────────────────────────────────────────────────────
@@ -1551,7 +1576,13 @@ def maintain(vault_str, fix, stubs_only, dry_run):
     """Wiki maintenance: lint, stub creation, orphan suggestions, concept merge hints."""
     from .pipeline.lint import run_lint
     from .pipeline.lock import pipeline_lock
-    from .pipeline.maintain import create_stubs, suggest_concept_merges, suggest_orphan_links
+    from .pipeline.maintain import (
+        create_stubs,
+        fix_broken_links,
+        normalize_published_alias_links,
+        suggest_concept_merges,
+        suggest_orphan_links,
+    )
 
     config = _load_config(vault_str)
     db = _load_db(config)
@@ -1607,17 +1638,41 @@ def maintain(vault_str, fix, stubs_only, dry_run):
                 console.print(f"  [bold]{iss.issue_type}[/bold]{fix_tag}  {iss.path}")
                 console.print(f"    {iss.description}")
 
-        # Stub creation
+        # Alias link normalization in published articles (fix [[Alias]] → [[Canonical|Alias]])
+        # Runs independently of broken-link detection: lint resolves aliases so they never
+        # appear as broken, but published articles may still have raw alias-form links.
+        if fix and not stubs_only:
+            alias_normalized = normalize_published_alias_links(config, db, dry_run=dry_run)
+            if alias_normalized:
+                console.print(
+                    f"\n[green]Normalized alias links in {alias_normalized} article(s).[/green]"
+                )
+
+        # Broken link repair + stub creation
         broken = [i for i in result.issues if i.issue_type == "broken_link"]
         if broken:
-            if fix and not dry_run:
+            if fix and not stubs_only:
+                repair = fix_broken_links(config, db, broken, dry_run=dry_run)
+                if repair.repaired:
+                    console.print(f"\n[green]Repaired {repair.repaired} broken link(s).[/green]")
+                remaining = repair.still_broken
+                if remaining and not dry_run:
+                    created = create_stubs(config, db, broken_link_issues=remaining)
+                    if created:
+                        console.print(f"[green]Created {len(created)} stub(s).[/green]")
+                elif remaining:
+                    console.print(
+                        f"[dim]{len(remaining)} link(s) unresolvable"
+                        f" — stubs would be created.[/dim]"
+                    )
+            elif fix:
                 created = create_stubs(config, db, broken_link_issues=broken)
                 if created:
                     console.print(f"\n[green]Created {len(created)} stub(s).[/green]")
             else:
                 console.print(
                     f"\n[dim]{len(broken)} broken link(s) — "
-                    f"run [bold]olw maintain --fix[/bold] to create stubs.[/dim]"
+                    f"run [bold]olw maintain --fix[/bold] to repair or create stubs.[/dim]"
                 )
 
         # Orphan suggestions

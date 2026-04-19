@@ -56,7 +56,7 @@ def _analysis_json(n_concepts: int = 4) -> str:
     return json.dumps(
         {
             "summary": "A concise two-sentence summary of the note content.",
-            "key_concepts": [f"Concept {i}" for i in range(n_concepts)],
+            "concepts": [{"name": f"Concept {i}", "aliases": []} for i in range(n_concepts)],
             "suggested_topics": ["Topic A", "Topic B"],
             "quality": "high",
         }
@@ -70,9 +70,11 @@ def _mock_client(n_concepts: int = 4) -> MagicMock:
 
 
 def _make_result(n: int = 4) -> AnalysisResult:
+    from obsidian_llm_wiki.models import Concept
+
     return AnalysisResult(
         summary="Summary.",
-        key_concepts=[f"Concept {i}" for i in range(n)],
+        concepts=[Concept(name=f"Concept {i}", aliases=[]) for i in range(n)],
         suggested_topics=["Topic"],
         quality="high",
     )

@@ -36,7 +36,7 @@ def _load_index(config: Config) -> str:
     return index_path.read_text(encoding="utf-8")
 
 
-def _find_page(config: Config, title: str) -> Path | None:
+def _find_page(config: Config, title: str, db: StateDB | None = None) -> Path | None:
     """Resolve a title to a file path. Checks wiki/ root then sources/."""
     # Exact filename match (wiki root)
     candidate = config.wiki_dir / f"{title}.md"
@@ -56,14 +56,19 @@ def _find_page(config: Config, title: str) -> Path | None:
                 return md
         except Exception:
             pass
+    # Alias resolution fallback
+    if db is not None:
+        canonical = db.resolve_alias(title)
+        if canonical is not None:
+            return _find_page(config, canonical, db=None)
     return None
 
 
-def _load_pages(config: Config, page_titles: list[str]) -> str:
+def _load_pages(config: Config, page_titles: list[str], db: StateDB | None = None) -> str:
     """Return concatenated content of selected pages."""
     parts: list[str] = []
     for title in page_titles[:MAX_PAGES]:
-        page = _find_page(config, title)
+        page = _find_page(config, title, db=db)
         if page is None:
             continue
         try:
@@ -114,7 +119,7 @@ def run_query(
     )
 
     # Step 2: load selected pages
-    context = _load_pages(config, selection.pages)
+    context = _load_pages(config, selection.pages, db=db)
     if not context:
         context = "(No matching wiki pages found.)"
 

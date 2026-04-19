@@ -8,6 +8,7 @@ Schema versioning: schema_version table tracks migration level.
   v1 — initial (summary/quality columns on raw_notes)
   v2 — rejections, stubs, blocked_concepts tables; approved_at/approval_notes on wiki_articles
   v3 — language column on raw_notes
+  v4 — concept_aliases table; backfill from existing concept titles
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from pathlib import Path
 
 from .models import RawNoteRecord, WikiArticleRecord
 
-_CURRENT_SCHEMA_VERSION = 3
+_CURRENT_SCHEMA_VERSION = 4
 
 # Full current schema — idempotent (CREATE IF NOT EXISTS).
 # Fresh DBs get all tables + columns from here. Existing DBs use _VERSIONED_MIGRATIONS.
@@ -79,10 +80,17 @@ CREATE TABLE IF NOT EXISTS blocked_concepts (
     blocked_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS concept_aliases (
+    concept_name TEXT NOT NULL,
+    alias        TEXT NOT NULL,
+    PRIMARY KEY (concept_name, alias)
+);
+
 CREATE INDEX IF NOT EXISTS idx_raw_hash ON raw_notes(content_hash);
 CREATE INDEX IF NOT EXISTS idx_raw_status ON raw_notes(status);
 CREATE INDEX IF NOT EXISTS idx_concept_name ON concepts(name);
 CREATE INDEX IF NOT EXISTS idx_rejections_concept ON rejections(concept);
+CREATE INDEX IF NOT EXISTS idx_alias_lookup ON concept_aliases(lower(alias));
 """
 
 # Migrations keyed by version they bring the DB to.
@@ -116,6 +124,14 @@ _VERSIONED_MIGRATIONS: dict[int, list[str]] = {
     ],
     3: [
         "ALTER TABLE raw_notes ADD COLUMN language TEXT",
+    ],
+    4: [
+        """CREATE TABLE IF NOT EXISTS concept_aliases (
+               concept_name TEXT NOT NULL,
+               alias        TEXT NOT NULL,
+               PRIMARY KEY (concept_name, alias)
+           )""",
+        "CREATE INDEX IF NOT EXISTS idx_alias_lookup ON concept_aliases(lower(alias))",
     ],
 }
 
@@ -169,12 +185,13 @@ class StateDB:
                 r[1] for r in self._conn.execute("PRAGMA table_info(raw_notes)").fetchall()
             }
             if "approved_at" in wiki_cols and "language" in note_cols:
+                # DB has v3 features but no version record — stamp as v3 so the v4
+                # migration (backfill) still runs through the loop below.
                 with self._tx():
                     self._conn.execute(
-                        "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
-                        (_CURRENT_SCHEMA_VERSION,),
+                        "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, 3)"
                     )
-                return
+                current_version = 3
             # Existing DB with no version tracking — start from 0, apply all migrations.
             with self._tx():
                 self._conn.execute(
@@ -196,12 +213,47 @@ class StateDB:
                 except sqlite3.OperationalError as e:
                     if "duplicate column" not in str(e).lower():
                         raise
+            if version == 4:
+                self._backfill_aliases_v4()
             with self._tx():
                 self._conn.execute(
                     "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
                     (version,),
                 )
             current_version = version
+
+    def _backfill_aliases_v4(self) -> None:
+        """Populate concept_aliases with deterministic aliases for all existing concepts.
+
+        Uses the same logic as vault.generate_aliases: add lowercase variant + ALL_CAPS
+        abbreviations from parenthetical notation (e.g. 'Program Counter (PC)' → 'PC').
+        No LLM calls — fast and deterministic.
+        """
+        import re as _re
+
+        abbr_pattern = _re.compile(r"\(([A-Z]{2,})\)")
+        rows = self._conn.execute("SELECT DISTINCT name FROM concepts").fetchall()
+        for (name,) in rows:
+            aliases: list[str] = []
+            lower = name.lower()
+            if lower != name:
+                aliases.append(lower)
+            for m in abbr_pattern.finditer(name):
+                abbr = m.group(1)
+                if abbr.lower() != name.lower():
+                    aliases.append(abbr)
+            for alias in aliases:
+                alias = alias.strip()
+                if alias and alias.lower() != name.lower():
+                    try:
+                        self._conn.execute(
+                            "INSERT OR IGNORE INTO concept_aliases"
+                            " (concept_name, alias) VALUES (?, ?)",
+                            (name, alias),
+                        )
+                    except Exception:
+                        pass
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -318,6 +370,60 @@ class StateDB:
             (name,),
         ).fetchall()
         return [r[0] for r in rows]
+
+    def upsert_aliases(self, concept_name: str, aliases: list[str]) -> None:
+        """Merge aliases for a concept. Skips self-matches (alias == canonical)."""
+        canonical_lower = concept_name.lower()
+        with self._tx():
+            for alias in aliases:
+                alias = alias.strip()
+                if not alias or alias.lower() == canonical_lower:
+                    continue
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO concept_aliases (concept_name, alias) VALUES (?, ?)",
+                    (concept_name, alias),
+                )
+
+    def get_aliases(self, concept_name: str) -> list[str]:
+        """All aliases stored for a concept (case-sensitive match on concept_name)."""
+        rows = self._conn.execute(
+            "SELECT alias FROM concept_aliases WHERE lower(concept_name) = lower(?) ORDER BY alias",
+            (concept_name,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def resolve_alias(self, surface: str) -> str | None:
+        """Return canonical concept name if surface unambiguously matches exactly one concept."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT concept_name FROM concept_aliases WHERE lower(alias) = lower(?)",
+            (surface,),
+        ).fetchall()
+        if len(rows) == 1:
+            return rows[0][0]
+        return None
+
+    def list_alias_map(self) -> dict[str, str]:
+        """Return {lower(alias): canonical_name} for all unambiguous aliases.
+
+        Aliases claimed by more than one concept are excluded — they are unsafe to rewrite.
+        """
+        rows = self._conn.execute(
+            "SELECT lower(alias) as al, concept_name FROM concept_aliases"
+        ).fetchall()
+        counts: dict[str, int] = {}
+        mapping: dict[str, str] = {}
+        for al, canonical in rows:
+            counts[al] = counts.get(al, 0) + 1
+            mapping[al] = canonical
+        return {al: canonical for al, canonical in mapping.items() if counts[al] == 1}
+
+    def delete_aliases_for_concept(self, concept_name: str) -> None:
+        """Remove all aliases for a concept (call when concept is removed)."""
+        with self._tx():
+            self._conn.execute(
+                "DELETE FROM concept_aliases WHERE lower(concept_name) = lower(?)",
+                (concept_name,),
+            )
 
     def get_concepts_for_sources(self, source_paths: list[str]) -> list[str]:
         """Concept names linked to any of the given source paths."""

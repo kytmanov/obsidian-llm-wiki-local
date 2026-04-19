@@ -15,7 +15,7 @@ from obsidian_llm_wiki.pipeline.ingest import (
     _analyze_body,
     _build_analysis_prompt,
     _merge_chunk_results,
-    _normalize_concept_names,
+    _normalize_concepts,
     _preprocess_web_clip,
     ingest_note,
 )
@@ -159,36 +159,44 @@ def test_build_prompt_no_chunk_label_by_default():
     assert "[part" not in prompt
 
 
-# ── _normalize_concept_names ──────────────────────────────────────────────────
+# ── _normalize_concepts ───────────────────────────────────────────────────────
+
+
+def _make_concepts(names):
+    from obsidian_llm_wiki.models import Concept
+
+    return [Concept(name=n, aliases=[]) for n in names]
 
 
 def test_normalize_reuses_canonical_case(vault, config, db):
     db.upsert_concepts("raw/a.md", ["Quantum Computing"])
-    result = _normalize_concept_names(["quantum computing"], db)
-    assert result == ["Quantum Computing"]  # canonical form preserved
+    result = _normalize_concepts(_make_concepts(["quantum computing"]), db)
+    assert [name for name, _ in result] == ["Quantum Computing"]
 
 
 def test_normalize_deduplicates(vault, config, db):
-    result = _normalize_concept_names(["ML", "ML", "Machine Learning"], db)
+    result = _normalize_concepts(_make_concepts(["ML", "ML", "Machine Learning"]), db)
     assert len(result) == 2
-    assert "ML" in result
+    assert any(name == "ML" for name, _ in result)
 
 
 def test_normalize_strips_empty(vault, config, db):
-    result = _normalize_concept_names(["", "  ", "Neural Networks"], db)
-    assert "" not in result
-    assert "  " not in result
-    assert "Neural Networks" in result
+    result = _normalize_concepts(_make_concepts(["", "  ", "Neural Networks"]), db)
+    names = [name for name, _ in result]
+    assert "" not in names
+    assert "  " not in names
+    assert "Neural Networks" in names
 
 
 # ── ingest_note ───────────────────────────────────────────────────────────────
 
 
 def _analysis_json(concepts=None, quality="high", summary="A summary."):
+    names = concepts or ["Quantum Computing", "Qubit"]
     return json.dumps(
         {
             "summary": summary,
-            "key_concepts": concepts or ["Quantum Computing", "Qubit"],
+            "concepts": [{"name": c, "aliases": []} for c in names],
             "suggested_topics": ["Quantum Computing"],
             "quality": quality,
         }
@@ -201,7 +209,7 @@ def test_ingest_note_returns_analysis_result(vault, config, db):
     result = ingest_note(path, config, client, db)
     assert result is not None
     assert result.quality == "high"
-    assert len(result.key_concepts) >= 1
+    assert len(result.concepts) >= 1
 
 
 def test_ingest_note_stores_status_ingested(vault, config, db):
@@ -361,9 +369,11 @@ def test_ingest_note_respects_max_concepts_per_source(vault, config, db):
 
 
 def _make_result(concepts, summary="Summary.", quality="high", topics=None):
+    from obsidian_llm_wiki.models import Concept
+
     return AnalysisResult(
         summary=summary,
-        key_concepts=concepts,
+        concepts=[Concept(name=c, aliases=[]) for c in concepts],
         suggested_topics=topics or ["Topic"],
         quality=quality,
     )
@@ -378,14 +388,14 @@ def test_merge_unions_concepts():
     r1 = _make_result(["A", "B"])
     r2 = _make_result(["B", "C"])
     merged = _merge_chunk_results([r1, r2])
-    assert merged.key_concepts == ["A", "B", "C"]  # B deduped
+    assert [c.name for c in merged.concepts] == ["A", "B", "C"]  # B deduped
 
 
 def test_merge_concept_dedup_case_insensitive():
     r1 = _make_result(["Machine Learning"])
     r2 = _make_result(["machine learning", "Deep Learning"])
     merged = _merge_chunk_results([r1, r2])
-    names_lower = [c.lower() for c in merged.key_concepts]
+    names_lower = [c.name.lower() for c in merged.concepts]
     assert names_lower.count("machine learning") == 1
     assert "deep learning" in names_lower
 
@@ -473,7 +483,7 @@ def test_analysis_result_stores_language_in_db(vault, config, db):
     analysis = json.dumps(
         {
             "summary": "A French note.",
-            "key_concepts": ["Bonjour"],
+            "concepts": [{"name": "Bonjour", "aliases": []}],
             "suggested_topics": ["Salutations"],
             "quality": "high",
             "language": "fr",
@@ -489,7 +499,7 @@ def test_analysis_result_language_none_stored(vault, config, db):
     analysis = json.dumps(
         {
             "summary": "Unknown language note.",
-            "key_concepts": ["Mixed"],
+            "concepts": [{"name": "Mixed", "aliases": []}],
             "suggested_topics": [],
             "quality": "medium",
             "language": None,
@@ -502,7 +512,7 @@ def test_analysis_result_language_none_stored(vault, config, db):
 
 def test_merge_chunk_results_picks_first_detected_language():
     make = lambda lang: AnalysisResult(  # noqa: E731
-        summary="s", key_concepts=[], suggested_topics=[], quality="high", language=lang
+        summary="s", concepts=[], suggested_topics=[], quality="high", language=lang
     )
     merged = _merge_chunk_results([make(None), make("de"), make("fr")])
     assert merged.language == "de"

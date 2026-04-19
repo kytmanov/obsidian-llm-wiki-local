@@ -12,11 +12,12 @@ from obsidian_llm_wiki.models import RawNoteRecord
 from obsidian_llm_wiki.pipeline.maintain import (
     _extract_link_target,
     create_stubs,
+    normalize_published_alias_links,
     suggest_concept_merges,
     suggest_orphan_links,
 )
 from obsidian_llm_wiki.state import StateDB
-from obsidian_llm_wiki.vault import atomic_write
+from obsidian_llm_wiki.vault import atomic_write, parse_note
 
 
 @pytest.fixture
@@ -173,6 +174,25 @@ def test_create_stubs_stub_body_has_info_callout(config, db):
     assert "[!info]" in content or "stub" in content.lower()
 
 
+def test_create_stubs_strips_md_extension(config, db):
+    """Model sometimes emits [[raw-note.md]] wikilinks; stub name must not be 'raw-note.md'."""
+    from obsidian_llm_wiki.models import LintIssue
+
+    issues = [
+        LintIssue(
+            path="wiki/Article.md",
+            issue_type="broken_link",
+            description="[[deep-learning.md]] not found",
+            suggestion="",
+        )
+    ]
+    created = create_stubs(config, db, broken_link_issues=issues)
+    assert len(created) == 1
+    # Stub file must NOT have double .md extension
+    assert not created[0].name.endswith(".md.md"), f"double extension: {created[0].name}"
+    assert created[0].name == "deep-learning.md"
+
+
 def test_create_stubs_empty_issues(config, db):
     created = create_stubs(config, db, broken_link_issues=[])
     assert created == []
@@ -183,6 +203,60 @@ def test_create_stubs_none_runs_lint_internally(config, db):
     # Empty wiki → lint finds no broken links → no stubs created
     created = create_stubs(config, db, broken_link_issues=None)
     assert created == []
+
+
+# ── normalize_published_alias_links ──────────────────────────────────────────
+
+
+def test_normalize_published_alias_links_rewrites_alias(config, db):
+    canonical = "Program Counter"
+    _write_article(config, canonical, "## Body\n\nHolds the next instruction address.")
+    db.upsert_aliases(canonical, ["PC"])
+
+    # Write a second article that uses the alias form
+    other = config.wiki_dir / "Other Article.md"
+    post = fm_lib.Post(
+        "[[PC]] is important.", title="Other Article", status="published", tags=[], sources=[]
+    )
+    atomic_write(other, fm_lib.dumps(post))
+
+    modified = normalize_published_alias_links(config, db)
+    assert modified >= 1
+
+    _, body = parse_note(other)
+    assert "[[Program Counter|PC]]" in body
+
+
+def test_normalize_published_alias_links_skips_canonical(config, db):
+    canonical = "Program Counter"
+    art = _write_article(config, canonical, "## Body\n\nContent.")
+    db.upsert_aliases(canonical, ["PC"])
+
+    _, body_before = parse_note(art)
+    normalize_published_alias_links(config, db)
+    _, body_after = parse_note(art)
+    assert body_before == body_after
+
+
+def test_normalize_published_alias_links_dry_run(config, db):
+    _write_article(config, "Arithmetic Logic Unit", "## Body\n\nContent.")
+    db.upsert_aliases("Arithmetic Logic Unit", ["ALU"])
+
+    other = config.wiki_dir / "Ref.md"
+    post = fm_lib.Post(
+        "See [[ALU]] for details.", title="Ref", status="published", tags=[], sources=[]
+    )
+    atomic_write(other, fm_lib.dumps(post))
+
+    modified = normalize_published_alias_links(config, db, dry_run=True)
+    assert modified >= 1
+    _, body = parse_note(other)
+    assert "[[ALU]]" in body  # not rewritten in dry-run
+
+
+def test_normalize_published_alias_links_empty_alias_map(config, db):
+    _write_article(config, "Concept", "## Body\n\nContent.")
+    assert normalize_published_alias_links(config, db) == 0
 
 
 # ── suggest_orphan_links ──────────────────────────────────────────────────────

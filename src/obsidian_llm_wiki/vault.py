@@ -248,6 +248,7 @@ def build_wiki_frontmatter(
     confidence: float,
     is_draft: bool = True,
     existing_meta: dict | None = None,
+    aliases: list[str] | None = None,
 ) -> dict[str, Any]:
     now = datetime.now().strftime("%Y-%m-%d")
     meta: dict[str, Any] = {
@@ -258,8 +259,47 @@ def build_wiki_frontmatter(
         "status": "draft" if is_draft else "published",
         "updated": now,
     }
+    if aliases:
+        meta["aliases"] = aliases
     if existing_meta and "created" in existing_meta:
         meta["created"] = existing_meta["created"]
     else:
         meta["created"] = now
     return meta
+
+
+_WIKILINK_FULL_RE = re.compile(r"\[\[([^\]|#]+?)(?:#([^\]|]*))?(?:\|([^\]]*))?\]\]")
+
+
+def normalize_wikilinks(body: str, alias_map: dict[str, str], known_titles: set[str]) -> str:
+    """Rewrite [[Alias]] → [[Canonical|Alias]] for unambiguous aliases.
+
+    - If target is already a canonical title: leave unchanged.
+    - If target matches an unambiguous alias: rewrite target to canonical, preserve display.
+    - If ambiguous or unknown: leave unchanged (lint will flag).
+    - Fragments (#) and display text (|) are preserved.
+    - Code blocks are protected from rewrites.
+    """
+    masked, spans = _mask_code_blocks(body)
+
+    def _rewrite(m: re.Match) -> str:
+        target = m.group(1).strip()
+        fragment = m.group(2)  # may be None
+        display = m.group(3)  # may be None
+
+        # Already a known canonical title → leave unchanged
+        if target.lower() in {t.lower() for t in known_titles}:
+            return m.group(0)
+
+        # Try alias map
+        canonical = alias_map.get(target.lower())
+        if canonical is None:
+            return m.group(0)  # unknown / ambiguous
+
+        # Build rewritten link preserving display and fragment
+        effective_display = display if display is not None else target
+        frag_part = f"#{fragment}" if fragment else ""
+        return f"[[{canonical}{frag_part}|{effective_display}]]"
+
+    rewritten = _WIKILINK_FULL_RE.sub(_rewrite, masked)
+    return _restore_code_blocks(rewritten, spans)

@@ -37,6 +37,7 @@ from ..vault import (
     ensure_wikilinks,
     extract_wikilinks,
     list_wiki_articles,
+    normalize_wikilinks,
     parse_note,
     sanitize_filename,
     write_note,
@@ -234,6 +235,8 @@ def _write_draft(
     confidence: float = 0.5,
     existing_meta: dict | None = None,
     existing_titles: list[str] | None = None,
+    concept_aliases: list[str] | None = None,
+    alias_map: dict[str, str] | None = None,
 ) -> Path:
     """Write SingleArticle to wiki/.drafts/ and record in state DB."""
     config.drafts_dir.mkdir(parents=True, exist_ok=True)
@@ -243,6 +246,10 @@ def _write_draft(
 
     # Inject wikilinks for known article titles mentioned in body
     body = ensure_wikilinks(content_result.content, existing_titles or [])
+    # Normalize alias-based links to canonical targets
+    if alias_map:
+        known = {t.lower() for t in (existing_titles or [])}
+        body = normalize_wikilinks(body, alias_map, known)
     body = _inject_body_sections(body, source_paths, config)
 
     # Prepend quality annotations (invisible HTML comments, stripped on approve)
@@ -263,6 +270,7 @@ def _write_draft(
         confidence=confidence,
         is_draft=True,
         existing_meta=existing_meta,
+        aliases=concept_aliases or [],
     )
 
     post = fm_lib.Post(body, **meta)
@@ -359,6 +367,8 @@ def compile_concepts(
     existing_titles = [t for t, _ in list_wiki_articles(config.wiki_dir)]
     vault_schema = _load_vault_schema(config)
     total = len(concept_names)
+    # Build alias resolution map once per compile run
+    alias_map = db.list_alias_map()
 
     if dry_run:
         for name in concept_names:
@@ -432,6 +442,8 @@ def compile_concepts(
                 confidence=0.0,
                 existing_meta=existing_meta,
                 existing_titles=existing_titles,
+                concept_aliases=db.get_aliases(name),
+                alias_map=alias_map,
             )
             draft_paths.append(draft_path)
             db.delete_stub(name)
@@ -500,6 +512,8 @@ def compile_concepts(
             confidence=confidence,
             existing_meta=existing_meta,
             existing_titles=existing_titles,
+            concept_aliases=db.get_aliases(name),
+            alias_map=alias_map,
         )
         draft_paths.append(draft_path)
         compiled_sources.update(resolved_paths)

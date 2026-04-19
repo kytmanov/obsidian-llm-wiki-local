@@ -89,9 +89,15 @@ def _body_hash(body: str) -> str:
     return hashlib.sha256(body.encode()).hexdigest()
 
 
-def _build_title_index(config: Config) -> dict[str, Path]:
-    """Map lowercase title/stem → path for every published wiki page."""
+def _build_title_index(config: Config, db: StateDB | None = None) -> dict[str, Path]:
+    """Map lowercase title/stem → path for every published wiki page.
+
+    Also indexes frontmatter aliases and (when db provided) DB alias map.
+    Ambiguous aliases (same alias → multiple pages) are excluded so they stay broken.
+    """
     index: dict[str, Path] = {}
+    alias_targets: dict[str, list[Path]] = {}  # alias_lower → candidate paths
+
     for md in config.wiki_dir.rglob("*.md"):
         if ".drafts" in md.parts:
             continue
@@ -101,8 +107,25 @@ def _build_title_index(config: Config) -> dict[str, Path]:
             title = meta.get("title", "")
             if title:
                 index[title.lower()] = md
+            for alias in meta.get("aliases", []):
+                if isinstance(alias, str) and alias.strip():
+                    alias_targets.setdefault(alias.strip().lower(), []).append(md)
         except Exception:
             pass
+
+    # Add DB alias map: alias → canonical title → path (via title index)
+    if db is not None:
+        for alias_lower, canonical in db.list_alias_map().items():
+            target = index.get(canonical.lower())
+            if target is not None:
+                alias_targets.setdefault(alias_lower, []).append(target)
+
+    # Commit unambiguous aliases to index (don't overwrite canonical title/stem entries)
+    for alias_lower, targets in alias_targets.items():
+        unique = list({id(t): t for t in targets}.values())
+        if len(unique) == 1 and alias_lower not in index:
+            index[alias_lower] = unique[0]
+
     return index
 
 
@@ -154,7 +177,7 @@ def _all_wiki_pages(config: Config) -> list[Path]:
 def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
     issues: list[LintIssue] = []
 
-    title_index = _build_title_index(config)
+    title_index = _build_title_index(config, db=db)
     inbound_index = _build_inbound_index(config)
 
     # DB records keyed by vault-relative path

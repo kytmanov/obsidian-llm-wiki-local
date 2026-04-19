@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..config import Config
-from ..models import AnalysisResult, RawNoteRecord
+from ..models import AnalysisResult, Concept, RawNoteRecord
 from ..protocols import LLMClientProtocol
 from ..state import StateDB
 from ..structured_output import request_structured
@@ -51,6 +51,9 @@ def _build_analysis_prompt(
     return (
         f"Analyze this note{label} and extract structured metadata.\n\n"
         f"Existing wiki concepts (reuse these names where applicable): {concepts_hint}\n\n"
+        f"For each concept, provide 3-5 short surface forms used in running text "
+        f"(abbreviations, short names). Example: name='Program Counter (PC)', "
+        f"aliases=['PC', 'program counter']. Use empty list if no natural aliases exist.\n\n"
         f"NOTE CONTENT:\n{body}"
     )
 
@@ -59,19 +62,33 @@ def _merge_chunk_results(results: list[AnalysisResult]) -> AnalysisResult:
     """Merge AnalysisResults from multiple chunks into one.
 
     Concepts and topics: union (deduplicated, insertion order preserved).
+    Aliases for the same concept are merged across chunks.
     Summary: first chunk's (intro is most representative).
     Quality: minimum across chunks (conservative).
     """
     if len(results) == 1:
         return results[0]
 
-    seen_concepts: set[str] = set()
-    all_concepts: list[str] = []
+    # Dedup concepts by canonical name (case-insensitive), merge aliases
+    seen: dict[str, list[str]] = {}  # lower(name) -> accumulated aliases
+    order: list[str] = []  # canonical names in insertion order
+    canonical_by_lower: dict[str, str] = {}
+
     for r in results:
-        for c in r.key_concepts:
-            if c.lower() not in seen_concepts:
-                seen_concepts.add(c.lower())
-                all_concepts.append(c)
+        for c in r.concepts:
+            key = c.name.lower()
+            if key not in seen:
+                seen[key] = list(c.aliases)
+                order.append(key)
+                canonical_by_lower[key] = c.name
+            else:
+                existing_lower = {a.lower() for a in seen[key]}
+                for a in c.aliases:
+                    if a.lower() not in existing_lower:
+                        seen[key].append(a)
+                        existing_lower.add(a.lower())
+
+    all_concepts = [Concept(name=canonical_by_lower[k], aliases=seen[k]) for k in order][:8]
 
     seen_topics: set[str] = set()
     all_topics: list[str] = []
@@ -84,12 +101,11 @@ def _merge_chunk_results(results: list[AnalysisResult]) -> AnalysisResult:
     quality_rank = {"high": 2, "medium": 1, "low": 0}
     min_result = min(results, key=lambda r: quality_rank.get(r.quality, 1))
 
-    # Use the first non-None detected language across chunks
     merged_language = next((r.language for r in results if r.language), None)
 
     return AnalysisResult(
         summary=results[0].summary,
-        key_concepts=all_concepts[:8],
+        concepts=all_concepts,
         suggested_topics=all_topics[:5],
         quality=min_result.quality,
         language=merged_language,
@@ -162,24 +178,74 @@ def _analyze_body(
     return _merge_chunk_results(results)
 
 
-def _normalize_concept_names(raw_names: list[str], db: StateDB) -> list[str]:
-    """Case-insensitive match against existing canonical concept names.
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "is",
+        "it",
+        "in",
+        "on",
+        "at",
+        "to",
+        "by",
+        "for",
+        "of",
+        "as",
+        "from",
+        "with",
+        "this",
+        "that",
+        "these",
+        "those",
+        "be",
+        "are",
+    }
+)
 
-    If a name matches an existing concept (case-insensitive), reuse the canonical form.
-    Otherwise accept as-is. Deduplicates by canonical name.
+
+def _validate_aliases(canonical: str, raw_aliases: list[str]) -> list[str]:
+    """Filter LLM-produced aliases: remove too-short, stopwords, self-matches, duplicates."""
+    seen = {canonical.lower()}
+    valid: list[str] = []
+    for alias in raw_aliases:
+        a = alias.strip()
+        if not a or a.lower() in seen:
+            continue
+        if len(a) < 2:
+            continue
+        if len(a) <= 3 and not a.isupper():
+            continue
+        if a.lower() in _STOPWORDS:
+            continue
+        seen.add(a.lower())
+        valid.append(a)
+    return valid[:5]
+
+
+def _normalize_concepts(raw_concepts: list[Concept], db: StateDB) -> list[tuple[str, list[str]]]:
+    """Case-insensitive dedup against existing canonical concept names.
+
+    Returns (canonical_name, validated_aliases) pairs.
     """
     existing = {n.lower(): n for n in db.list_all_concept_names()}
     seen: set[str] = set()
-    normalized: list[str] = []
-    for name in raw_names:
-        name = name.strip()
+    result: list[tuple[str, list[str]]] = []
+    for concept in raw_concepts:
+        name = concept.name.strip()
         if not name:
             continue
         canonical = existing.get(name.lower(), name)
-        if canonical not in seen:
-            seen.add(canonical)
-            normalized.append(canonical)
-    return normalized
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        aliases = _validate_aliases(canonical, concept.aliases)
+        result.append((canonical, aliases))
+    return result
 
 
 _HEADER_SCAN_LINES = 30  # only strip short lines from the opening section
@@ -249,7 +315,7 @@ def _create_source_summary_page(
 
     # Build concept list as [[wikilinks]]
     concept_lines = "\n".join(
-        f"- [[{sanitize_wikilink_target(c)}]]" for c in result.key_concepts[:8] if c.strip()
+        f"- [[{sanitize_wikilink_target(c.name)}]]" for c in result.concepts[:8] if c.name.strip()
     )
 
     out_meta: dict = {
@@ -382,8 +448,12 @@ def ingest_note(
 
     # Normalize concept names against existing canonical names, store linkages
     max_concepts = config.pipeline.max_concepts_per_source
-    normalized_concepts = _normalize_concept_names(result.key_concepts[:max_concepts], db)
-    db.upsert_concepts(rel_path, normalized_concepts)
+    normalized = _normalize_concepts(result.concepts[:max_concepts], db)
+    canonical_names = [name for name, _ in normalized]
+    db.upsert_concepts(rel_path, canonical_names)
+    for canonical, aliases in normalized:
+        if aliases:
+            db.upsert_aliases(canonical, aliases)
 
     # Create source summary page in wiki/sources/ (no extra LLM call)
     try:
@@ -392,7 +462,10 @@ def ingest_note(
         log.warning("Source summary page failed for %s: %s", path.name, e)
 
     log.info(
-        "Ingested: %s (quality=%s, concepts=%s)", path.name, result.quality, result.key_concepts[:3]
+        "Ingested: %s (quality=%s, concepts=%s)",
+        path.name,
+        result.quality,
+        [c.name for c in result.concepts[:3]],
     )
     return result
 

@@ -38,7 +38,7 @@ def test_valid_analysis_json(fixtures_dir):
         model="gemma4:e4b",
     )
     assert result.quality == "high"
-    assert "quantum entanglement" in result.key_concepts
+    assert any(c.name == "quantum entanglement" for c in result.concepts)
     assert len(result.suggested_topics) > 0
 
 

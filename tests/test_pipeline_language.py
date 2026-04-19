@@ -44,7 +44,7 @@ def test_ingest_detects_and_stores_language(vault, config, db):
     analysis = json.dumps(
         {
             "summary": "A French note.",
-            "key_concepts": ["Bonjour"],
+            "concepts": [{"name": "Bonjour", "aliases": []}],
             "suggested_topics": ["Salutations"],
             "quality": "high",
             "language": "fr",

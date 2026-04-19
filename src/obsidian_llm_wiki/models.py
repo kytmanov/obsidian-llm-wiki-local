@@ -18,11 +18,24 @@ from .sanitize import sanitize_tags
 # ── LLM Output Models (keep schemas small and flat) ──────────────────────────
 
 
+class Concept(BaseModel):
+    """A concept extracted from a raw note, with optional surface-form aliases."""
+
+    name: str = Field(description="Canonical concept name")
+    aliases: list[str] = Field(
+        default_factory=list,
+        description=(
+            "3-5 short surface forms a writer uses in running text "
+            "(abbreviations, short names, translations). Empty list if none."
+        ),
+    )
+
+
 class AnalysisResult(BaseModel):
     """Returned by fast model when analyzing a raw note."""
 
     summary: str = Field(description="2-3 sentence plain-English summary")
-    key_concepts: list[str] = Field(description="Main topics/concepts found (max 8)")
+    concepts: list[Concept] = Field(description="Main topics/concepts found (max 8)")
     suggested_topics: list[str] = Field(
         description="Titles of wiki articles this note should feed into (max 5)"
     )

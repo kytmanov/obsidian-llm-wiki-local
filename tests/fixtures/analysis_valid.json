@@ -1,6 +1,11 @@
 {
   "summary": "This note covers quantum entanglement and its applications in quantum computing.",
-  "key_concepts": ["quantum entanglement", "quantum computing", "superposition", "Bell states"],
+  "concepts": [
+    {"name": "quantum entanglement", "aliases": ["entanglement", "QE"]},
+    {"name": "quantum computing", "aliases": ["QC"]},
+    {"name": "superposition", "aliases": []},
+    {"name": "Bell states", "aliases": []}
+  ],
   "suggested_topics": ["Quantum Entanglement", "Quantum Computing Basics"],
   "quality": "high"
 }
