@@ -46,11 +46,12 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **File watcher** — `olw watch` auto-processes anything dropped into `raw/`
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
+- **Safe switch advisor** — `olw compare` previews your current vault against one challenger model/provider config in isolated vaults and recommends whether to switch
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
 - **Concept aliases** — aliases (e.g. `PC` for "Program Counter") are extracted at ingest, written to each article's frontmatter, and used to resolve queries and repair broken wikilinks (`olw maintain --fix` rewrites `[[PC]]` to `[[Program Counter|PC]]`)
 - **Multi-language** — automatically detects the language of each note at ingest time; articles are written in the detected language; override globally with `language = "en"` in `wiki.toml`
 - **Multi-provider** — swap Ollama for Groq, Together AI, LM Studio, vLLM, Azure OpenAI, or any OpenAI-compatible endpoint via `olw setup`
-- **Offline test suite** — all 418 tests run without Ollama or any provider
+- **Offline test suite** — 500+ tests run without Ollama or any provider
 
 ---
 
@@ -166,12 +167,78 @@ If you set a default vault in `olw setup`, the `--vault` flag is optional. Other
 
 Open `~/my-wiki` as an Obsidian vault. The graph view shows your connected wiki.
 
+Want to preview a model or provider switch before changing `wiki.toml`?
+
+```bash
+olw compare --heavy-model qwen2.5:14b
+```
+
+`olw compare` rebuilds isolated preview vaults from the same `raw/` notes and tells you whether to switch, keep your current config, or review the diffs manually.
+
 ### 7. Keep it running (optional)
 
 ```bash
 olw watch
 # Drop a file in raw/ → ingest + compile happen automatically (selective: only linked concepts)
 ```
+
+---
+
+## Compare a new model or provider
+
+`olw compare` is a vault switch advisor, not a benchmark harness. It compares your
+current vault config against one challenger config using the same active vault and
+the same `raw/` notes.
+
+```bash
+# Same provider, different heavy model
+olw compare --heavy-model qwen2.5:14b
+
+# Try a different local provider
+olw compare \
+  --provider lm_studio \
+  --provider-url http://localhost:1234/v1 \
+  --fast-model google/gemma-4-e4b \
+  --heavy-model google/gemma-4-e4b
+
+# Quick spot-check on a large vault
+olw compare --heavy-model qwen2.5:14b --sample-n 20
+```
+
+What it does:
+
+- rebuilds the current config and challenger config in isolated preview vaults
+- writes reports under `.olw/compare/<run_id>/`
+- leaves your active `raw/` and `wiki/` untouched and does not modify active `.olw/` state outside `.olw/compare/`
+- returns one verdict: `switch`, `keep_current`, or `manual_review`
+
+Useful options:
+
+- `--queries path/to/queries.toml` adds a few representative questions to the comparison
+- `--out /tmp/my-compare` writes artifacts outside the vault if you want to inspect them elsewhere
+- `--keep-artifacts` retains the ephemeral preview vaults instead of deleting them after the run
+- `--sample-n N` limits the preview to the first `N` raw notes for a fast spot-check
+- `--allow-cloud-upload` is required when the challenger uses a cloud provider
+
+Notes:
+
+- compare previews automated generated output, not the final curated vault after human review
+- the report includes a ready-to-copy `wiki.toml` snippet for the challenger when the verdict is `switch`
+
+Minimal `queries.toml` example:
+
+```toml
+[[query]]
+id = "backprop"
+question = "What is backpropagation?"
+expected_contains = ["chain rule"]
+```
+
+Reports are written as Markdown and JSON by default:
+
+- `report.md` — recommendation-first summary with next steps
+- `report.json` — full machine-readable report
+- `summary.json` — compact verdict and reason summary
 
 ---
 
@@ -290,6 +357,7 @@ my-wiki/
 ├── vault-schema.md             ← LLM context: conventions for this vault
 ├── wiki.toml                   ← configuration
 └── .olw/
+    ├── compare/                ← compare reports + optional preview vault artifacts
     ├── state.db                ← SQLite: notes, concepts, articles, rejections, stubs
     └── pipeline.lock           ← advisory lock (auto-released when the holding process exits)
 ```
@@ -386,6 +454,8 @@ After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to 
 | `olw run` | Full pipeline: ingest → compile → lint → [approve] |
 | `olw run --auto-approve` | Full pipeline, publish without review |
 | `olw run --dry-run` | Report what would happen, make no changes |
+| `olw compare --heavy-model MODEL` | Compare current vault config against one challenger model |
+| `olw compare --provider NAME --provider-url URL ...` | Compare a provider switch safely in isolated preview vaults |
 | `olw ingest --all` | Analyze all raw notes |
 | `olw ingest FILE` | Analyze one note |
 | `olw compile` | Generate wiki articles → `.drafts/` |
@@ -488,6 +558,12 @@ bash scripts/smoke_test.sh
 
 # LM Studio or any other OpenAI-compatible endpoint
 PROVIDER=lm_studio bash scripts/smoke_test.sh
+
+# Compare smoke test
+PROVIDER=lm_studio FAST_MODEL=google/gemma-4-e4b \
+HEAVY_MODEL=google/gemma-4-e4b \
+CHALLENGER_HEAVY_MODEL=nvidia/nemotron-3-nano-4b \
+bash scripts/compare_smoke.sh
 ```
 
 ---
