@@ -1866,6 +1866,12 @@ def _validate_compare_inputs(config, queries_path: str | None) -> None:
             raise click.BadParameter("--queries must not be a symlink")
 
 
+def _validate_compare_sample_n(_ctx, _param, value: int | None) -> int | None:
+    if value is None or value >= 1:
+        return value
+    raise click.BadParameter("must be at least 1")
+
+
 @cli.command(name="compare")
 @click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 @_model_override_options
@@ -1903,6 +1909,7 @@ def _validate_compare_inputs(config, queries_path: str | None) -> None:
     "sample_n",
     type=int,
     default=None,
+    callback=_validate_compare_sample_n,
     help="Limit compare to first N raw notes (useful for a quick spot-check on large vaults).",
 )
 def compare(
@@ -1960,7 +1967,7 @@ def compare(
     )
     out.mkdir(parents=True, exist_ok=True)
 
-    sample_label = f"first {sample_n} notes" if sample_n else "all notes"
+    sample_label = f"first {sample_n} notes" if sample_n is not None else "all notes"
     console.print(
         f"[bold]olw compare[/bold] — active vault preview\n"
         f"  vault={config.vault}\n"
@@ -1983,7 +1990,13 @@ def compare(
         sample_n=sample_n,
     )
 
-    from .compare.report import render_json, render_markdown, render_summary_json, resolve
+    from .compare.report import (
+        render_json,
+        render_markdown,
+        render_summary_json,
+        render_switch_config_toml,
+        resolve,
+    )
 
     resolve(report)
 
@@ -2003,8 +2016,13 @@ def compare(
     for reason in report.reasons:
         console.print(f"  · {reason}")
     if report.verdict == AdvisorVerdict.SWITCH:
+        console.print("\n[bold]Next step:[/bold] edit wiki.toml and set:")
         console.print(
-            f"\n[bold]Next step:[/bold] edit wiki.toml and set:\n"
-            f'  fast = "{challenger_config.models.fast}"\n'
-            f'  heavy = "{challenger_config.models.heavy}"'
+            render_switch_config_toml(
+                fast_model=challenger_config.models.fast,
+                heavy_model=challenger_config.models.heavy,
+                provider_name=challenger_config.effective_provider.name,
+                provider_url=challenger_config.effective_provider.url,
+            ),
+            markup=False,
         )

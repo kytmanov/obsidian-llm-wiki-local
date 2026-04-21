@@ -90,3 +90,17 @@ def test_render_summary_json_round_trips():
     data = json.loads(render_summary_json(report))
     assert data["run_id"] == "rid"
     assert "verdict" in data
+
+
+def test_render_markdown_switch_includes_provider_config():
+    report = _report()
+    report.verdict = AdvisorVerdict.SWITCH
+    report.reasons = ["challenger preview is stronger"]
+    report.challenger.provider_name = "groq"
+    report.challenger.provider_url = "https://api.groq.com/openai/v1"
+
+    md = render_markdown(report)
+
+    assert "[provider]" in md
+    assert 'name = "groq"' in md
+    assert 'url = "https://api.groq.com/openai/v1"' in md

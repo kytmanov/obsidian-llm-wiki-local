@@ -191,13 +191,15 @@ def _run_single_vault(
 def _materialize_compare_vault(
     vault: Path, raw_dir: Path, config: Config, sample_n: int | None = None
 ) -> None:
+    if sample_n is not None and sample_n < 1:
+        raise ValueError("sample_n must be at least 1")
     if any(p.is_symlink() for p in raw_dir.rglob("*.md")):
         raise ValueError("compare does not support symlinked raw notes")
     (vault / "raw").mkdir(parents=True, exist_ok=False)
     (vault / "wiki").mkdir()
     (vault / ".olw").mkdir()
     notes = sorted(raw_dir.rglob("*.md"))
-    if sample_n is not None and sample_n > 0:
+    if sample_n is not None:
         notes = notes[:sample_n]
     for note in notes:
         dst = vault / "raw" / note.relative_to(raw_dir)

@@ -35,11 +35,15 @@ def render_markdown(report: CompareReport) -> str:
     out.append("## Next Steps")
     out.append("")
     if report.verdict == AdvisorVerdict.SWITCH:
+        switch_toml = render_switch_config_toml(
+            fast_model=report.challenger.fast_model,
+            heavy_model=report.challenger.heavy_model,
+            provider_name=report.challenger.provider_name,
+            provider_url=report.challenger.provider_url,
+        )
         out.append(
-            f"Edit `wiki.toml` in your vault and set the challenger models:\n"
-            f"```toml\n[models]\n"
-            f'fast = "{report.challenger.fast_model}"\n'
-            f'heavy = "{report.challenger.heavy_model}"\n```'
+            "Edit `wiki.toml` in your vault and set the challenger config:\n"
+            f"```toml\n{switch_toml}\n```"
         )
     elif report.verdict == AdvisorVerdict.KEEP_CURRENT:
         out.append("No change needed. Your current config performed better.")
@@ -122,12 +126,53 @@ def render_summary_json(report: CompareReport) -> str:
     return json.dumps(data, indent=2)
 
 
+def render_switch_config_toml(
+    fast_model: str,
+    heavy_model: str,
+    provider_name: str,
+    provider_url: str,
+) -> str:
+    lines = [
+        "[models]",
+        f"fast = {_toml_quote(fast_model)}",
+        f"heavy = {_toml_quote(heavy_model)}",
+        "",
+    ]
+    if provider_name == "ollama":
+        lines.extend(
+            [
+                "[ollama]",
+                f"url = {_toml_quote(provider_url)}",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "[provider]",
+                f"name = {_toml_quote(provider_name)}",
+                f"url = {_toml_quote(provider_url)}",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def _fmt(value) -> str:
     if value is None:
         return "n/a"
     if isinstance(value, float):
         return f"{value:.2f}"
     return str(value)
+
+
+def _toml_quote(value: str) -> str:
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
 
 
 def _jsonable_report(report: CompareReport) -> dict:

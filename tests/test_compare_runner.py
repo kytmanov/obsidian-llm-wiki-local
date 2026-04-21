@@ -141,3 +141,12 @@ def test_run_compare_sample_n_limits_notes(tmp_path, patched_pipeline):
     #  we verify the run completed and raw notes were limited by checking no crash)
     assert isinstance(current_pages, list)
     assert isinstance(challenger_pages, list)
+
+
+def test_run_compare_rejects_negative_sample_n(tmp_path, patched_pipeline):
+    vault = _make_vault(tmp_path)
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+
+    with pytest.raises(ValueError, match="sample_n must be at least 1"):
+        run_compare(current, challenger, vault / ".olw" / "compare", sample_n=-1)

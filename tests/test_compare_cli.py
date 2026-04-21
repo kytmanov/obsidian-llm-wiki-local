@@ -5,6 +5,7 @@ from __future__ import annotations
 from click.testing import CliRunner
 
 from obsidian_llm_wiki.cli import cli
+from obsidian_llm_wiki.compare.models import AdvisorVerdict
 
 
 def _make_vault(tmp_path):
@@ -108,6 +109,24 @@ def test_compare_requires_cloud_ack(tmp_path):
     assert "--allow-cloud-upload" in result.output
 
 
+def test_compare_rejects_negative_sample_n(tmp_path):
+    vault = _make_vault(tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "compare",
+            "--vault",
+            str(vault),
+            "--heavy-model",
+            "new-heavy",
+            "--sample-n",
+            "-1",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "must be at least 1" in result.output
+
+
 def test_compare_runs_and_prints_verdict(tmp_path, monkeypatch):
     vault = _make_vault(tmp_path)
 
@@ -134,3 +153,46 @@ def test_compare_runs_and_prints_verdict(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0
     assert "Verdict:" in result.output
+
+
+def test_compare_switch_output_includes_provider_config(tmp_path, monkeypatch):
+    vault = _make_vault(tmp_path)
+
+    class DummyReport:
+        run_id = "rid"
+        verdict = AdvisorVerdict.SWITCH
+        reasons = ["test reason"]
+
+    monkeypatch.setattr(
+        "obsidian_llm_wiki.compare.runner.run_compare", lambda **kwargs: DummyReport()
+    )
+    monkeypatch.setattr("obsidian_llm_wiki.compare.report.resolve", lambda report: None)
+    monkeypatch.setattr("obsidian_llm_wiki.compare.report.render_markdown", lambda report: "md")
+    monkeypatch.setattr("obsidian_llm_wiki.compare.report.render_json", lambda report: "{}")
+    monkeypatch.setattr(
+        "obsidian_llm_wiki.compare.report.render_summary_json",
+        lambda report: '{"verdict":"switch"}',
+    )
+    (vault / ".olw" / "compare" / "rid" / "results").mkdir(parents=True)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "compare",
+            "--vault",
+            str(vault),
+            "--provider",
+            "groq",
+            "--provider-url",
+            "https://api.groq.com/openai/v1",
+            "--heavy-model",
+            "new-heavy",
+            "--allow-cloud-upload",
+            "--format",
+            "json",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "[provider]" in result.output
+    assert 'name = "groq"' in result.output
+    assert 'url = "https://api.groq.com/openai/v1"' in result.output
