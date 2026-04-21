@@ -117,3 +117,15 @@ def test_compare_rejects_programmatic_out_dir_inside_vault_outside_compare(
 
     with pytest.raises(ValueError, match=r"must be under \.olw/compare/"):
         run_compare(current, challenger, vault / "reports")
+
+
+def test_compare_preserves_active_vault_schema_file(tmp_path, patched_pipeline):
+    vault = _make_vault(tmp_path)
+    schema = vault / "vault-schema.md"
+    schema.write_text("# Active schema\n")
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+
+    run_compare(current, challenger, vault / ".olw" / "compare")
+
+    assert schema.read_text() == "# Active schema\n"

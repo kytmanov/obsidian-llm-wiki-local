@@ -203,6 +203,8 @@ def _materialize_compare_vault(
         dst = vault / "raw" / note.relative_to(raw_dir)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(note, dst)
+    if config.schema_path.exists():
+        shutil.copy2(config.schema_path, vault / config.schema_path.name)
     _write_effective_compare_toml(vault, config)
 
 

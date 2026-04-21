@@ -85,8 +85,8 @@ def test_compare_rejects_symlinked_queries(tmp_path):
             str(link),
         ],
     )
-    assert result.exit_code == 1
-    assert "must not be a symlink" in str(result.exception)
+    assert result.exit_code == 2
+    assert "must not be a symlink" in result.output
 
 
 def test_compare_requires_cloud_ack(tmp_path):
@@ -103,6 +103,26 @@ def test_compare_requires_cloud_ack(tmp_path):
             "https://api.groq.com/openai/v1",
             "--heavy-model",
             "llama-3.1-70b-versatile",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "--allow-cloud-upload" in result.output
+
+
+def test_compare_requires_cloud_ack_for_unknown_provider(tmp_path):
+    vault = _make_vault(tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "compare",
+            "--vault",
+            str(vault),
+            "--provider",
+            "myproxy",
+            "--provider-url",
+            "https://api.example.com/v1",
+            "--heavy-model",
+            "proxy-model",
         ],
     )
     assert result.exit_code == 1

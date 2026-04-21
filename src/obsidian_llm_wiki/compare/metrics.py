@@ -11,13 +11,18 @@ from .models import AdvisorVerdict, CompareReport, QueryResult, QuerySpec
 def load_queries(path: Path) -> list[QuerySpec]:
     data = tomllib.loads(path.read_text())
     out: list[QuerySpec] = []
+    seen_ids: set[str] = set()
     entries = data.get("query", [])
     if isinstance(entries, dict):
         entries = [entries]
     for entry in entries:
+        qid = entry["id"]
+        if qid in seen_ids:
+            raise ValueError(f"Duplicate query id: {qid}")
+        seen_ids.add(qid)
         out.append(
             QuerySpec(
-                id=entry["id"],
+                id=qid,
                 question=entry["question"],
                 expected_pages=list(entry.get("expected_pages", [])),
                 expected_contains=list(entry.get("expected_contains", [])),

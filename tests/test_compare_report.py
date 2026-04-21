@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import pytest
+
+from obsidian_llm_wiki.compare.metrics import load_queries
 from obsidian_llm_wiki.compare.models import (
     AdvisorVerdict,
     CompareReport,
@@ -104,3 +108,13 @@ def test_render_markdown_switch_includes_provider_config():
     assert "[provider]" in md
     assert 'name = "groq"' in md
     assert 'url = "https://api.groq.com/openai/v1"' in md
+
+
+def test_load_queries_rejects_duplicate_ids(tmp_path: Path):
+    queries = tmp_path / "queries.toml"
+    queries.write_text(
+        '[[query]]\nid = "q1"\nquestion = "one"\n\n[[query]]\nid = "q1"\nquestion = "two"\n'
+    )
+
+    with pytest.raises(ValueError, match="Duplicate query id: q1"):
+        load_queries(queries)

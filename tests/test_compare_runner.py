@@ -150,6 +150,23 @@ def test_run_compare_rejects_symlinked_queries_before_loading(tmp_path, patched_
         run_compare(current, challenger, vault / ".olw" / "compare", queries_path=link)
 
 
+def test_run_compare_copies_vault_schema_into_preview(tmp_path, patched_pipeline):
+    vault = _make_vault(tmp_path)
+    (vault / "vault-schema.md").write_text("# Custom schema\n")
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+
+    report = run_compare(
+        current,
+        challenger,
+        vault / ".olw" / "compare",
+        keep_artifacts=True,
+    )
+    root = vault / ".olw" / "compare" / report.run_id / "vaults"
+    assert (root / "current" / "vault-schema.md").read_text() == "# Custom schema\n"
+    assert (root / "challenger" / "vault-schema.md").read_text() == "# Custom schema\n"
+
+
 def test_run_compare_sample_n_limits_notes(tmp_path, patched_pipeline):
     vault = _make_vault(tmp_path)
     # Add extra notes so we have more than sample_n

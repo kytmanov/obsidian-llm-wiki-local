@@ -1832,6 +1832,8 @@ def _is_cloud_provider(provider_name: str | None) -> bool:
 
     pname = provider_name or "ollama"
     info = get_provider(pname)
+    if info is None:
+        return pname != "ollama"
     return info is not None and not info.is_local
 
 
