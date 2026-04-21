@@ -241,7 +241,9 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
     # Create .gitignore
     gi = vault / ".gitignore"
     if not gi.exists():
-        gi.write_text(".DS_Store\n.olw/chroma/\n.olw/state.db\n.obsidian/workspace.json\n*.log\n")
+        gi.write_text(
+            ".DS_Store\n.olw/chroma/\n.olw/state.db\n.olw/compare/\n.obsidian/workspace.json\n*.log\n"
+        )
 
     console.print(f"[green]Vault initialised:[/green] {vault}")
     console.print("Next steps:")
@@ -1825,123 +1827,68 @@ def unblock(vault_str, concept):
 # ── compare ───────────────────────────────────────────────────────────────────
 
 
-def _parse_contestant_spec(raw: str):
-    """Parse --config 'NAME:fast=M,heavy=M[,provider=P][,url=U][,api_key_env=E]'.
-
-    First ':' is the NAME:SPEC delimiter; subsequent colons (e.g. in model
-    names like gemma4:e4b) live inside values.
-    """
-    from .compare.models import ContestantSpec
-
-    if ":" not in raw:
-        raise click.BadParameter(
-            f"--config must be NAME:fast=MODEL,heavy=MODEL[,...]; got {raw!r}"
-        )
-    name, spec_str = raw.split(":", 1)
-    name = name.strip()
-    if not name:
-        raise click.BadParameter(f"--config name is empty in {raw!r}")
-    kv: dict[str, str] = {}
-    for token in spec_str.split(","):
-        token = token.strip()
-        if not token:
-            continue
-        if "=" not in token:
-            raise click.BadParameter(f"--config token {token!r} missing '=' in {raw!r}")
-        k, v = token.split("=", 1)
-        kv[k.strip()] = v.strip()
-    fast = kv.get("fast")
-    heavy = kv.get("heavy")
-    if not fast or not heavy:
-        raise click.BadParameter(
-            f"--config {raw!r} must specify both fast=... and heavy=..."
-        )
-    return ContestantSpec(
-        name=name,
-        fast_model=fast,
-        heavy_model=heavy,
-        provider_name=kv.get("provider"),
-        provider_url=kv.get("url"),
-        api_key_env=kv.get("api_key_env"),
-    )
-
-
-def _any_cloud_contestant(specs) -> bool:
+def _is_cloud_provider(provider_name: str | None) -> bool:
     from .providers import get_provider
 
-    for s in specs:
-        pname = s.provider_name or "ollama"
-        info = get_provider(pname)
-        if info is not None and not info.is_local:
+    pname = provider_name or "ollama"
+    info = get_provider(pname)
+    return info is not None and not info.is_local
+
+
+def _validate_compare_out_dir(out: Path, config) -> Path:
+    out = out.expanduser().resolve()
+    raw_dir = config.raw_dir.resolve()
+    wiki_dir = config.wiki_dir.resolve()
+    olw_dir = config.olw_dir.resolve()
+    compare_root = (config.olw_dir / "compare").resolve()
+
+    def _is_within(path: Path, root: Path) -> bool:
+        try:
+            path.relative_to(root)
             return True
-    return False
+        except ValueError:
+            return False
+
+    if _is_within(out, raw_dir) or _is_within(out, wiki_dir):
+        raise click.BadParameter("--out must not be inside raw/ or wiki/")
+    if _is_within(out, olw_dir) and not _is_within(out, compare_root):
+        raise click.BadParameter("--out under .olw/ is only allowed inside .olw/compare/")
+    return out
+
+
+def _validate_compare_inputs(config, queries_path: str | None) -> None:
+    for note in config.raw_dir.rglob("*.md"):
+        if note.is_symlink():
+            raise click.BadParameter("compare does not support symlinked raw notes")
+    if queries_path:
+        qp = Path(queries_path).expanduser().resolve()
+        if qp.is_symlink():
+            raise click.BadParameter("--queries must not be a symlink")
 
 
 @cli.command(name="compare")
-@click.option(
-    "--config",
-    "config_specs",
-    multiple=True,
-    help="Contestant spec: NAME:fast=MODEL,heavy=MODEL[,provider=P][,url=U]. Repeatable.",
-)
-@click.option(
-    "--corpus",
-    "corpus_path",
-    type=click.Path(exists=True, file_okay=False),
-    default=None,
-    help="Curated corpus directory (must contain corpus.toml).",
-)
-@click.option(
-    "--notes",
-    "notes_path",
-    type=click.Path(exists=True, file_okay=False),
-    default=None,
-    help="BYO: directory of user .md notes (no ground truth).",
-)
-@click.option(
-    "--baseline-vault",
-    "baseline_vault_path",
-    type=click.Path(exists=True, file_okay=False),
-    default=None,
-    help="Upgrade eval: path to existing olw vault (read-only).",
-)
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+@_model_override_options
 @click.option(
     "--queries",
     "queries_path",
     type=click.Path(exists=True, dir_okay=False),
     default=None,
-    help="Optional queries.toml (BYO mode).",
+    help="Optional compare queries.toml.",
 )
-@click.option("--seeds", default=2, show_default=True, type=int, help="Seeds per contestant.")
-@click.option("--sample-n", "sample_n", default=None, type=int, help="Cap notes used.")
 @click.option(
     "--out",
     "out_dir",
     type=click.Path(file_okay=False),
-    default="./.olw-compare",
+    default=None,
     show_default=True,
-    help="Output directory (run_id subdir created inside).",
+    help="Output directory (default: .olw/compare in the active vault).",
 )
 @click.option("--keep-artifacts", is_flag=True, help="Do not delete ephemeral vaults.")
-@click.option("--quick", is_flag=True, help="3 notes, 1 seed (smoke).")
-@click.option(
-    "--self-test",
-    "self_test",
-    is_flag=True,
-    help="Duplicate single --config as second contestant; asserts near-parity.",
-)
-@click.option("--skip-queries", is_flag=True, help="Skip query stage.")
 @click.option(
     "--allow-cloud-upload",
     is_flag=True,
-    help="Required when a cloud contestant is used with --notes or --baseline-vault.",
-)
-@click.option(
-    "--weights",
-    "weights_path",
-    type=click.Path(exists=True, dir_okay=False),
-    default=None,
-    help="Optional weights.toml override.",
+    help="Required when the challenger uses a cloud provider.",
 )
 @click.option(
     "--format",
@@ -1952,116 +1899,93 @@ def _any_cloud_contestant(specs) -> bool:
     help="Report output format.",
 )
 def compare(
-    config_specs,
-    corpus_path,
-    notes_path,
-    baseline_vault_path,
+    vault_str,
+    fast_model,
+    heavy_model,
+    provider_name,
+    provider_url,
     queries_path,
-    seeds,
-    sample_n,
     out_dir,
     keep_artifacts,
-    quick,
-    self_test,
-    skip_queries,
     allow_cloud_upload,
-    weights_path,
     report_format,
 ):
-    """Run N LLM contestants against the same corpus; emit comparison report."""
-    from .compare.corpus import CorpusError, CorpusMode, load_corpus
+    """Preview whether switching LLM config would improve your vault."""
     from .compare.runner import run_compare
 
-    if not config_specs:
-        err_console.print("At least one --config required.")
+    config = _load_config(vault_str)
+    challenger_kwargs = _model_override_kwargs(fast_model, heavy_model, provider_name, provider_url)
+    if not challenger_kwargs:
+        err_console.print("Provide at least one challenger override, e.g. --heavy-model.")
+        sys.exit(1)
+    challenger_config = _load_config(vault_str, **challenger_kwargs)
+
+    current_summary = (
+        config.models.fast,
+        config.models.heavy,
+        config.effective_provider.name,
+        config.effective_provider.url,
+    )
+    challenger_summary = (
+        challenger_config.models.fast,
+        challenger_config.models.heavy,
+        challenger_config.effective_provider.name,
+        challenger_config.effective_provider.url,
+    )
+    if challenger_summary == current_summary:
+        err_console.print("Challenger config is identical to current config.")
         sys.exit(1)
 
-    specs = [_parse_contestant_spec(s) for s in config_specs]
-    if self_test:
-        if len(specs) != 1:
-            err_console.print("--self-test requires exactly one --config.")
-            sys.exit(1)
-        from dataclasses import replace
+    _validate_compare_inputs(config, queries_path)
 
-        specs.append(replace(specs[0], name=f"{specs[0].name}_b"))
-        specs[0] = replace(specs[0], name=f"{specs[0].name}_a")
-    if len(specs) < 2 and baseline_vault_path is None:
-        err_console.print("Need ≥2 contestants (or --baseline-vault to add 'current').")
-        sys.exit(1)
-
-    names = [s.name for s in specs]
-    if len(set(names)) != len(names):
-        err_console.print(f"Duplicate contestant names: {names}")
-        sys.exit(1)
-
-    if quick:
-        seeds = 1
-        sample_n = 3 if sample_n is None else min(sample_n, 3)
-
-    try:
-        corpus = load_corpus(
-            corpus_path=Path(corpus_path) if corpus_path else None,
-            notes_path=Path(notes_path) if notes_path else None,
-            baseline_vault_path=Path(baseline_vault_path) if baseline_vault_path else None,
-            queries_path=Path(queries_path) if queries_path else None,
-            sample_n=sample_n,
+    if _is_cloud_provider(challenger_config.effective_provider.name) and not allow_cloud_upload:
+        err_console.print(
+            "Cloud challenger requires --allow-cloud-upload "
+            "(your raw notes will be sent to the provider)."
         )
-    except CorpusError as e:
-        err_console.print(f"Corpus error: {e}")
         sys.exit(1)
 
-    if corpus.mode in (CorpusMode.BYO, CorpusMode.BASELINE) and _any_cloud_contestant(specs):
-        if not allow_cloud_upload:
-            err_console.print(
-                "Cloud contestant + user notes requires --allow-cloud-upload "
-                "(privacy ack: your notes will be sent to the provider)."
-            )
-            sys.exit(1)
-
-    out = Path(out_dir).expanduser().resolve()
+    out = (
+        _validate_compare_out_dir(Path(out_dir), config)
+        if out_dir
+        else (config.olw_dir / "compare").resolve()
+    )
     out.mkdir(parents=True, exist_ok=True)
 
     console.print(
-        f"[bold]olw compare[/bold] — {len(specs)} contestant(s) × {seeds} seed(s) "
-        f"· mode={corpus.mode.value} · notes={len(corpus.notes)}"
+        f"[bold]olw compare[/bold] — active vault preview\n"
+        f"  vault={config.vault}\n"
+        f"  current: fast={config.models.fast} heavy={config.models.heavy} "
+        f"provider={config.effective_provider.name}\n"
+        f"  challenger: fast={challenger_config.models.fast} "
+        f"heavy={challenger_config.models.heavy} "
+        f"provider={challenger_config.effective_provider.name}\n"
+        f"  queries={'enabled' if queries_path else 'disabled'}\n"
+        f"  Active vault will not be modified."
     )
-    for s in specs:
-        prov = s.provider_name or "ollama"
-        console.print(f"  · {s.name}: fast={s.fast_model} heavy={s.heavy_model} provider={prov}")
 
     report = run_compare(
-        contestants=specs,
-        corpus=corpus,
+        current_config=config,
+        challenger_config=challenger_config,
         out_dir=out,
-        seeds=seeds,
+        queries_path=Path(queries_path) if queries_path else None,
         keep_artifacts=keep_artifacts,
-        skip_queries=skip_queries,
     )
 
-    # Phase 3: score + render
-    from .compare.report import render_json, render_markdown, resolve
+    from .compare.report import render_json, render_markdown, render_summary_json, resolve
 
-    resolve(
-        report,
-        corpus,
-        weights_override=Path(weights_path) if weights_path else None,
-    )
+    resolve(report)
 
     run_dir = out / report.run_id / "results"
     if report_format in ("md", "both"):
-        (run_dir / "report.md").write_text(render_markdown(report, corpus))
+        (run_dir / "report.md").write_text(render_markdown(report))
     if report_format in ("json", "both"):
         (run_dir / "report.json").write_text(render_json(report))
+    (run_dir / "summary.json").write_text(render_summary_json(report))
 
     console.print()
-    console.print(
-        f"[green]Run complete:[/green] {report.run_id} "
-        f"· wall={report.wall_time_seconds:.1f}s"
-    )
+    console.print(f"[green]Run complete:[/green] {report.run_id}")
     console.print(f"Artifacts: {out / report.run_id}")
-    if report.winner:
-        tie = " [yellow](statistical tie)[/yellow]" if report.statistical_tie else ""
-        console.print(f"[bold]Winner:[/bold] {report.winner}{tie}")
-    for r in report.contestants:
-        status = "[yellow]partial[/yellow]" if r.partial else "[green]ok[/green]"
-        console.print(f"  · {r.spec.name}: overall={r.overall:.3f} {status}")
+    console.print(f"[bold]Verdict:[/bold] {report.verdict.value}")
+    for reason in report.reasons:
+        console.print(f"  · {reason}")

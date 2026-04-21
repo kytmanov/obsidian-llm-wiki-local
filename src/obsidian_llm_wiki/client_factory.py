@@ -21,7 +21,7 @@ from .protocols import LLMClientProtocol
 from .providers import ProviderInfo, get_provider
 
 
-def build_client(config: Config) -> LLMClientProtocol:
+def build_client(config: Config, api_key_env: str | None = None) -> LLMClientProtocol:
     """Return the appropriate LLM client for the vault's provider config."""
     prov = config.effective_provider
 
@@ -31,7 +31,7 @@ def build_client(config: Config) -> LLMClientProtocol:
         return OllamaClient(base_url=prov.url, timeout=prov.timeout)
 
     prov_info = get_provider(prov.name)
-    api_key = _resolve_api_key(prov.name, prov_info)
+    api_key = _resolve_api_key(prov.name, prov_info, api_key_env=api_key_env)
 
     return OpenAICompatClient(
         base_url=prov.url,
@@ -45,7 +45,17 @@ def build_client(config: Config) -> LLMClientProtocol:
     )
 
 
-def _resolve_api_key(provider_name: str, prov_info: ProviderInfo | None) -> str | None:
+def _resolve_api_key(
+    provider_name: str,
+    prov_info: ProviderInfo | None,
+    api_key_env: str | None = None,
+) -> str | None:
+    # 0. Explicit env var override for compare contestants
+    if api_key_env:
+        val = os.environ.get(api_key_env)
+        if val:
+            return val
+
     # 1. Provider-specific env var (e.g. GROQ_API_KEY)
     if prov_info and prov_info.env_var:
         val = os.environ.get(prov_info.env_var)

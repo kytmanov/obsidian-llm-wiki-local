@@ -1,30 +1,25 @@
-"""
-olw compare — multi-LLM comparison for the obsidian-llm-wiki pipeline.
-
-Public API is intentionally tiny; the CLI command in cli.py is the
-user-facing entry point.
-"""
+"""olw compare — active-vault switch advisor."""
 
 from __future__ import annotations
 
-from .corpus import Corpus, CorpusMode, Note, Query, detect_mode, load_corpus, notes_set_hash
 from .models import (
+    AdvisorVerdict,
     CompareReport,
-    ContestantResult,
-    ContestantSpec,
-    DimScore,
+    ContestantRunResult,
+    PageDiffSummary,
+    PageSnapshot,
+    QueryDiff,
+    QueryResult,
+    QuerySpec,
 )
 
 __all__ = [
+    "AdvisorVerdict",
     "CompareReport",
-    "ContestantResult",
-    "ContestantSpec",
-    "Corpus",
-    "CorpusMode",
-    "DimScore",
-    "Note",
-    "Query",
-    "detect_mode",
-    "load_corpus",
-    "notes_set_hash",
+    "ContestantRunResult",
+    "PageDiffSummary",
+    "PageSnapshot",
+    "QueryDiff",
+    "QueryResult",
+    "QuerySpec",
 ]

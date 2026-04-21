@@ -132,6 +132,7 @@ def test_baseline_loads_from_raw(tmp_path):
     vault = tmp_path / "vault"
     raw = vault / "raw"
     raw.mkdir(parents=True)
+    (vault / "wiki.toml").write_text('[models]\nfast="f"\nheavy="h"\n')
     for i in range(4):
         (raw / f"n{i}.md").write_text(f"# {i}\n")
     c = load_corpus(baseline_vault_path=vault)
@@ -146,10 +147,21 @@ def test_baseline_requires_raw_dir(tmp_path):
         load_corpus(baseline_vault_path=vault)
 
 
+def test_baseline_requires_wiki_toml(tmp_path):
+    vault = tmp_path / "vault"
+    raw = vault / "raw"
+    raw.mkdir(parents=True)
+    for i in range(3):
+        (raw / f"n{i}.md").write_text("x")
+    with pytest.raises(CorpusError, match="missing wiki.toml"):
+        load_corpus(baseline_vault_path=vault)
+
+
 def test_baseline_requires_min_notes(tmp_path):
     vault = tmp_path / "vault"
     raw = vault / "raw"
     raw.mkdir(parents=True)
+    (vault / "wiki.toml").write_text('[models]\nfast="f"\nheavy="h"\n')
     (raw / "only.md").write_text("x")
     with pytest.raises(CorpusError, match="at least 3"):
         load_corpus(baseline_vault_path=vault)

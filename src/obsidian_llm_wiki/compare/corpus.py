@@ -5,7 +5,8 @@ Three input modes:
   curated       — directory with corpus.toml (+ optional queries.toml);
                   full ground-truth metrics
   byo           — directory of raw .md files, no ground truth
-  baseline_vault — user's existing vault; wiki = ground truth (upgrade eval)
+  baseline_vault — user's existing vault; compare runs on its raw/ notes
+                   while preserving the vault read-only for provenance
 
 Mode is chosen at runner-start time by inspecting the inputs; this
 module exposes the detection + validation primitives so the CLI can
@@ -238,9 +239,9 @@ def _load_byo(notes_path: Path, queries_path: Path | None, sample_n: int | None)
 def _load_baseline(vault_path: Path, sample_n: int | None) -> Corpus:
     """Load user's existing vault as a corpus.
 
-    Only the raw/ directory is treated as notes; baseline concepts +
-    articles are read separately by the runner via StateDB +
-    vault/wiki/ to drive agreement.* metrics.
+    Only the raw/ directory is treated as notes. The full vault is hashed
+    for provenance in the report, but no current wiki/state agreement
+    metrics are computed yet.
     """
     if not vault_path.is_dir():
         raise CorpusError(f"--baseline-vault must be a directory: {vault_path}")
@@ -249,6 +250,11 @@ def _load_baseline(vault_path: Path, sample_n: int | None) -> Corpus:
         raise CorpusError(
             f"Baseline vault missing raw/ dir: {vault_path}. "
             "Point --baseline-vault at a mature olw vault."
+        )
+    if not (vault_path / "wiki.toml").exists():
+        raise CorpusError(
+            f"Baseline vault missing wiki.toml: {vault_path}. "
+            "Point --baseline-vault at an existing olw vault."
         )
 
     md_files = sorted(p for p in raw_dir.rglob("*.md") if not p.name.startswith("."))
@@ -267,7 +273,7 @@ def _load_baseline(vault_path: Path, sample_n: int | None) -> Corpus:
             path=p.resolve(),
             category="baseline",
             weight=1.0,
-            known_concepts=[],  # Filled later by runner via state.db intersection
+            known_concepts=[],
         )
         for p in md_files
     ]
@@ -278,7 +284,7 @@ def _load_baseline(vault_path: Path, sample_n: int | None) -> Corpus:
         language="",
         description=f"Baseline vault at {vault_path}",
         notes=notes,
-        queries=[],  # populated if --replay-queries set
+        queries=[],
         notes_set_hash=notes_set_hash(notes),
         root=vault_path,
     )

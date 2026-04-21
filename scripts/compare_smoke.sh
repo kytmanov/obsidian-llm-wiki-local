@@ -1,49 +1,18 @@
 #!/usr/bin/env bash
-# compare_smoke.sh — end-to-end smoke for `olw compare`
+# compare_smoke.sh — end-to-end smoke for the simplified `olw compare`
 #
-# Runs `olw compare --quick --self-test` against the built-in corpus with a
-# real Ollama/OpenAI-compat backend, then asserts report structure (not
-# values — quality judgement is out of scope for smoke).
-#
-# Usage:
-#   ./scripts/compare_smoke.sh                               # Ollama, gemma4:e4b
-#   PROVIDER=lm_studio ./scripts/compare_smoke.sh            # LM Studio
-#   FAST_MODEL=llama3.2:latest ./scripts/compare_smoke.sh
-#   OUT_DIR=/tmp/my-compare ./scripts/compare_smoke.sh       # keep output dir
-#   SKIP_PULL=1 ./scripts/compare_smoke.sh                   # skip ollama pull
-#
-# Requirements:
-#   - uv (https://docs.astral.sh/uv/)
-#   - Ollama running (ollama serve)  — OR —  LM Studio running w/ model loaded
+# Creates a temporary vault, runs `olw compare` against that vault using the
+# current config as baseline and an overridden challenger model, then checks
+# that reports are generated and the active vault is unchanged outside
+# `.olw/compare/`.
 
 set -euo pipefail
 
-# ── Config ────────────────────────────────────────────────────────────────────
+FAST_MODEL="${FAST_MODEL:-gemma4:e4b}"
+HEAVY_MODEL="${HEAVY_MODEL:-$FAST_MODEL}"
+CHALLENGER_HEAVY_MODEL="${CHALLENGER_HEAVY_MODEL:-}"
 PROVIDER="${PROVIDER:-ollama}"
-
-case "$PROVIDER" in
-    ollama)
-        PROVIDER_URL="${PROVIDER_URL:-${OLLAMA_URL:-http://localhost:11434}}"
-        FAST_MODEL="${FAST_MODEL:-gemma4:e4b}"
-        HEAVY_MODEL="${HEAVY_MODEL:-$FAST_MODEL}"
-        ;;
-    lm_studio)
-        PROVIDER_URL="${PROVIDER_URL:-http://localhost:1234/v1}"
-        FAST_MODEL="${FAST_MODEL:-google/gemma-4-e4b}"
-        HEAVY_MODEL="${HEAVY_MODEL:-$FAST_MODEL}"
-        ;;
-    *)
-        PROVIDER_URL="${PROVIDER_URL:-}"
-        FAST_MODEL="${FAST_MODEL:-}"
-        HEAVY_MODEL="${HEAVY_MODEL:-$FAST_MODEL}"
-        if [[ -z "$PROVIDER_URL" || -z "$FAST_MODEL" ]]; then
-            echo "ERROR: PROVIDER=$PROVIDER requires PROVIDER_URL and FAST_MODEL."
-            exit 1
-        fi
-        ;;
-esac
-
-SKIP_PULL="${SKIP_PULL:-0}"
+PROVIDER_URL="${PROVIDER_URL:-}"
 KEEP_OUT="${KEEP_OUT:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,7 +25,21 @@ else
     OUT_DIR="$(mktemp -d)"
 fi
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+VAULT_DIR="$OUT_DIR/vault"
+COMPARE_DIR="$VAULT_DIR/.olw/compare"
+
+if [[ -z "$PROVIDER_URL" ]]; then
+    case "$PROVIDER" in
+        ollama) PROVIDER_URL="${OLLAMA_URL:-http://localhost:11434}" ;;
+        lm_studio) PROVIDER_URL="${LM_STUDIO_URL:-http://localhost:1234/v1}" ;;
+        vllm) PROVIDER_URL="http://localhost:8000/v1" ;;
+        *)
+            echo "Unsupported PROVIDER without explicit PROVIDER_URL: $PROVIDER" >&2
+            exit 1
+            ;;
+    esac
+fi
+
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -82,6 +65,24 @@ check() {
     fi
 }
 
+check_json_file() {
+    local desc="$1"
+    local path="$2"
+    if uv run python - <<'PY' "$path" > /dev/null 2>&1
+import json
+import sys
+
+with open(sys.argv[1]) as f:
+    json.load(f)
+PY
+    then
+        pass "$desc"
+        PASS_COUNT=$((PASS_COUNT + 1))
+    else
+        fail "$desc"
+    fi
+}
+
 cleanup() {
     if [[ "$KEEP_OUT" == "0" ]]; then
         rm -rf "$OUT_DIR"
@@ -91,81 +92,246 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# ── Pre-flight ────────────────────────────────────────────────────────────────
-header "Pre-flight"
-info "Provider:   $PROVIDER"
-info "Fast model: $FAST_MODEL"
-info "Heavy model: $HEAVY_MODEL"
-info "Output dir: $OUT_DIR"
+dir_hash() {
+    local root="$1"
+    uv run python - <<'PY' "$root"
+import hashlib
+import sys
+from pathlib import Path
 
-if [[ "$PROVIDER" == "ollama" && "$SKIP_PULL" == "0" ]]; then
-    info "Pulling $FAST_MODEL…"
-    ollama pull "$FAST_MODEL" > /dev/null 2>&1 || fail "ollama pull $FAST_MODEL"
-    if [[ "$HEAVY_MODEL" != "$FAST_MODEL" ]]; then
-        info "Pulling $HEAVY_MODEL…"
-        ollama pull "$HEAVY_MODEL" > /dev/null 2>&1 || fail "ollama pull $HEAVY_MODEL"
-    fi
-fi
+root = Path(sys.argv[1])
+h = hashlib.sha256()
+for p in sorted(root.rglob("*")):
+    rel = p.relative_to(root)
+    if rel.parts[:2] == (".olw", "compare"):
+        continue
+    h.update(str(rel).encode())
+    h.update(b"\x00")
+    if p.is_file():
+        h.update(p.read_bytes())
+    h.update(b"\x01")
+print(h.hexdigest())
+PY
+}
+
+resolve_loaded_model() {
+    local model="$1"
+    uv run python - <<'PY' "$PROVIDER" "$PROVIDER_URL" "$model"
+import sys
+import tempfile
+import re
+from pathlib import Path
+
+from obsidian_llm_wiki.config import Config
+from obsidian_llm_wiki.client_factory import build_client
+
+provider, url, model = sys.argv[1:4]
+def norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", s.lower())
+
+with tempfile.TemporaryDirectory(prefix="compare-smoke-") as tmp:
+    vault = Path(tmp)
+    (vault / "raw").mkdir()
+    (vault / "wiki").mkdir()
+    (vault / ".olw").mkdir()
+    (vault / "wiki.toml").write_text(
+        f"[models]\nfast = \"{model}\"\nheavy = \"{model}\"\n\n"
+        f"[provider]\nname = \"{provider}\"\nurl = \"{url}\"\n"
+    )
+    cfg = Config.from_vault(vault)
+    client = build_client(cfg)
+    try:
+        client.require_healthy()
+        models = client.list_models()
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+if model in models:
+    print(model)
+    raise SystemExit(0)
+
+wanted = norm(model)
+matches = [m for m in models if wanted == norm(m) or wanted in norm(m) or norm(m) in wanted]
+if len(matches) == 1:
+    print(matches[0])
+    raise SystemExit(0)
+
+raise SystemExit(
+    f"Model {model!r} is not loaded in {provider} at {url}. Available: {models}"
+)
+PY
+}
+
+select_alternate_model() {
+    local baseline="$1"
+    uv run python - <<'PY' "$PROVIDER" "$PROVIDER_URL" "$baseline"
+import sys
+import tempfile
+from pathlib import Path
+
+from obsidian_llm_wiki.config import Config
+from obsidian_llm_wiki.client_factory import build_client
+
+provider, url, baseline = sys.argv[1:4]
+with tempfile.TemporaryDirectory(prefix="compare-smoke-") as tmp:
+    vault = Path(tmp)
+    (vault / "raw").mkdir()
+    (vault / "wiki").mkdir()
+    (vault / ".olw").mkdir()
+    (vault / "wiki.toml").write_text(
+        f"[models]\nfast = \"{baseline}\"\nheavy = \"{baseline}\"\n\n"
+        f"[provider]\nname = \"{provider}\"\nurl = \"{url}\"\n"
+    )
+    cfg = Config.from_vault(vault)
+    client = build_client(cfg)
+    try:
+        client.require_healthy()
+        models = client.list_models()
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+preferred = [
+    "nvidia/nemotron-3-nano-4b",
+    "zai-org/glm-4.6v-flash",
+    "qwen/qwen3.5-9b",
+]
+for candidate in preferred:
+    if candidate in models and candidate != baseline and "embed" not in candidate.lower():
+        print(candidate)
+        raise SystemExit(0)
+
+for candidate in models:
+    if candidate != baseline and "embed" not in candidate.lower():
+        print(candidate)
+        raise SystemExit(0)
+
+raise SystemExit(f"No alternate loaded model available in {provider} at {url}.")
+PY
+}
 
 cd "$REPO_DIR"
 
-# ── Run compare --quick --self-test ───────────────────────────────────────────
-header "Running olw compare --quick --self-test"
+header "Setup temporary vault"
+mkdir -p "$VAULT_DIR/raw" "$VAULT_DIR/wiki" "$VAULT_DIR/.olw"
+cat > "$VAULT_DIR/raw/note-1.md" <<'EOF'
+# Gradient Descent
 
-CONFIG_SPEC="smoke:fast=${FAST_MODEL},heavy=${HEAVY_MODEL}"
-if [[ "$PROVIDER" != "ollama" ]]; then
-    CONFIG_SPEC="${CONFIG_SPEC},provider=${PROVIDER},url=${PROVIDER_URL}"
+Gradient descent is an optimization method used to minimize a loss function.
+EOF
+
+cat > "$VAULT_DIR/raw/note-2.md" <<'EOF'
+# Chain Rule
+
+The chain rule is used to compute derivatives of composed functions.
+EOF
+
+cat > "$VAULT_DIR/raw/note-3.md" <<'EOF'
+# Backpropagation
+
+Backpropagation applies the chain rule to train neural networks.
+EOF
+
+cat > "$OUT_DIR/queries.toml" <<'EOF'
+[[query]]
+id = "q1"
+question = "What is backpropagation?"
+expected_contains = ["chain rule"]
+EOF
+
+HASH_BEFORE="$(dir_hash "$VAULT_DIR")"
+pass "temporary vault created"
+PASS_COUNT=$((PASS_COUNT + 1))
+
+header "Provider preflight"
+FAST_MODEL_RESOLVED="$(resolve_loaded_model "$FAST_MODEL")"
+HEAVY_MODEL_RESOLVED="$(resolve_loaded_model "$HEAVY_MODEL")"
+pass "baseline model loaded: $FAST_MODEL_RESOLVED"
+PASS_COUNT=$((PASS_COUNT + 1))
+if [[ -n "$CHALLENGER_HEAVY_MODEL" ]]; then
+    CHALLENGER_HEAVY_MODEL_RESOLVED="$(resolve_loaded_model "$CHALLENGER_HEAVY_MODEL")"
+else
+    CHALLENGER_HEAVY_MODEL_RESOLVED="$(select_alternate_model "$HEAVY_MODEL_RESOLVED")"
 fi
+if [[ "$CHALLENGER_HEAVY_MODEL_RESOLVED" == "$HEAVY_MODEL_RESOLVED" ]]; then
+    fail "challenger model resolves to the same model as the baseline"
+fi
+pass "challenger model loaded: $CHALLENGER_HEAVY_MODEL_RESOLVED"
+PASS_COUNT=$((PASS_COUNT + 1))
 
-# --quick → 3 notes, 1 seed. --self-test duplicates config as two contestants.
-# --skip-queries to shave runtime; report rendering still exercised.
+cat > "$VAULT_DIR/wiki.toml" <<EOF
+[models]
+fast = "$FAST_MODEL_RESOLVED"
+heavy = "$HEAVY_MODEL_RESOLVED"
+
+[provider]
+name = "$PROVIDER"
+url = "$PROVIDER_URL"
+timeout = 600
+fast_ctx = 16384
+heavy_ctx = 32768
+
+[pipeline]
+auto_approve = false
+auto_commit = false
+auto_maintain = false
+watch_debounce = 3.0
+max_concepts_per_source = 8
+ingest_parallel = false
+EOF
+
+header "Run olw compare"
 if ! uv run olw compare \
-    --config "$CONFIG_SPEC" \
-    --quick \
-    --self-test \
-    --skip-queries \
-    --out "$OUT_DIR" \
+    --vault "$VAULT_DIR" \
+    --heavy-model "$CHALLENGER_HEAVY_MODEL_RESOLVED" \
+    --queries "$OUT_DIR/queries.toml" \
     --format both \
-    --keep-artifacts \
     2>&1 | tee "$OUT_DIR/run.log"; then
     fail "compare command exited non-zero"
 fi
 pass "compare command exited 0"
 PASS_COUNT=$((PASS_COUNT + 1))
 
-# Resolve the one run_id subdir.
-RUN_DIR="$(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -type d | head -1)"
-[[ -n "$RUN_DIR" ]] || fail "no run_id subdir created under $OUT_DIR"
+RUN_DIR="$(find "$COMPARE_DIR" -mindepth 1 -maxdepth 1 -type d | head -1)"
+[[ -n "$RUN_DIR" ]] || fail "no compare run directory created"
 RESULTS_DIR="$RUN_DIR/results"
 
-# ── Report structure checks ───────────────────────────────────────────────────
 header "Report structure"
-check "report.md exists"   "[[ -s '$RESULTS_DIR/report.md' ]]"
+check "report.md exists" "[[ -s '$RESULTS_DIR/report.md' ]]"
 check "report.json exists" "[[ -s '$RESULTS_DIR/report.json' ]]"
+check "summary.json exists" "[[ -s '$RESULTS_DIR/summary.json' ]]"
 
 REPORT_MD="$RESULTS_DIR/report.md"
 for section in \
     "# olw compare" \
-    "## Contestants" \
-    "## Overall verdict" \
-    "## Per-dimension scores" \
-    "## Advisory diagnostics" \
-    "## Trade-off narrative" \
-    "## Blind spots"; do
+    "## Recommendation" \
+    "## Config Change" \
+    "## Query Summary" \
+    "## Vault Impact" \
+    "## Structure And Reliability" \
+    "## Representative Page Changes" \
+    "## Operational Cost" \
+    "## Caveats"; do
     check "report.md has '$section'" "grep -Fq '$section' '$REPORT_MD'"
 done
 
-# JSON has the version-pinning fields and both contestants.
 REPORT_JSON="$RESULTS_DIR/report.json"
-check "report.json parses"                  "uv run python -c 'import json,sys; json.load(open(\"$REPORT_JSON\"))'"
-check "report.json has olw_version"         "grep -q '\"olw_version\"' '$REPORT_JSON'"
-check "report.json has pipeline_prompt_hash" "grep -q '\"pipeline_prompt_hash\"' '$REPORT_JSON'"
-check "report.json has 2 contestants (self-test)" \
-    "[[ \$(uv run python -c 'import json;print(len(json.load(open(\"$REPORT_JSON\"))[\"contestants\"]))') == 2 ]]"
+SUMMARY_JSON="$RESULTS_DIR/summary.json"
+check_json_file "report.json parses" "$REPORT_JSON"
+check_json_file "summary.json parses" "$SUMMARY_JSON"
+check "summary.json has verdict" "grep -q '\"verdict\"' '$SUMMARY_JSON'"
 
-# Ephemeral vaults kept (--keep-artifacts).
-check "artifact vault dir present" "[[ -d '$RUN_DIR/vaults' ]]"
+header "Safety checks"
+HASH_AFTER="$(dir_hash "$VAULT_DIR")"
+[[ "$HASH_BEFORE" == "$HASH_AFTER" ]] || fail "active vault changed outside .olw/compare"
+pass "active vault unchanged outside .olw/compare"
+PASS_COUNT=$((PASS_COUNT + 1))
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+check "active wiki/queries not created" "[[ ! -d '$VAULT_DIR/wiki/queries' ]]"
+
 header "Summary"
 pass "$PASS_COUNT checks passed"

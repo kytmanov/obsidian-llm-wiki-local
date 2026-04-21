@@ -8,7 +8,7 @@ Two layers:
     over the top-level split.
 
 Loading order: built-in defaults → mode-specific defaults (baseline adds
-`agreement.*`) → user TOML override → normalization.
+no extra dimensions) → user TOML override → normalization.
 """
 
 from __future__ import annotations
@@ -56,20 +56,8 @@ DEFAULT_TOP_WEIGHTS: dict[str, float] = {
     "consistency": 0.10,
 }
 
-BASELINE_TOP_WEIGHTS: dict[str, float] = {
-    "reliability": 0.22,
-    "structure": 0.22,
-    "fidelity": 0.13,
-    "query": 0.13,
-    "agreement": 0.15,
-    "efficiency": 0.08,
-    "consistency": 0.07,
-}
-
 
 def default_top_weights(mode: CorpusMode) -> dict[str, float]:
-    if mode is CorpusMode.BASELINE:
-        return dict(BASELINE_TOP_WEIGHTS)
     return dict(DEFAULT_TOP_WEIGHTS)
 
 
@@ -98,8 +86,8 @@ def build_flat_weights(
     for top_key, top_w in top.items():
         subs = SUB_DIMS.get(top_key)
         if not subs:
-            # Unknown top-level key (e.g. "agreement" not implemented yet):
-            # allocate to a single synthetic sub-dim so weight is preserved.
+            # Unknown top-level key: allocate to a synthetic sub-dim so
+            # explicit user override weights are still preserved.
             flat[f"{top_key}.total"] = top_w
             continue
         explicit = nested_overrides.get(top_key, {})
@@ -110,9 +98,7 @@ def build_flat_weights(
             if s in explicit:
                 flat[f"{top_key}.{s}"] = explicit[s]
             else:
-                flat[f"{top_key}.{s}"] = (
-                    remaining / len(implicit_subs) if implicit_subs else 0.0
-                )
+                flat[f"{top_key}.{s}"] = remaining / len(implicit_subs) if implicit_subs else 0.0
 
     return _normalize(flat)
 

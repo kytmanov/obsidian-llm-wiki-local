@@ -1,71 +1,136 @@
-"""Tests for `olw compare` CLI wiring — spec parsing + privacy gate."""
+"""Tests for the simplified compare CLI."""
 
 from __future__ import annotations
 
-import pytest
+from click.testing import CliRunner
 
-from obsidian_llm_wiki.cli import _any_cloud_contestant, _parse_contestant_spec
-
-
-def test_parse_basic():
-    s = _parse_contestant_spec("baseline:fast=gemma4:e4b,heavy=gemma4:e4b")
-    assert s.name == "baseline"
-    assert s.fast_model == "gemma4:e4b"
-    assert s.heavy_model == "gemma4:e4b"
-    assert s.provider_name is None
-    assert s.provider_url is None
+from obsidian_llm_wiki.cli import cli
 
 
-def test_parse_with_provider():
-    s = _parse_contestant_spec(
-        "groq:fast=llama3:70b,heavy=llama3:70b,provider=groq,url=https://api.groq.com/openai/v1"
+def _make_vault(tmp_path):
+    vault = tmp_path / "vault"
+    raw = vault / "raw"
+    wiki = vault / "wiki"
+    olw = vault / ".olw"
+    raw.mkdir(parents=True)
+    wiki.mkdir()
+    olw.mkdir()
+    for i in range(3):
+        (raw / f"n{i}.md").write_text(f"# Note {i}\n\nBody {i}.\n")
+    (vault / "wiki.toml").write_text(
+        '[models]\nfast = "base-fast"\nheavy = "base-heavy"\n\n[ollama]\nurl = "http://localhost:11434"\n'
     )
-    assert s.provider_name == "groq"
-    assert s.provider_url == "https://api.groq.com/openai/v1"
+    return vault
 
 
-def test_parse_missing_colon_rejected():
-    with pytest.raises(Exception, match="NAME:"):
-        _parse_contestant_spec("fast=x,heavy=y")
+def test_compare_requires_override(tmp_path):
+    vault = _make_vault(tmp_path)
+    result = CliRunner().invoke(cli, ["compare", "--vault", str(vault)])
+    assert result.exit_code == 1
+    assert "Provide at least one challenger override" in result.output
 
 
-def test_parse_missing_models_rejected():
-    with pytest.raises(Exception, match="fast=.*heavy="):
-        _parse_contestant_spec("x:fast=y")
+def test_compare_rejects_identical_override(tmp_path):
+    vault = _make_vault(tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "compare",
+            "--vault",
+            str(vault),
+            "--fast-model",
+            "base-fast",
+            "--heavy-model",
+            "base-heavy",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "identical to current config" in result.output
 
 
-def test_parse_bad_token_rejected():
-    with pytest.raises(Exception, match="missing '='"):
-        _parse_contestant_spec("x:fast=y,noequals")
+def test_compare_rejects_out_inside_raw(tmp_path):
+    vault = _make_vault(tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "compare",
+            "--vault",
+            str(vault),
+            "--heavy-model",
+            "new-heavy",
+            "--out",
+            str(vault / "raw" / "x"),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "must not be inside raw/ or wiki/" in result.output
 
 
-def test_parse_empty_name_rejected():
-    with pytest.raises(Exception, match="name is empty"):
-        _parse_contestant_spec(":fast=m,heavy=m")
+def test_compare_rejects_symlinked_queries(tmp_path):
+    vault = _make_vault(tmp_path)
+    target = tmp_path / "real.toml"
+    target.write_text("")
+    link = tmp_path / "queries.toml"
+    link.symlink_to(target)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "compare",
+            "--vault",
+            str(vault),
+            "--heavy-model",
+            "new-heavy",
+            "--queries",
+            str(link),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "must not be a symlink" in str(result.exception)
 
 
-def test_parse_spaces_tolerated():
-    s = _parse_contestant_spec("  spaced : fast=m , heavy=m ")
-    assert s.name == "spaced"
-    assert s.fast_model == "m"
+def test_compare_requires_cloud_ack(tmp_path):
+    vault = _make_vault(tmp_path)
+    result = CliRunner().invoke(
+        cli,
+        [
+            "compare",
+            "--vault",
+            str(vault),
+            "--provider",
+            "groq",
+            "--provider-url",
+            "https://api.groq.com/openai/v1",
+            "--heavy-model",
+            "llama-3.1-70b-versatile",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "--allow-cloud-upload" in result.output
 
 
-def test_any_cloud_ollama_default():
-    s = _parse_contestant_spec("x:fast=m,heavy=m")
-    assert _any_cloud_contestant([s]) is False
+def test_compare_runs_and_prints_verdict(tmp_path, monkeypatch):
+    vault = _make_vault(tmp_path)
 
+    class DummyReport:
+        run_id = "rid"
+        verdict = type("V", (), {"value": "manual_review"})()
+        reasons = ["test reason"]
 
-def test_any_cloud_explicit_local():
-    s = _parse_contestant_spec("x:fast=m,heavy=m,provider=lm_studio")
-    assert _any_cloud_contestant([s]) is False
+    monkeypatch.setattr(
+        "obsidian_llm_wiki.compare.runner.run_compare", lambda **kwargs: DummyReport()
+    )
+    monkeypatch.setattr("obsidian_llm_wiki.compare.report.resolve", lambda report: None)
+    monkeypatch.setattr("obsidian_llm_wiki.compare.report.render_markdown", lambda report: "md")
+    monkeypatch.setattr("obsidian_llm_wiki.compare.report.render_json", lambda report: "{}")
+    monkeypatch.setattr(
+        "obsidian_llm_wiki.compare.report.render_summary_json",
+        lambda report: '{"verdict":"manual_review"}',
+    )
+    (vault / ".olw" / "compare" / "rid" / "results").mkdir(parents=True)
 
-
-def test_any_cloud_detected_for_groq():
-    s = _parse_contestant_spec("x:fast=m,heavy=m,provider=groq")
-    assert _any_cloud_contestant([s]) is True
-
-
-def test_any_cloud_mixed_local_and_cloud():
-    a = _parse_contestant_spec("a:fast=m,heavy=m")
-    b = _parse_contestant_spec("b:fast=m,heavy=m,provider=openrouter")
-    assert _any_cloud_contestant([a, b]) is True
+    result = CliRunner().invoke(
+        cli,
+        ["compare", "--vault", str(vault), "--heavy-model", "new-heavy", "--format", "json"],
+    )
+    assert result.exit_code == 0
+    assert "Verdict:" in result.output

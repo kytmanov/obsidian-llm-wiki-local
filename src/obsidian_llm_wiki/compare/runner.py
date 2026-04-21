@@ -1,21 +1,4 @@
-"""
-olw compare runner — executes contestants × seeds against an ephemeral
-vault and captures raw telemetry + artifacts per run.
-
-Scoring happens in compare/metrics.py; this module is intentionally
-narrow: set up an isolated vault, wire the real pipeline, capture
-events, snapshot artifacts, hand the raw data to the next stage.
-
-Critical invariants:
-  • Ephemeral vault paths are unique per (contestant, seed); assert
-    non-existence before creating to prevent pipeline-lock collision.
-  • Synthetic wiki.toml hard-codes pipeline.auto_commit = false so
-    git_ops can't fail in a non-repo vault.
-  • StateDB.close() runs before any rmtree so SQLite doesn't hold
-    the journal file open on cleanup.
-  • --baseline-vault path is NEVER written to; the runner copies
-    raw/ into its own isolated working dir before any mutation.
-"""
+"""Safe runner for current-vs-challenger vault preview compare."""
 
 from __future__ import annotations
 
@@ -30,173 +13,124 @@ from pathlib import Path
 
 from ..config import Config, _toml_quote
 from ..telemetry import telemetry_sink
-from .corpus import Corpus
-from .models import CompareReport, ContestantResult, ContestantSpec
+from ..vault import extract_wikilinks, parse_note
+from .metrics import load_queries
+from .models import CompareReport, ContestantRunResult, PageDiffSummary, PageSnapshot, QueryResult
 
 log = logging.getLogger(__name__)
 
 
-# ── Public entry point ────────────────────────────────────────────────────────
-
-
 def run_compare(
-    contestants: list[ContestantSpec],
-    corpus: Corpus,
+    current_config: Config,
+    challenger_config: Config,
     out_dir: Path,
-    seeds: int = 2,
+    queries_path: Path | None = None,
     keep_artifacts: bool = False,
-    skip_queries: bool = False,
-    run_id: str | None = None,
 ) -> CompareReport:
-    """Execute all contestants across N seeds, return a populated report.
+    run_id = _make_run_id()
+    run_root = _safe_child(out_dir.resolve(), run_id)
+    _assert_compare_root_safe(run_root.parent, current_config.vault)
 
-    Scoring is left to compare/metrics.py in Phase 3; this function
-    returns a report with per-contestant `seed_events` + artifact
-    paths populated but `scores` empty.
-    """
-    if not contestants:
-        raise ValueError("At least one contestant required")
-    if seeds < 1:
-        raise ValueError("seeds must be >= 1")
+    results_dir = _safe_child(run_root, "results")
+    current_dir = _safe_child(run_root, "current")
+    challenger_dir = _safe_child(run_root, "challenger")
+    diffs_dir = _safe_child(run_root, "diffs")
+    vaults_dir = _safe_child(run_root, "vaults")
+    for d in (results_dir, current_dir, challenger_dir, diffs_dir):
+        d.mkdir(parents=True, exist_ok=True)
+    if keep_artifacts:
+        vaults_dir.mkdir(parents=True, exist_ok=True)
 
-    run_id = run_id or _make_run_id()
-    run_dir = out_dir / run_id
-    vaults_dir = run_dir / "vaults"
-    results_dir = run_dir / "results"
-    vaults_dir.mkdir(parents=True, exist_ok=True)
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    log.info("Compare run %s — %d contestant(s) × %d seed(s)", run_id, len(contestants), seeds)
+    queries = load_queries(queries_path) if queries_path else []
+    if queries_path is not None and queries_path.is_symlink():
+        raise ValueError("--queries must not be a symlink")
 
     t0 = time.monotonic()
-    results: list[ContestantResult] = []
-    for spec in contestants:
-        result = _run_contestant(
-            spec=spec,
-            corpus=corpus,
-            seeds=seeds,
-            vaults_dir=vaults_dir,
-            results_dir=results_dir,
-            keep_artifacts=keep_artifacts,
-            skip_queries=skip_queries,
-        )
-        results.append(result)
+    current_result = _run_single_vault(
+        source_config=current_config,
+        effective_config=current_config,
+        role="current",
+        run_root=run_root,
+        artifact_dir=current_dir,
+        keep_artifacts=keep_artifacts,
+        queries=queries,
+    )
+    challenger_result = _run_single_vault(
+        source_config=current_config,
+        effective_config=challenger_config,
+        role="challenger",
+        run_root=run_root,
+        artifact_dir=challenger_dir,
+        keep_artifacts=keep_artifacts,
+        queries=queries,
+    )
+    wall = time.monotonic() - t0
 
-    wall_seconds = time.monotonic() - t0
+    page_diff = _diff_pages(current_result.page_snapshots, challenger_result.page_snapshots)
+    query_diffs = _diff_queries(queries, current_result.queries, challenger_result.queries)
 
     report = CompareReport(
         run_id=run_id,
-        mode=corpus.mode.value,
-        seeds=seeds,
-        olw_version=_olw_version(),
-        pipeline_prompt_hash=_pipeline_prompt_hash(),
-        corpus_version=corpus.version,
-        notes_set_hash=corpus.notes_set_hash,
-        wall_time_seconds=wall_seconds,
-        contestants=results,
+        vault_path=str(current_config.vault),
+        out_dir=str(run_root),
+        current_config_summary=_config_summary(current_config),
+        challenger_config_summary=_config_summary(challenger_config),
+        current=current_result,
+        challenger=challenger_result,
+        page_diff=page_diff,
+        query_diffs=query_diffs,
     )
-
-    # Persist raw report JSON for inspection + downstream report.py
-    _write_report_json(report, results_dir / "raw_report.json")
+    report.current.diagnostics.setdefault("compare_wall_seconds", wall)
+    _write_json(results_dir / "raw_report.json", asdict(report))
+    _write_json(diffs_dir / "pages_added.json", page_diff.added)
+    _write_json(diffs_dir / "pages_removed.json", page_diff.removed)
+    _write_json(diffs_dir / "pages_changed.json", page_diff.changed)
+    _write_json(diffs_dir / "queries_diff.json", [asdict(q) for q in query_diffs])
     return report
 
 
-# ── Per-contestant driver ─────────────────────────────────────────────────────
-
-
-def _run_contestant(
-    spec: ContestantSpec,
-    corpus: Corpus,
-    seeds: int,
-    vaults_dir: Path,
-    results_dir: Path,
+def _run_single_vault(
+    source_config: Config,
+    effective_config: Config,
+    role: str,
+    run_root: Path,
+    artifact_dir: Path,
     keep_artifacts: bool,
-    skip_queries: bool,
-) -> ContestantResult:
-    log.info("── Contestant: %s ─────────────", spec.name)
-    result = ContestantResult(spec=spec)
-    contestant_results_dir = results_dir / spec.name
-    contestant_results_dir.mkdir(parents=True, exist_ok=True)
-
-    for seed in range(seeds):
-        vault = vaults_dir / spec.name / str(seed)
-        if vault.exists():
-            raise RuntimeError(f"Ephemeral vault already exists — refusing to overwrite: {vault}")
-        try:
-            seed_payload = _run_single(
-                spec=spec, corpus=corpus, vault=vault, seed=seed, skip_queries=skip_queries
-            )
-            result.seed_events[seed] = seed_payload["events"]
-            result.seed_artifacts[seed] = str(vault)
-            result.seed_pipeline_reports[seed] = seed_payload.get("pipeline_report")
-            result.seed_queries[seed] = seed_payload.get("queries", [])
-            result.seed_diagnostics[seed] = seed_payload.get("diagnostics", {})
-            result.seed_wall_seconds[seed] = seed_payload.get("pipeline_wall_seconds", 0.0)
-            if seed_payload.get("partial"):
-                result.partial = True
-
-            # Checkpoint per-seed JSON as soon as it's available
-            ckpt = contestant_results_dir / f"seed_{seed}.json"
-            ckpt.write_text(json.dumps(seed_payload, indent=2, default=str))
-        except Exception as e:  # noqa: BLE001
-            log.error("Contestant %s seed %d crashed: %s", spec.name, seed, e)
-            result.partial = True
-            result.seed_events[seed] = []
-            result.seed_artifacts[seed] = str(vault)
-        finally:
-            if not keep_artifacts and vault.exists():
-                try:
-                    shutil.rmtree(vault)
-                except OSError as e:
-                    log.warning("Could not remove %s: %s", vault, e)
-
-    return result
-
-
-def _run_single(
-    spec: ContestantSpec,
-    corpus: Corpus,
-    vault: Path,
-    seed: int,
-    skip_queries: bool,
-) -> dict:
-    """One (contestant, seed) pipeline run — returns a serializable payload."""
+    queries,
+) -> ContestantRunResult:
     from ..client_factory import build_client
     from ..pipeline.orchestrator import PipelineOrchestrator
     from ..pipeline.query import run_query
     from ..state import StateDB
 
-    _materialize_vault(vault, corpus, spec)
+    temp_root = _safe_child(run_root, "vaults", role)
+    if temp_root.exists():
+        raise RuntimeError(f"ephemeral compare vault already exists: {temp_root}")
 
-    config = Config.from_vault(vault)
+    _materialize_compare_vault(temp_root, source_config.raw_dir, effective_config)
+    config = Config.from_vault(temp_root)
     client = build_client(config)
     db = StateDB(config.state_db_path)
-
-    payload: dict = {
-        "contestant": spec.name,
-        "seed": seed,
-        "events": [],
-        "queries": [],
-        "pipeline_report": None,
-        "partial": False,
-    }
+    pipeline_report = None
+    partial = False
+    diagnostics: dict[str, float | int | str | bool | None] = {}
+    query_results: list[QueryResult] = []
 
     try:
         with telemetry_sink() as events:
             t0 = time.monotonic()
             try:
-                orchestrator = PipelineOrchestrator(config, client, db)
-                report = orchestrator.run(auto_approve=True, max_rounds=2)
-                payload["pipeline_report"] = _serialize_pipeline_report(report)
+                pipeline_report = PipelineOrchestrator(config, client, db).run(
+                    auto_approve=True, max_rounds=2
+                )
             except Exception as e:  # noqa: BLE001
-                log.error("Pipeline crashed for %s seed %d: %s", spec.name, seed, e)
-                payload["partial"] = True
-                payload["pipeline_error"] = str(e)
-            payload["pipeline_wall_seconds"] = time.monotonic() - t0
+                log.error("Compare pipeline failed for %s: %s", role, e)
+                partial = True
+                diagnostics["pipeline_error"] = str(e)
+            wall = time.monotonic() - t0
 
-            # Queries — best-effort; skip on flag or if no queries or pipeline broke
-            if not skip_queries and corpus.queries and not payload["partial"]:
-                for q in corpus.queries:
+            if queries and not partial:
+                for q in queries:
                     try:
                         answer, pages = run_query(
                             config=config,
@@ -205,39 +139,14 @@ def _run_single(
                             question=q.question,
                             save=False,
                         )
-                        payload["queries"].append(
-                            {
-                                "id": q.id,
-                                "answer": answer,
-                                "pages": pages,
-                            }
-                        )
+                        query_results.append(QueryResult(id=q.id, answer=answer, pages=list(pages)))
                     except Exception as e:  # noqa: BLE001
-                        log.warning("Query '%s' failed: %s", q.id, e)
-                        payload["queries"].append(
-                            {
-                                "id": q.id,
-                                "answer": "",
-                                "pages": [],
-                                "error": str(e),
-                            }
+                        query_results.append(
+                            QueryResult(id=q.id, answer="", pages=[], error=str(e))
                         )
-
-            # Serialize captured events (LLMCallEvent dataclass → dict)
-            payload["events"] = [asdict(ev) for ev in events]
-
-            # Silent all-note failure: pipeline didn't crash but made zero LLM calls
-            if not payload["events"] and not payload["partial"]:
-                payload["partial"] = True
-
-        # Capture diagnostics BEFORE closing DB / removing vault.
-        try:
-            payload["diagnostics"] = _capture_diagnostics(vault, db, config, corpus)
-        except Exception as e:  # noqa: BLE001
-            log.warning("Diagnostic capture failed for %s seed %d: %s", spec.name, seed, e)
-            payload["diagnostics"] = {}
+            diagnostics.update(_capture_diagnostics(temp_root, db, config, events))
+            diagnostics["total_calls"] = len(events)
     finally:
-        # Close DB before caller's rmtree so SQLite drops its journal
         try:
             db.close()
         except AttributeError:
@@ -247,79 +156,97 @@ def _run_single(
         except AttributeError:
             pass
 
-    return payload
+    snapshots = _snapshot_wiki(config.wiki_dir)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(artifact_dir / "stats.json", diagnostics)
+    _write_json(artifact_dir / "queries.json", [asdict(q) for q in query_results])
+    _write_json(artifact_dir / "pages.json", [asdict(p) for p in snapshots])
+    _copy_wiki_snapshot(config.wiki_dir, artifact_dir / "wiki_snapshot")
 
+    if not keep_artifacts and temp_root.exists():
+        _safe_rmtree(temp_root, _safe_child(run_root, "vaults"))
 
-# ── Vault materialization ─────────────────────────────────────────────────────
-
-
-def _materialize_vault(vault: Path, corpus: Corpus, spec: ContestantSpec) -> None:
-    """Create ephemeral vault with corpus notes + synthetic wiki.toml."""
-    raw_dir = vault / "raw"
-    raw_dir.mkdir(parents=True, exist_ok=False)
-    (vault / "wiki").mkdir()
-    (vault / ".olw").mkdir()
-
-    for note in corpus.notes:
-        dst = raw_dir / note.file
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(note.path, dst)
-
-    (vault / "wiki.toml").write_text(_synthesize_wiki_toml(spec))
-
-
-def _synthesize_wiki_toml(spec: ContestantSpec) -> str:
-    """Build a wiki.toml for this contestant.
-
-    Key safety knob: pipeline.auto_commit = false so git_ops is a no-op
-    inside the ephemeral (non-repo) vault. git_ops itself short-circuits
-    when this flag is false.
-    """
-    fast = _toml_quote(spec.fast_model)
-    heavy = _toml_quote(spec.heavy_model)
-
-    provider_block: str
-    if spec.provider_name and spec.provider_name != "ollama":
-        name = _toml_quote(spec.provider_name)
-        url = _toml_quote(spec.provider_url or "")
-        provider_block = (
-            f"[provider]\n"
-            f"name = {name}\n"
-            f"url = {url}\n"
-            f"timeout = 600\n"
-            f"fast_ctx = 8192\n"
-            f"heavy_ctx = 16384\n"
-        )
-    else:
-        url = _toml_quote(spec.provider_url or "http://localhost:11434")
-        provider_block = (
-            f"[ollama]\nurl = {url}\ntimeout = 600\nfast_ctx = 8192\nheavy_ctx = 16384\n"
-        )
-
-    return (
-        f"[models]\n"
-        f"fast = {fast}\n"
-        f"heavy = {heavy}\n\n"
-        f"{provider_block}\n"
-        f"[pipeline]\n"
-        f"auto_approve = true\n"
-        f"auto_commit = false\n"
-        f"max_concepts_per_source = 8\n"
-        f"ingest_parallel = false\n"
+    return ContestantRunResult(
+        role=role,
+        fast_model=effective_config.models.fast,
+        heavy_model=effective_config.models.heavy,
+        provider_name=effective_config.effective_provider.name,
+        provider_url=effective_config.effective_provider.url,
+        partial=partial,
+        pipeline_report=_serialize_pipeline_report(pipeline_report),
+        queries=query_results,
+        diagnostics=diagnostics,
+        wall_time_seconds=wall,
+        page_snapshots=snapshots,
+        artifact_dir=str(artifact_dir),
     )
 
 
-# ── Diagnostics capture (runs before db close + vault cleanup) ───────────────
+def _materialize_compare_vault(vault: Path, raw_dir: Path, config: Config) -> None:
+    if any(p.is_symlink() for p in raw_dir.rglob("*.md")):
+        raise ValueError("compare does not support symlinked raw notes")
+    (vault / "raw").mkdir(parents=True, exist_ok=False)
+    (vault / "wiki").mkdir()
+    (vault / ".olw").mkdir()
+    for note in sorted(raw_dir.rglob("*.md")):
+        dst = vault / "raw" / note.relative_to(raw_dir)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(note, dst)
+    _write_effective_compare_toml(vault, config)
 
 
-def _capture_diagnostics(vault: Path, db, config: Config, corpus: Corpus) -> dict:
-    """Compact summary of vault state — enough for metrics.py to score.
+def _write_effective_compare_toml(vault: Path, config: Config) -> None:
+    prov = config.effective_provider
+    lines = [
+        "[models]",
+        f"fast = {_toml_quote(config.models.fast)}",
+        f"heavy = {_toml_quote(config.models.heavy)}",
+        "",
+    ]
+    if prov.name == "ollama":
+        lines.extend(
+            [
+                "[ollama]",
+                f"url = {_toml_quote(prov.url)}",
+                f"timeout = {int(prov.timeout)}",
+                f"fast_ctx = {prov.fast_ctx}",
+                f"heavy_ctx = {prov.heavy_ctx}",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "[provider]",
+                f"name = {_toml_quote(prov.name)}",
+                f"url = {_toml_quote(prov.url)}",
+                f"timeout = {int(prov.timeout)}",
+                f"fast_ctx = {prov.fast_ctx}",
+                f"heavy_ctx = {prov.heavy_ctx}",
+            ]
+        )
+        if prov.name == "azure":
+            lines.append(f"azure_api_version = {_toml_quote(prov.azure_api_version)}")
+        lines.append("")
 
-    Must run BEFORE db.close() + rmtree, since it reads state.db and the
-    ephemeral vault's wiki/ directory.
-    """
+    lines.extend(
+        [
+            "[pipeline]",
+            "auto_approve = true",
+            "auto_commit = false",
+            f"auto_maintain = {str(config.pipeline.auto_maintain).lower()}",
+            f"watch_debounce = {config.pipeline.watch_debounce}",
+            f"max_concepts_per_source = {config.pipeline.max_concepts_per_source}",
+            f"ingest_parallel = {str(config.pipeline.ingest_parallel).lower()}",
+        ]
+    )
+    if config.pipeline.language:
+        lines.append(f"language = {_toml_quote(config.pipeline.language)}")
+    (vault / "wiki.toml").write_text("\n".join(lines) + "\n")
+
+
+def _capture_diagnostics(vault: Path, db, config: Config, events) -> dict:
     from ..pipeline.lint import run_lint
-    from ..vault import extract_wikilinks, parse_note
 
     issue_counts: dict[str, int] = {}
     lint_health: float | None = None
@@ -329,96 +256,127 @@ def _capture_diagnostics(vault: Path, db, config: Config, corpus: Corpus) -> dic
         for issue in lint_result.issues:
             issue_counts[issue.issue_type] = issue_counts.get(issue.issue_type, 0) + 1
     except Exception as e:  # noqa: BLE001
-        log.warning("run_lint failed during diagnostics: %s", e)
-
-    extracted_concepts: list[str] = []
-    try:
-        extracted_concepts = [c.lower() for c in db.list_all_concept_names()]
-    except Exception as e:  # noqa: BLE001
-        log.warning("concept enumeration failed: %s", e)
+        log.warning("compare lint diagnostics failed: %s", e)
 
     total_pages = 0
-    total_words = 0
     total_wikilinks = 0
-    total_tags = 0
-    total_chars = 0
-    article_bodies: list[str] = []
-
-    wiki_dir = vault / "wiki"
-    if wiki_dir.is_dir():
-        for md in sorted(wiki_dir.rglob("*.md")):
-            if md.stem in ("index", "log"):
-                continue
-            try:
-                meta, body = parse_note(md)
-            except Exception:  # noqa: BLE001
-                continue
-            total_pages += 1
-            total_words += len(body.split())
-            total_chars += len(body)
-            total_wikilinks += len(extract_wikilinks(body))
-            tags = meta.get("tags") or []
-            if isinstance(tags, list):
-                total_tags += len([t for t in tags if isinstance(t, str)])
-            article_bodies.append(body)
-
-    # Fidelity: 3-gram Jaccard of article bodies vs source notes (mean per article)
-    source_text = ""
-    try:
-        source_text = "\n\n".join(n.path.read_text(errors="ignore") for n in corpus.notes)
-    except Exception:  # noqa: BLE001
-        pass
-    fidelity = _mean_article_source_overlap(article_bodies, source_text)
+    total_words = 0
+    for md in sorted((vault / "wiki").rglob("*.md")):
+        if md.stem in ("index", "log"):
+            continue
+        try:
+            _, body = parse_note(md)
+        except Exception:  # noqa: BLE001
+            continue
+        total_pages += 1
+        total_words += len(body.split())
+        total_wikilinks += len(extract_wikilinks(body))
 
     return {
         "lint_health": lint_health,
         "issue_counts": issue_counts,
-        "extracted_concepts": extracted_concepts,
         "total_pages": total_pages,
-        "total_words": total_words,
         "total_wikilinks": total_wikilinks,
-        "total_tags": total_tags,
-        "total_chars": total_chars,
-        "fidelity_source_overlap": fidelity,
+        "total_words": total_words,
+        "total_calls": len(events),
     }
 
 
-def _ngram_set(text: str, n: int = 3) -> set[str]:
-    """Word-level n-gram set. Lowercased, punctuation-stripped-ish."""
-    import re as _re
-
-    words = _re.findall(r"[a-z0-9]+", text.lower())
-    if len(words) < n:
-        return set()
-    return {" ".join(words[i : i + n]) for i in range(len(words) - n + 1)}
-
-
-def _mean_article_source_overlap(bodies: list[str], source_text: str) -> float | None:
-    if not bodies or not source_text:
-        return None
-    src_grams = _ngram_set(source_text)
-    if not src_grams:
-        return None
-    jaccards: list[float] = []
-    for body in bodies:
-        art_grams = _ngram_set(body)
-        if not art_grams:
+def _snapshot_wiki(wiki_dir: Path) -> list[PageSnapshot]:
+    snapshots: list[PageSnapshot] = []
+    for md in sorted(wiki_dir.rglob("*.md")):
+        if md.stem in ("index", "log") or ".drafts" in md.parts:
             continue
-        inter = len(art_grams & src_grams)
-        union = len(art_grams | src_grams)
-        if union == 0:
+        try:
+            meta, body = parse_note(md)
+        except Exception:  # noqa: BLE001
             continue
-        jaccards.append(inter / union)
-    if not jaccards:
+        snapshots.append(
+            PageSnapshot(
+                path=str(md.relative_to(wiki_dir)),
+                title=str(meta.get("title") or md.stem),
+                content_hash=hashlib.sha256(body.encode("utf-8")).hexdigest(),
+                word_count=len(body.split()),
+                wikilinks=sorted(set(extract_wikilinks(body))),
+                tags=[t for t in (meta.get("tags") or []) if isinstance(t, str)],
+                sources=[s for s in (meta.get("sources") or []) if isinstance(s, str)],
+            )
+        )
+    return snapshots
+
+
+def _diff_pages(
+    current_pages: list[PageSnapshot], challenger_pages: list[PageSnapshot]
+) -> PageDiffSummary:
+    cur_by_path = {p.path: p for p in current_pages}
+    cur_by_title = {p.title.lower(): p for p in current_pages}
+    added: list[str] = []
+    changed: list[str] = []
+    matched_current: set[str] = set()
+
+    for page in challenger_pages:
+        current = cur_by_path.get(page.path) or cur_by_title.get(page.title.lower())
+        if current is None:
+            added.append(page.title)
+            continue
+        matched_current.add(current.path)
+        if (
+            current.content_hash != page.content_hash
+            or current.tags != page.tags
+            or current.wikilinks != page.wikilinks
+        ):
+            changed.append(page.title)
+
+    removed = [p.title for p in current_pages if p.path not in matched_current]
+    return PageDiffSummary(
+        added=sorted(added),
+        removed=sorted(removed),
+        changed=sorted(changed),
+    )
+
+
+def _diff_queries(
+    queries, current_results: list[QueryResult], challenger_results: list[QueryResult]
+):
+    from .metrics import score_query_result
+    from .models import QueryDiff
+
+    cur_by_id = {q.id: q for q in current_results}
+    challenger_by_id = {q.id: q for q in challenger_results}
+    diffs: list[QueryDiff] = []
+    for q in queries:
+        current = cur_by_id.get(q.id, QueryResult(id=q.id, answer="", pages=[]))
+        challenger = challenger_by_id.get(q.id, QueryResult(id=q.id, answer="", pages=[]))
+        current_score = score_query_result(current, q)
+        challenger_score = score_query_result(challenger, q)
+        delta = None
+        if current_score is not None and challenger_score is not None:
+            delta = challenger_score - current_score
+        diffs.append(
+            QueryDiff(
+                id=q.id,
+                question=q.question,
+                current_pages=current.pages,
+                challenger_pages=challenger.pages,
+                current_answer=current.answer,
+                challenger_answer=challenger.answer,
+                current_score=current_score,
+                challenger_score=challenger_score,
+                delta=delta,
+            )
+        )
+    return diffs
+
+
+def _copy_wiki_snapshot(src: Path, dst: Path) -> None:
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+
+def _serialize_pipeline_report(report) -> dict | None:
+    if report is None:
         return None
-    return sum(jaccards) / len(jaccards)
-
-
-# ── Serialization helpers ─────────────────────────────────────────────────────
-
-
-def _serialize_pipeline_report(report) -> dict:
-    """PipelineReport dataclass → plain dict (FailureRecord enum-safe)."""
     return {
         "ingested": report.ingested,
         "compiled": report.compiled,
@@ -430,58 +388,46 @@ def _serialize_pipeline_report(report) -> dict:
             {"concept": f.concept, "reason": f.reason.value, "error_msg": f.error_msg}
             for f in report.failed
         ],
-        "timings": dict(report.timings),
-        "concept_timings": dict(report.concept_timings),
     }
 
 
-def _write_report_json(report: CompareReport, path: Path) -> None:
+def _config_summary(config: Config) -> dict[str, str]:
+    prov = config.effective_provider
+    return {
+        "fast_model": config.models.fast,
+        "heavy_model": config.models.heavy,
+        "provider": prov.name,
+        "provider_url": prov.url,
+    }
+
+
+def _write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    # CompareReport contains ContestantResult with DimScore objects — rely on
-    # asdict to walk the whole tree.
-    path.write_text(json.dumps(asdict(report), indent=2, default=str))
+    path.write_text(json.dumps(data, indent=2, default=str))
 
 
-# ── Metadata ──────────────────────────────────────────────────────────────────
+def _safe_child(root: Path, *parts: str) -> Path:
+    base = root.resolve()
+    path = base.joinpath(*parts).resolve()
+    path.relative_to(base)
+    return path
+
+
+def _assert_compare_root_safe(compare_root: Path, active_vault: Path) -> None:
+    compare_root = compare_root.resolve()
+    active_vault = active_vault.resolve()
+    if compare_root == active_vault:
+        raise ValueError("compare output root must not be the active vault root")
+
+
+def _safe_rmtree(path: Path, root: Path) -> None:
+    path.resolve().relative_to(root.resolve())
+    shutil.rmtree(path)
 
 
 def _make_run_id() -> str:
-    """yyyymmdd-HHMMSS + short hash — stable per run, sortable."""
     ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    h = hashlib.sha256(ts.encode()).hexdigest()[:6]
-    return f"{ts}-{h}"
+    return f"{ts}-{hashlib.sha256(ts.encode()).hexdigest()[:6]}"
 
 
-def _olw_version() -> str:
-    try:
-        from importlib.metadata import version
-
-        return version("obsidian-llm-wiki")
-    except Exception:  # noqa: BLE001
-        return "unknown"
-
-
-def _pipeline_prompt_hash() -> str:
-    """Hash of the pipeline prompt templates currently in use.
-
-    Two runs can only be compared apples-to-apples if this matches.
-    We hash the top-level system prompts from ingest + compile because
-    they drive every scored stage.
-    """
-    try:
-        from ..pipeline import compile as _compile
-        from ..pipeline import ingest as _ingest
-    except ImportError:
-        return "unknown"
-
-    prompts = [
-        getattr(_ingest, "_SYSTEM", ""),
-        getattr(_compile, "_PLAN_SYSTEM", ""),
-        getattr(_compile, "_WRITE_SYSTEM", ""),
-        getattr(_compile, "_STUB_WRITE_SYSTEM", ""),
-    ]
-    h = hashlib.sha256()
-    for p in prompts:
-        h.update(p.encode("utf-8"))
-        h.update(b"\x00")
-    return h.hexdigest()[:16]
+__all__ = ["run_compare"]
