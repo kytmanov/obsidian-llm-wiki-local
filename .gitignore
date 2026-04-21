@@ -11,6 +11,7 @@ build/
 # Vault artifacts (not part of the tool itself)
 .chroma/
 *.db
+.olw-compare/
 
 # Test artifacts
 .coverage
