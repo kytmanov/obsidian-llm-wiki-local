@@ -7,8 +7,7 @@ from dataclasses import asdict
 from enum import Enum
 
 from .metrics import build_reasons, compute_advisor_metrics, decide_verdict
-from .models import CompareReport
-from .pricing import LAST_UPDATED as PRICING_AS_OF
+from .models import AdvisorVerdict, CompareReport
 
 
 def resolve(report: CompareReport) -> None:
@@ -32,6 +31,20 @@ def render_markdown(report: CompareReport) -> str:
     out.append("Reasons:")
     for reason in report.reasons:
         out.append(f"- {reason}")
+    out.append("")
+    out.append("## Next Steps")
+    out.append("")
+    if report.verdict == AdvisorVerdict.SWITCH:
+        out.append(
+            f"Edit `wiki.toml` in your vault and set the challenger models:\n"
+            f"```toml\n[models]\n"
+            f'fast = "{report.challenger.fast_model}"\n'
+            f'heavy = "{report.challenger.heavy_model}"\n```'
+        )
+    elif report.verdict == AdvisorVerdict.KEEP_CURRENT:
+        out.append("No change needed. Your current config performed better.")
+    else:
+        out.append(f"Review page diffs in `{report.out_dir}/diffs/` to decide manually.")
     out.append("")
     out.append("## Config Change")
     out.append("")
@@ -65,12 +78,9 @@ def render_markdown(report: CompareReport) -> str:
     out.append(
         f"- Challenger lint health: {report.challenger.diagnostics.get('lint_health', 'n/a')}"
     )
+    out.append(f"- Current link health: {_fmt(report.current.diagnostics.get('link_health'))}")
     out.append(
-        f"- Current broken link rate: {_fmt(report.current.diagnostics.get('broken_link_rate'))}"
-    )
-    out.append(
-        "- Challenger broken link rate: "
-        f"{_fmt(report.challenger.diagnostics.get('broken_link_rate'))}"
+        f"- Challenger link health: {_fmt(report.challenger.diagnostics.get('link_health'))}"
     )
     out.append("")
     out.append("## Representative Page Changes")
@@ -91,7 +101,10 @@ def render_markdown(report: CompareReport) -> str:
     out.append(
         "- This is a preview of automated generated output, not a final curated vault outcome."
     )
-    out.append(f"- Cost estimates use pricing snapshot from {PRICING_AS_OF} when available.")
+    out.append(
+        "- Output quality depends on the LLM used;"
+        " spot-check key pages before committing to a switch."
+    )
     return "\n".join(out) + "\n"
 
 

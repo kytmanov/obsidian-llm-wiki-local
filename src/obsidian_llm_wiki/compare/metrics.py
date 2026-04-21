@@ -71,8 +71,8 @@ def compute_advisor_metrics(report: CompareReport) -> None:
     challenger = report.challenger
     cur_diag = current.diagnostics
     ch_diag = challenger.diagnostics
-    report.current.diagnostics["broken_link_rate"] = _broken_link_rate(cur_diag)
-    report.challenger.diagnostics["broken_link_rate"] = _broken_link_rate(ch_diag)
+    report.current.diagnostics["link_health"] = _link_health(cur_diag)
+    report.challenger.diagnostics["link_health"] = _link_health(ch_diag)
     report.current.diagnostics["orphan_rate"] = _orphan_rate(cur_diag)
     report.challenger.diagnostics["orphan_rate"] = _orphan_rate(ch_diag)
     report.current.diagnostics["lint_health_norm"] = _lint_health(cur_diag)
@@ -93,11 +93,11 @@ def decide_verdict(report: CompareReport) -> None:
         report.verdict = AdvisorVerdict.KEEP_CURRENT
         return
 
-    broken_delta = _delta(ch_diag.get("broken_link_rate"), cur_diag.get("broken_link_rate"))
+    link_delta = _delta(ch_diag.get("link_health"), cur_diag.get("link_health"))
     orphan_delta = _delta(ch_diag.get("orphan_rate"), cur_diag.get("orphan_rate"))
     lint_delta = _delta(ch_diag.get("lint_health_norm"), cur_diag.get("lint_health_norm"))
     if (
-        (broken_delta is not None and broken_delta < -0.05)
+        (link_delta is not None and link_delta < -0.05)
         or (orphan_delta is not None and orphan_delta < -0.05)
         or (lint_delta is not None and lint_delta < -0.05)
     ):
@@ -105,16 +105,22 @@ def decide_verdict(report: CompareReport) -> None:
         return
 
     if not report.query_diffs:
-        report.verdict = AdvisorVerdict.MANUAL_REVIEW
+        structure_composite = _composite([lint_delta, orphan_delta, link_delta])
+        if structure_composite is not None and structure_composite >= 0.05:
+            report.verdict = AdvisorVerdict.SWITCH
+        else:
+            report.verdict = AdvisorVerdict.MANUAL_REVIEW
+        return
+
+    if query_deltas and sum(query_deltas) / len(query_deltas) > 0.10:
+        report.verdict = AdvisorVerdict.SWITCH
         return
     if report.page_diff.changed or report.page_diff.added or report.page_diff.removed:
         if any(delta > 0 for delta in query_deltas) or any(
-            d is not None and d > 0 for d in (broken_delta, orphan_delta, lint_delta)
+            d is not None and d > 0 for d in (link_delta, orphan_delta, lint_delta)
         ):
             report.verdict = AdvisorVerdict.SWITCH
             return
-        report.verdict = AdvisorVerdict.MANUAL_REVIEW
-        return
     report.verdict = AdvisorVerdict.MANUAL_REVIEW
 
 
@@ -137,11 +143,11 @@ def build_reasons(report: CompareReport) -> list[str]:
     if regressed_queries:
         reasons.append(f"query results regressed on {len(regressed_queries)} check(s)")
 
-    broken_delta = _delta(ch_diag.get("broken_link_rate"), cur_diag.get("broken_link_rate"))
-    if broken_delta is not None and broken_delta > 0.05:
-        reasons.append("broken link rate improved")
-    elif broken_delta is not None and broken_delta < -0.05:
-        reasons.append("broken link rate worsened")
+    link_delta = _delta(ch_diag.get("link_health"), cur_diag.get("link_health"))
+    if link_delta is not None and link_delta > 0.05:
+        reasons.append("link health improved")
+    elif link_delta is not None and link_delta < -0.05:
+        reasons.append("link health worsened")
 
     lint_delta = _delta(ch_diag.get("lint_health_norm"), cur_diag.get("lint_health_norm"))
     if lint_delta is not None and lint_delta > 0.05:
@@ -153,7 +159,12 @@ def build_reasons(report: CompareReport) -> list[str]:
     if changed:
         reasons.append(f"{changed} page(s) changed materially")
     if not report.query_diffs:
-        reasons.append("no explicit compare queries were provided")
+        orphan_delta2 = _delta(ch_diag.get("orphan_rate"), cur_diag.get("orphan_rate"))
+        structure_composite = _composite([lint_delta, orphan_delta2, link_delta])
+        if structure_composite is not None and structure_composite >= 0.05:
+            reasons.append("structure metrics improved (no explicit queries provided)")
+        else:
+            reasons.append("no explicit compare queries were provided")
 
     report.reasons = reasons[:4]
     if not report.reasons:
@@ -166,7 +177,14 @@ def _delta(challenger, current) -> float | None:
     return challenger - current
 
 
-def _broken_link_rate(diag: dict) -> float | None:
+def _composite(deltas: list[float | None]) -> float | None:
+    values = [d for d in deltas if d is not None]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _link_health(diag: dict) -> float | None:
     links = diag.get("total_wikilinks", 0) or 0
     if links == 0:
         return None

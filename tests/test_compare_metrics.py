@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from obsidian_llm_wiki.compare.metrics import (
-    _broken_link_rate,
+    _link_health,
     _lint_health,
     _orphan_rate,
     build_reasons,
@@ -22,7 +22,7 @@ from obsidian_llm_wiki.compare.models import (
 )
 
 
-def _report() -> CompareReport:
+def _report(*, page_diff=None) -> CompareReport:
     return CompareReport(
         run_id="rid",
         vault_path="/vault",
@@ -55,7 +55,7 @@ def _report() -> CompareReport:
                 "total_pages": 5,
             },
         ),
-        page_diff=PageDiffSummary(changed=["A"]),
+        page_diff=page_diff if page_diff is not None else PageDiffSummary(changed=["A"]),
     )
 
 
@@ -78,7 +78,7 @@ def test_rate_helpers():
         "total_pages": 5,
         "lint_health": 85.0,
     }
-    assert _broken_link_rate(diag) == 0.8
+    assert _link_health(diag) == 0.8
     assert _orphan_rate(diag) == 0.8
     assert _lint_health(diag) == 0.85
 
@@ -106,3 +106,42 @@ def test_build_reasons_populates():
     decide_verdict(report)
     build_reasons(report)
     assert report.reasons
+
+
+def test_decide_verdict_switch_on_structure_improvement_no_queries():
+    report = _report()
+    # No queries — challenger structure is better (lint 95 vs 90, fewer broken links)
+    assert not report.query_diffs
+    compute_advisor_metrics(report)
+    decide_verdict(report)
+    assert report.verdict == AdvisorVerdict.SWITCH
+
+
+def test_decide_verdict_manual_review_when_no_signal_no_queries():
+    report = _report(page_diff=PageDiffSummary())
+    # Override diagnostics to be identical so no structure delta
+    for contestant in (report.current, report.challenger):
+        contestant.diagnostics.update(
+            {
+                "lint_health": 90.0,
+                "issue_counts": {"broken_link": 2, "orphan": 1},
+                "total_wikilinks": 10,
+                "total_pages": 5,
+            }
+        )
+    assert not report.query_diffs
+    compute_advisor_metrics(report)
+    decide_verdict(report)
+    assert report.verdict == AdvisorVerdict.MANUAL_REVIEW
+
+
+def test_decide_verdict_switch_on_query_delta_alone():
+    report = _report(page_diff=PageDiffSummary())
+    # Clear positive query delta with no page changes
+    report.query_diffs = [
+        QueryDiff("q1", "?", [], [], "", "", 0.5, 0.9, 0.4),
+        QueryDiff("q2", "?", [], [], "", "", 0.6, 0.8, 0.2),
+    ]
+    compute_advisor_metrics(report)
+    decide_verdict(report)
+    assert report.verdict == AdvisorVerdict.SWITCH

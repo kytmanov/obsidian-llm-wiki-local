@@ -243,7 +243,6 @@ question = "What is backpropagation?"
 expected_contains = ["chain rule"]
 EOF
 
-HASH_BEFORE="$(dir_hash "$VAULT_DIR")"
 pass "temporary vault created"
 PASS_COUNT=$((PASS_COUNT + 1))
 
@@ -284,6 +283,8 @@ max_concepts_per_source = 8
 ingest_parallel = false
 EOF
 
+HASH_BEFORE="$(dir_hash "$VAULT_DIR")"
+
 header "Run olw compare"
 if ! uv run olw compare \
     --vault "$VAULT_DIR" \
@@ -309,6 +310,7 @@ REPORT_MD="$RESULTS_DIR/report.md"
 for section in \
     "# olw compare" \
     "## Recommendation" \
+    "## Next Steps" \
     "## Config Change" \
     "## Query Summary" \
     "## Vault Impact" \

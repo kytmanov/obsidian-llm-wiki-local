@@ -26,6 +26,7 @@ def run_compare(
     out_dir: Path,
     queries_path: Path | None = None,
     keep_artifacts: bool = False,
+    sample_n: int | None = None,
 ) -> CompareReport:
     run_id = _make_run_id()
     run_root = _safe_child(out_dir.resolve(), run_id)
@@ -54,6 +55,7 @@ def run_compare(
         artifact_dir=current_dir,
         keep_artifacts=keep_artifacts,
         queries=queries,
+        sample_n=sample_n,
     )
     challenger_result = _run_single_vault(
         source_config=current_config,
@@ -63,6 +65,7 @@ def run_compare(
         artifact_dir=challenger_dir,
         keep_artifacts=keep_artifacts,
         queries=queries,
+        sample_n=sample_n,
     )
     wall = time.monotonic() - t0
 
@@ -97,6 +100,7 @@ def _run_single_vault(
     artifact_dir: Path,
     keep_artifacts: bool,
     queries,
+    sample_n: int | None = None,
 ) -> ContestantRunResult:
     from ..client_factory import build_client
     from ..pipeline.orchestrator import PipelineOrchestrator
@@ -107,7 +111,9 @@ def _run_single_vault(
     if temp_root.exists():
         raise RuntimeError(f"ephemeral compare vault already exists: {temp_root}")
 
-    _materialize_compare_vault(temp_root, source_config.raw_dir, effective_config)
+    _materialize_compare_vault(
+        temp_root, source_config.raw_dir, effective_config, sample_n=sample_n
+    )
     config = Config.from_vault(temp_root)
     client = build_client(config)
     db = StateDB(config.state_db_path)
@@ -182,13 +188,18 @@ def _run_single_vault(
     )
 
 
-def _materialize_compare_vault(vault: Path, raw_dir: Path, config: Config) -> None:
+def _materialize_compare_vault(
+    vault: Path, raw_dir: Path, config: Config, sample_n: int | None = None
+) -> None:
     if any(p.is_symlink() for p in raw_dir.rglob("*.md")):
         raise ValueError("compare does not support symlinked raw notes")
     (vault / "raw").mkdir(parents=True, exist_ok=False)
     (vault / "wiki").mkdir()
     (vault / ".olw").mkdir()
-    for note in sorted(raw_dir.rglob("*.md")):
+    notes = sorted(raw_dir.rglob("*.md"))
+    if sample_n is not None and sample_n > 0:
+        notes = notes[:sample_n]
+    for note in notes:
         dst = vault / "raw" / note.relative_to(raw_dir)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(note, dst)

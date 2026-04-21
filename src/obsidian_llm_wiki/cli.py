@@ -1898,6 +1898,13 @@ def _validate_compare_inputs(config, queries_path: str | None) -> None:
     show_default=True,
     help="Report output format.",
 )
+@click.option(
+    "--sample-n",
+    "sample_n",
+    type=int,
+    default=None,
+    help="Limit compare to first N raw notes (useful for a quick spot-check on large vaults).",
+)
 def compare(
     vault_str,
     fast_model,
@@ -1909,6 +1916,7 @@ def compare(
     keep_artifacts,
     allow_cloud_upload,
     report_format,
+    sample_n,
 ):
     """Preview whether switching LLM config would improve your vault."""
     from .compare.runner import run_compare
@@ -1952,6 +1960,7 @@ def compare(
     )
     out.mkdir(parents=True, exist_ok=True)
 
+    sample_label = f"first {sample_n} notes" if sample_n else "all notes"
     console.print(
         f"[bold]olw compare[/bold] — active vault preview\n"
         f"  vault={config.vault}\n"
@@ -1961,6 +1970,7 @@ def compare(
         f"heavy={challenger_config.models.heavy} "
         f"provider={challenger_config.effective_provider.name}\n"
         f"  queries={'enabled' if queries_path else 'disabled'}\n"
+        f"  scope={sample_label}\n"
         f"  Active vault will not be modified."
     )
 
@@ -1970,6 +1980,7 @@ def compare(
         out_dir=out,
         queries_path=Path(queries_path) if queries_path else None,
         keep_artifacts=keep_artifacts,
+        sample_n=sample_n,
     )
 
     from .compare.report import render_json, render_markdown, render_summary_json, resolve
@@ -1983,9 +1994,17 @@ def compare(
         (run_dir / "report.json").write_text(render_json(report))
     (run_dir / "summary.json").write_text(render_summary_json(report))
 
+    from .compare.models import AdvisorVerdict
+
     console.print()
     console.print(f"[green]Run complete:[/green] {report.run_id}")
     console.print(f"Artifacts: {out / report.run_id}")
     console.print(f"[bold]Verdict:[/bold] {report.verdict.value}")
     for reason in report.reasons:
         console.print(f"  · {reason}")
+    if report.verdict == AdvisorVerdict.SWITCH:
+        console.print(
+            f"\n[bold]Next step:[/bold] edit wiki.toml and set:\n"
+            f'  fast = "{challenger_config.models.fast}"\n'
+            f'  heavy = "{challenger_config.models.heavy}"'
+        )
