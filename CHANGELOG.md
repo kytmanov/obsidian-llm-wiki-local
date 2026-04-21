@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.6.0] - 2026-04-21
+
+### Highlights
+
+**v0.6.0 adds `olw compare`, a safe way to preview a model or provider switch before changing your vault config.** Instead of benchmarking abstract prompt quality, `olw compare` rebuilds isolated previews from your current vault's `raw/` notes, compares the current setup against one challenger, and tells you whether to switch, keep the current config, or inspect the results manually.
+
+### New Features
+
+- **`olw compare`** — compare the active vault config against a single challenger model/provider configuration using the same source notes. The command produces a recommendation-first report and shows the exact `wiki.toml` config needed to reproduce the challenger setup.
+
+### Changes
+
+- **Safer preview runs** — compare never mutates the active vault outside `.olw/compare/`, rejects unsafe path/symlink inputs, and requires explicit acknowledgement before sending vault content to a cloud provider.
+- **Better compare guidance** — reports now include clearer verdicts, config-change instructions, and artifact output designed for manual review instead of benchmark-style winner framing.
+- **Docs and smoke coverage** — README and smoke tests now cover the new compare workflow, including LM Studio / OpenAI-compatible local backends.
+
 ## [0.5.1] - 2026-04-19
 
 ### Highlights
