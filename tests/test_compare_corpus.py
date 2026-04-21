@@ -50,6 +50,12 @@ def test_curated_corpus_loads():
     assert len(c.notes_set_hash) == 64
 
 
+def test_curated_corpus_default_builtin_loads():
+    c = load_corpus()
+    assert c.mode is CorpusMode.CURATED
+    assert c.notes
+
+
 def test_curated_corpus_known_concepts_lowercased():
     c = load_corpus(corpus_path=BUILTIN)
     for n in c.notes:

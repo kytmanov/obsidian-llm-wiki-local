@@ -124,7 +124,7 @@ def decide_verdict(report: CompareReport) -> None:
     report.verdict = AdvisorVerdict.MANUAL_REVIEW
 
 
-def build_reasons(report: CompareReport) -> list[str]:
+def build_reasons(report: CompareReport) -> None:
     reasons: list[str] = []
     current = report.current
     challenger = report.challenger

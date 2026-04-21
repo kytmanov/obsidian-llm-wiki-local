@@ -1857,13 +1857,17 @@ def _validate_compare_out_dir(out: Path, config) -> Path:
 
 
 def _validate_compare_inputs(config, queries_path: str | None) -> None:
-    for note in config.raw_dir.rglob("*.md"):
-        if note.is_symlink():
-            raise click.BadParameter("compare does not support symlinked raw notes")
+    from .compare.runner import _collect_raw_notes, _validate_queries_path
+
+    try:
+        _collect_raw_notes(config.raw_dir)
+    except ValueError as e:
+        raise click.BadParameter(str(e)) from e
     if queries_path:
-        qp = Path(queries_path).expanduser().resolve()
-        if qp.is_symlink():
-            raise click.BadParameter("--queries must not be a symlink")
+        try:
+            _validate_queries_path(Path(queries_path))
+        except ValueError as e:
+            raise click.BadParameter(str(e)) from e
 
 
 def _validate_compare_sample_n(_ctx, _param, value: int | None) -> int | None:

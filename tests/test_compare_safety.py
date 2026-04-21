@@ -97,3 +97,23 @@ def test_compare_never_creates_active_queries_dir(tmp_path, patched_pipeline):
     challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
     run_compare(current, challenger, vault / ".olw" / "compare", queries_path=queries)
     assert not (vault / "wiki" / "queries").exists()
+
+
+def test_compare_rejects_programmatic_out_dir_inside_raw(tmp_path, patched_pipeline):
+    vault = _make_vault(tmp_path)
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+
+    with pytest.raises(ValueError, match="inside active vault raw/ or wiki/"):
+        run_compare(current, challenger, vault / "raw" / "compare")
+
+
+def test_compare_rejects_programmatic_out_dir_inside_vault_outside_compare(
+    tmp_path, patched_pipeline
+):
+    vault = _make_vault(tmp_path)
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+
+    with pytest.raises(ValueError, match=r"must be under \.olw/compare/"):
+        run_compare(current, challenger, vault / "reports")

@@ -42,9 +42,9 @@ def run_compare(
     if keep_artifacts:
         vaults_dir.mkdir(parents=True, exist_ok=True)
 
-    queries = load_queries(queries_path) if queries_path else []
-    if queries_path is not None and queries_path.is_symlink():
-        raise ValueError("--queries must not be a symlink")
+    queries = []
+    if queries_path is not None:
+        queries = load_queries(_validate_queries_path(queries_path))
 
     t0 = time.monotonic()
     current_result = _run_single_vault(
@@ -193,12 +193,10 @@ def _materialize_compare_vault(
 ) -> None:
     if sample_n is not None and sample_n < 1:
         raise ValueError("sample_n must be at least 1")
-    if any(p.is_symlink() for p in raw_dir.rglob("*.md")):
-        raise ValueError("compare does not support symlinked raw notes")
     (vault / "raw").mkdir(parents=True, exist_ok=False)
     (vault / "wiki").mkdir()
     (vault / ".olw").mkdir()
-    notes = sorted(raw_dir.rglob("*.md"))
+    notes = _collect_raw_notes(raw_dir)
     if sample_n is not None:
         notes = notes[:sample_n]
     for note in notes:
@@ -426,11 +424,67 @@ def _safe_child(root: Path, *parts: str) -> Path:
     return path
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _collect_raw_notes(raw_dir: Path) -> list[Path]:
+    raw_dir = raw_dir.expanduser()
+    raw_root = raw_dir.resolve()
+    if raw_dir.is_symlink():
+        raise ValueError("compare does not support symlinked raw notes")
+
+    notes: list[Path] = []
+    pending = [raw_dir]
+    while pending:
+        current = pending.pop()
+        for child in sorted(current.iterdir()):
+            if child.is_symlink():
+                raise ValueError("compare does not support symlinked raw notes")
+            resolved = child.resolve()
+            if not _is_within(resolved, raw_root):
+                raise ValueError("compare raw notes must stay inside raw/")
+            if child.is_dir():
+                pending.append(child)
+            elif child.is_file() and child.suffix == ".md":
+                notes.append(child)
+    return sorted(notes)
+
+
+def _validate_queries_path(queries_path: Path) -> Path:
+    path = queries_path.expanduser()
+    if not path.exists():
+        raise ValueError("--queries must exist")
+    if not path.is_file():
+        raise ValueError("--queries must be a file")
+    for candidate in (path, *path.parents):
+        if candidate.exists() and candidate.is_symlink():
+            raise ValueError("--queries must not be a symlink")
+    return path.resolve()
+
+
 def _assert_compare_root_safe(compare_root: Path, active_vault: Path) -> None:
     compare_root = compare_root.resolve()
     active_vault = active_vault.resolve()
     if compare_root == active_vault:
         raise ValueError("compare output root must not be the active vault root")
+
+    raw_root = active_vault / "raw"
+    wiki_root = active_vault / "wiki"
+    allowed_compare_root = active_vault / ".olw" / "compare"
+
+    if _is_within(compare_root, raw_root) or _is_within(compare_root, wiki_root):
+        raise ValueError("compare output root must not be inside active vault raw/ or wiki/")
+    if _is_within(compare_root, active_vault) and not _is_within(
+        compare_root, allowed_compare_root
+    ):
+        raise ValueError(
+            "compare output root inside the active vault must be under .olw/compare/"
+        )
 
 
 def _safe_rmtree(path: Path, root: Path) -> None:

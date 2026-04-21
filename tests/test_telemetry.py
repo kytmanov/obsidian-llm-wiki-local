@@ -194,6 +194,23 @@ def test_missing_tokens_reported_as_none():
     assert ev.latency_ms == 10
 
 
+def test_partial_token_fields_preserve_none_for_missing_side():
+    c = _mock_client(_valid_analysis(), last_stats={"latency_ms": 10, "completion_tokens": 7})
+
+    with telemetry_sink() as events:
+        request_structured(
+            client=c,
+            prompt="p",
+            model_class=AnalysisResult,
+            model="gemma4:e4b",
+            stage="ingest",
+        )
+
+    ev = events[0]
+    assert ev.prompt_tokens is None
+    assert ev.completion_tokens == 7
+
+
 def test_no_last_stats_attr_tolerated():
     """Client without _last_stats attribute → event still emitted cleanly."""
     c = MagicMock(spec=["generate"])

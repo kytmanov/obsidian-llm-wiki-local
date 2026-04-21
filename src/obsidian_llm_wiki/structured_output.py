@@ -222,7 +222,8 @@ def request_structured(
     total_latency_ms = 0
     total_prompt_tokens = 0
     total_completion_tokens = 0
-    any_tokens_seen = False
+    prompt_tokens_seen = False
+    completion_tokens_seen = False
 
     def _emit(tier: int, retries: int, error: str | None) -> None:
         emit(
@@ -232,8 +233,8 @@ def request_structured(
                 tier=tier,
                 retries=retries,
                 latency_ms=total_latency_ms,
-                prompt_tokens=total_prompt_tokens if any_tokens_seen else None,
-                completion_tokens=total_completion_tokens if any_tokens_seen else None,
+                prompt_tokens=total_prompt_tokens if prompt_tokens_seen else None,
+                completion_tokens=total_completion_tokens if completion_tokens_seen else None,
                 num_ctx=num_ctx,
                 error=error,
             )
@@ -257,10 +258,10 @@ def request_structured(
         ct = stats.get("completion_tokens")
         if pt is not None:
             total_prompt_tokens += int(pt)
-            any_tokens_seen = True
+            prompt_tokens_seen = True
         if ct is not None:
             total_completion_tokens += int(ct)
-            any_tokens_seen = True
+            completion_tokens_seen = True
 
         # Try direct parse (Tier 1)
         result, parse_err = _try_parse(raw, model_class)

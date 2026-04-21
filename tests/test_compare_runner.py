@@ -124,6 +124,32 @@ def test_run_compare_rejects_symlinked_raw_note(tmp_path, patched_pipeline):
         run_compare(current, challenger, vault / ".olw" / "compare")
 
 
+def test_run_compare_rejects_symlinked_raw_directory(tmp_path, patched_pipeline):
+    vault = _make_vault(tmp_path)
+    linked_dir = tmp_path / "linked"
+    linked_dir.mkdir()
+    (linked_dir / "nested.md").write_text("# nested\n")
+    (vault / "raw" / "external").symlink_to(linked_dir, target_is_directory=True)
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+
+    with pytest.raises(ValueError, match="symlinked raw notes"):
+        run_compare(current, challenger, vault / ".olw" / "compare")
+
+
+def test_run_compare_rejects_symlinked_queries_before_loading(tmp_path, patched_pipeline):
+    vault = _make_vault(tmp_path)
+    target = tmp_path / "queries-real.toml"
+    target.write_text('[query]\nid = "q1"\nquestion = "What?"\n')
+    link = tmp_path / "queries.toml"
+    link.symlink_to(target)
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+
+    with pytest.raises(ValueError, match="must not be a symlink"):
+        run_compare(current, challenger, vault / ".olw" / "compare", queries_path=link)
+
+
 def test_run_compare_sample_n_limits_notes(tmp_path, patched_pipeline):
     vault = _make_vault(tmp_path)
     # Add extra notes so we have more than sample_n

@@ -131,7 +131,7 @@ def load_corpus(
     mode = detect_mode(corpus_path, notes_path, baseline_vault_path)
 
     if mode == CorpusMode.CURATED:
-        root = corpus_path or (Path(__file__).resolve().parents[3] / "tests" / "compare_corpus")
+        root = corpus_path or _default_curated_corpus_root()
         if not root.exists():
             raise CorpusError(f"Curated corpus not found at: {root}")
         return _load_curated(root, sample_n=sample_n)
@@ -142,6 +142,13 @@ def load_corpus(
 
     assert baseline_vault_path is not None
     return _load_baseline(baseline_vault_path, sample_n=sample_n)
+
+
+def _default_curated_corpus_root() -> Path:
+    package_root = Path(__file__).resolve().parent / "data" / "compare_corpus"
+    if package_root.exists():
+        return package_root
+    return Path(__file__).resolve().parents[3] / "tests" / "compare_corpus"
 
 
 def _load_curated(root: Path, sample_n: int | None) -> Corpus:
