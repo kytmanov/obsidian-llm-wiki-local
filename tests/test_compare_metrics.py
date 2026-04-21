@@ -114,7 +114,7 @@ def test_decide_verdict_switch_on_structure_improvement_no_queries():
     assert not report.query_diffs
     compute_advisor_metrics(report)
     decide_verdict(report)
-    assert report.verdict == AdvisorVerdict.SWITCH
+    assert report.verdict == AdvisorVerdict.MANUAL_REVIEW
 
 
 def test_decide_verdict_manual_review_when_no_signal_no_queries():
@@ -145,3 +145,23 @@ def test_decide_verdict_switch_on_query_delta_alone():
     compute_advisor_metrics(report)
     decide_verdict(report)
     assert report.verdict == AdvisorVerdict.SWITCH
+
+
+def test_decide_verdict_keep_current_on_consistent_mild_query_regressions():
+    report = _report(page_diff=PageDiffSummary(changed=["A"]))
+    report.query_diffs = [
+        QueryDiff("q1", "?", [], [], "", "", 0.8, 0.72, -0.08),
+        QueryDiff("q2", "?", [], [], "", "", 0.9, 0.81, -0.09),
+    ]
+    compute_advisor_metrics(report)
+    decide_verdict(report)
+    assert report.verdict == AdvisorVerdict.KEEP_CURRENT
+
+
+def test_build_reasons_mentions_missing_queries_even_with_structure_improvement():
+    report = _report()
+    compute_advisor_metrics(report)
+    decide_verdict(report)
+    build_reasons(report)
+    assert report.verdict == AdvisorVerdict.MANUAL_REVIEW
+    assert any("no explicit compare queries" in reason for reason in report.reasons)

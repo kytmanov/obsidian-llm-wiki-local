@@ -150,6 +150,30 @@ def test_run_compare_rejects_symlinked_queries_before_loading(tmp_path, patched_
         run_compare(current, challenger, vault / ".olw" / "compare", queries_path=link)
 
 
+def test_run_compare_allows_queries_inside_symlinked_parent_dir(tmp_path, patched_pipeline):
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    queries = real_parent / "queries.toml"
+    queries.write_text('[query]\nid = "q1"\nquestion = "What?"\n')
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+
+    vault = _make_vault(tmp_path)
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+
+    report = run_compare(
+        current,
+        challenger,
+        vault / ".olw" / "compare",
+        queries_path=linked_parent / "queries.toml",
+    )
+
+    root = vault / ".olw" / "compare" / report.run_id
+    data = json.loads((root / "challenger" / "queries.json").read_text())
+    assert data[0]["id"] == "q1"
+
+
 def test_run_compare_copies_vault_schema_into_preview(tmp_path, patched_pipeline):
     vault = _make_vault(tmp_path)
     (vault / "vault-schema.md").write_text("# Custom schema\n")

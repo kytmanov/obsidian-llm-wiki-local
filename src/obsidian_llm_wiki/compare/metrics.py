@@ -90,11 +90,16 @@ def decide_verdict(report: CompareReport) -> None:
     cur_diag = current.diagnostics
     ch_diag = challenger.diagnostics
     query_deltas = [q.delta for q in report.query_diffs if q.delta is not None]
+    avg_query_delta = _composite(query_deltas)
 
     if challenger.partial and not current.partial:
         report.verdict = AdvisorVerdict.KEEP_CURRENT
         return
-    if any(delta < -0.10 for delta in query_deltas):
+    # Query checks are the strongest signal. A single large regression or a
+    # sustained negative average should block a switch recommendation.
+    if any(delta < -0.10 for delta in query_deltas) or (
+        avg_query_delta is not None and avg_query_delta <= -0.05
+    ):
         report.verdict = AdvisorVerdict.KEEP_CURRENT
         return
 
@@ -110,14 +115,10 @@ def decide_verdict(report: CompareReport) -> None:
         return
 
     if not report.query_diffs:
-        structure_composite = _composite([lint_delta, orphan_delta, link_delta])
-        if structure_composite is not None and structure_composite >= 0.05:
-            report.verdict = AdvisorVerdict.SWITCH
-        else:
-            report.verdict = AdvisorVerdict.MANUAL_REVIEW
+        report.verdict = AdvisorVerdict.MANUAL_REVIEW
         return
 
-    if query_deltas and sum(query_deltas) / len(query_deltas) > 0.10:
+    if avg_query_delta is not None and avg_query_delta > 0.10:
         report.verdict = AdvisorVerdict.SWITCH
         return
     if report.page_diff.changed or report.page_diff.added or report.page_diff.removed:
@@ -167,7 +168,9 @@ def build_reasons(report: CompareReport) -> None:
         orphan_delta2 = _delta(ch_diag.get("orphan_rate"), cur_diag.get("orphan_rate"))
         structure_composite = _composite([lint_delta, orphan_delta2, link_delta])
         if structure_composite is not None and structure_composite >= 0.05:
-            reasons.append("structure metrics improved (no explicit queries provided)")
+            reasons.append(
+                "structure metrics improved, but no explicit compare queries were provided"
+            )
         else:
             reasons.append("no explicit compare queries were provided")
 

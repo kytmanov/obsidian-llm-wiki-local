@@ -220,7 +220,9 @@ def _inject_body_sections(body: str, source_paths: list[str], config: Config) ->
     linked = sorted(set(extract_wikilinks(body)))
     see_also_lines = [f"- [[{t}]]" for t in linked if t]
 
-    sections = "\n\n## Sources\n" + "\n".join(source_lines) if source_lines else ""
+    sections = "\n\n## Sources"
+    if source_lines:
+        sections += "\n" + "\n".join(source_lines)
     if see_also_lines:
         sections += "\n\n## See Also\n" + "\n".join(see_also_lines)
 

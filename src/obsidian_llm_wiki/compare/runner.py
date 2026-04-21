@@ -121,6 +121,7 @@ def _run_single_vault(
     partial = False
     diagnostics: dict[str, float | int | str | bool | None] = {}
     query_results: list[QueryResult] = []
+    wall = 0.0
 
     try:
         with telemetry_sink() as events:
@@ -463,9 +464,8 @@ def _validate_queries_path(queries_path: Path) -> Path:
         raise ValueError("--queries must exist")
     if not path.is_file():
         raise ValueError("--queries must be a file")
-    for candidate in (path, *path.parents):
-        if candidate.exists() and candidate.is_symlink():
-            raise ValueError("--queries must not be a symlink")
+    if path.is_symlink():
+        raise ValueError("--queries must not be a symlink")
     return path.resolve()
 
 
@@ -484,9 +484,7 @@ def _assert_compare_root_safe(compare_root: Path, active_vault: Path) -> None:
     if _is_within(compare_root, active_vault) and not _is_within(
         compare_root, allowed_compare_root
     ):
-        raise ValueError(
-            "compare output root inside the active vault must be under .olw/compare/"
-        )
+        raise ValueError("compare output root inside the active vault must be under .olw/compare/")
 
 
 def _safe_rmtree(path: Path, root: Path) -> None:

@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict
 from enum import Enum
 
+from ..config import _toml_quote
 from .metrics import build_reasons, compute_advisor_metrics, decide_verdict
 from .models import AdvisorVerdict, CompareReport
 
@@ -21,7 +22,8 @@ def render_markdown(report: CompareReport) -> str:
     out.append("# olw compare — vault switch advisor")
     out.append("")
     out.append(
-        "This comparison ran in isolated preview vaults. Your active vault was not modified."
+        "This comparison ran in isolated preview vaults. "
+        "Your active raw/ and wiki/ were not modified."
     )
     out.append("")
     out.append("## Recommendation")
@@ -162,17 +164,6 @@ def _fmt(value) -> str:
     if isinstance(value, float):
         return f"{value:.2f}"
     return str(value)
-
-
-def _toml_quote(value: str) -> str:
-    escaped = (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-        .replace("\t", "\\t")
-    )
-    return f'"{escaped}"'
 
 
 def _jsonable_report(report: CompareReport) -> dict:

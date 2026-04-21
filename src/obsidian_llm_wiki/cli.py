@@ -84,16 +84,10 @@ def _load_db(config):
 def _model_override_options(f):
     """Shared decorator adding --fast-model/--heavy-model/--provider/--provider-url."""
     f = click.option(
-        "--provider-url",
-        "provider_url",
+        "--fast-model",
+        "fast_model",
         default=None,
-        help="Override provider base URL (e.g. https://api.groq.com/openai/v1)",
-    )(f)
-    f = click.option(
-        "--provider",
-        "provider_name",
-        default=None,
-        help="Override provider name (ollama, groq, openai, azure, ...)",
+        help="Override fast model for this invocation",
     )(f)
     f = click.option(
         "--heavy-model",
@@ -102,10 +96,16 @@ def _model_override_options(f):
         help="Override heavy model for this invocation",
     )(f)
     f = click.option(
-        "--fast-model",
-        "fast_model",
+        "--provider",
+        "provider_name",
         default=None,
-        help="Override fast model for this invocation",
+        help="Override provider name (ollama, groq, openai, azure, ...)",
+    )(f)
+    f = click.option(
+        "--provider-url",
+        "provider_url",
+        default=None,
+        help="Override provider base URL (e.g. https://api.groq.com/openai/v1)",
     )(f)
     return f
 

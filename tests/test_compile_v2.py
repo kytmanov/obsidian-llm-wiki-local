@@ -13,6 +13,7 @@ from obsidian_llm_wiki.ollama_client import OllamaClient
 from obsidian_llm_wiki.pipeline.compile import (
     _build_olw_annotations,
     _gather_sources,
+    _inject_body_sections,
     _strip_olw_annotations,
     _write_concept_prompt,
     approve_drafts,
@@ -97,6 +98,11 @@ def test_strip_annotations_leaves_user_html_comments(db):
 def test_strip_annotations_no_annotations_unchanged(db):
     body = "## Title\n\nNo annotations here."
     assert _strip_olw_annotations(body) == body
+
+
+def test_inject_body_sections_always_includes_sources_heading(config):
+    body = _inject_body_sections("## Overview\n\nContent.", [], config)
+    assert "## Sources" in body
 
 
 def test_annotations_stripped_on_approve(config, db, tmp_path):
