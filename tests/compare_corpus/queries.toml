@@ -1,0 +1,68 @@
+# Query corpus for olw compare v1.0
+# 8 canned Q/A pairs: fact retrieval, cross-note synthesis, disambiguation, refusal.
+
+version = "1.0"
+
+# Fact retrieval — single source note
+[[query]]
+id = "q1_backprop"
+question = "What does backpropagation do?"
+expected_pages = ["backpropagation", "neural networks", "deep learning"]
+expected_contains = ["gradient", "chain rule"]
+expected_refusal = false
+
+# Fact retrieval — numeric
+[[query]]
+id = "q2_photosynthesis_output"
+question = "How much oxygen does photosynthesis produce globally each year?"
+expected_pages = ["photosynthesis"]
+expected_contains = ["270", "billion"]
+expected_refusal = false
+
+# Cross-note synthesis — requires stitching from two notes
+[[query]]
+id = "q3_cross_synthesis"
+question = "How is attention used in transformer architectures?"
+expected_pages = ["transformers", "attention"]
+expected_contains = ["query", "key", "value"]
+expected_refusal = false
+
+# Disambiguation — Mercury as element, not planet/god
+[[query]]
+id = "q4_mercury_element"
+question = "Why is mercury toxic?"
+expected_pages = ["mercury (element)"]
+expected_contains = ["nervous system"]
+expected_refusal = false
+
+# Disambiguation — Mercury as planet, not element/god
+[[query]]
+id = "q5_mercury_planet"
+question = "What is the orbital period of Mercury?"
+expected_pages = ["mercury (planet)"]
+expected_contains = ["88"]
+expected_refusal = false
+
+# Table fidelity — precise date lookup
+[[query]]
+id = "q6_python_release"
+question = "When was Python 3.11 released?"
+expected_pages = ["python"]
+expected_contains = ["2022"]
+expected_refusal = false
+
+# Refusal — clearly out of corpus
+[[query]]
+id = "q7_refusal_capital"
+question = "What is the capital of Peru?"
+expected_pages = []
+expected_contains = []
+expected_refusal = true
+
+# Refusal — plausible but unsupported by notes
+[[query]]
+id = "q8_refusal_plausible"
+question = "What was the stock price of NVIDIA in 2018?"
+expected_pages = []
+expected_contains = []
+expected_refusal = true

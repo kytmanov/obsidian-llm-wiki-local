@@ -182,8 +182,14 @@ class Config(BaseModel):
         if config_file.exists():
             with open(config_file, "rb") as f:
                 file_config = tomllib.load(f)
-        # Merge overrides into nested dicts
+        # Merge overrides. Dict values merge key-by-key so a partial
+        # override (e.g. {"models": {"fast": "X"}}) doesn't clobber
+        # sibling keys; scalars replace as before.
         for key, val in overrides.items():
-            if val is not None:
+            if val is None:
+                continue
+            if isinstance(val, dict) and isinstance(file_config.get(key), dict):
+                file_config[key] = {**file_config[key], **val}
+            else:
                 file_config[key] = val
         return cls(vault=vault, **file_config)

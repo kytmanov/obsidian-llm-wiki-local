@@ -116,6 +116,7 @@ def run_query(
         model=config.models.fast,
         num_ctx=config.effective_provider.fast_ctx,
         max_retries=2,
+        stage="query_select",
     )
 
     # Step 2: load selected pages
@@ -139,6 +140,7 @@ def run_query(
         model=config.models.heavy,
         num_ctx=config.effective_provider.heavy_ctx,
         max_retries=2,
+        stage="query_answer",
     )
 
     if save:

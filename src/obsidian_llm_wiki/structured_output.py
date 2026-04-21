@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
+from .telemetry import LLMCallEvent, emit
+
 if TYPE_CHECKING:
     from .protocols import LLMClientProtocol
 
@@ -193,6 +195,7 @@ def request_structured(
     num_ctx: int = 8192,
     num_predict: int = -1,
     max_retries: int = 2,
+    stage: str = "",
 ) -> T:
     """
     Request structured output from an LLM client, parse into Pydantic model.
@@ -205,6 +208,7 @@ def request_structured(
         system:      Optional domain context (prepended before schema instruction)
         num_ctx:     Context window size
         max_retries: How many retry attempts after initial failure
+        stage:       Pipeline stage tag for telemetry ("ingest", "compile_article", etc.)
 
     Raises:
         StructuredOutputError: if all attempts exhausted
@@ -214,6 +218,26 @@ def request_structured(
 
     last_error: str = ""
     current_prompt = prompt
+
+    total_latency_ms = 0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    any_tokens_seen = False
+
+    def _emit(tier: int, retries: int, error: str | None) -> None:
+        emit(
+            LLMCallEvent(
+                stage=stage,
+                model=model,
+                tier=tier,
+                retries=retries,
+                latency_ms=total_latency_ms,
+                prompt_tokens=total_prompt_tokens if any_tokens_seen else None,
+                completion_tokens=total_completion_tokens if any_tokens_seen else None,
+                num_ctx=num_ctx,
+                error=error,
+            )
+        )
 
     for attempt in range(max_retries + 1):
         log.debug("structured_output attempt %d/%d model=%s", attempt + 1, max_retries + 1, model)
@@ -227,10 +251,22 @@ def request_structured(
             num_ctx=num_ctx,
             num_predict=num_predict,
         )
+        stats = getattr(client, "_last_stats", {}) or {}
+        total_latency_ms += int(stats.get("latency_ms") or 0)
+        pt = stats.get("prompt_tokens")
+        ct = stats.get("completion_tokens")
+        if pt is not None:
+            total_prompt_tokens += int(pt)
+            any_tokens_seen = True
+        if ct is not None:
+            total_completion_tokens += int(ct)
+            any_tokens_seen = True
 
-        # Try direct parse
+        # Try direct parse (Tier 1)
         result, parse_err = _try_parse(raw, model_class)
         if result is not None:
+            tier = 3 if attempt > 0 else 1
+            _emit(tier=tier, retries=attempt, error=None)
             return result
         last_error = parse_err
         log.debug("Tier 1 parse failed, trying extraction")
@@ -240,6 +276,8 @@ def request_structured(
         if extracted:
             result, parse_err = _try_parse(extracted, model_class)
             if result is not None:
+                tier = 3 if attempt > 0 else 2
+                _emit(tier=tier, retries=attempt, error=None)
                 return result
             if parse_err:
                 last_error = parse_err
@@ -259,6 +297,7 @@ def request_structured(
                 f"Respond with ONLY valid JSON matching the schema. Nothing else."
             )
 
+    _emit(tier=-1, retries=max_retries, error=last_error)
     raise StructuredOutputError(
         f"Failed to get valid {model_class.__name__} after {max_retries + 1} attempts. "
         f"Last error: {last_error}"

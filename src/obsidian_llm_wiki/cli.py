@@ -81,6 +81,60 @@ def _load_db(config):
     return StateDB(config.state_db_path)
 
 
+def _model_override_options(f):
+    """Shared decorator adding --fast-model/--heavy-model/--provider/--provider-url."""
+    f = click.option(
+        "--provider-url",
+        "provider_url",
+        default=None,
+        help="Override provider base URL (e.g. https://api.groq.com/openai/v1)",
+    )(f)
+    f = click.option(
+        "--provider",
+        "provider_name",
+        default=None,
+        help="Override provider name (ollama, groq, openai, azure, ...)",
+    )(f)
+    f = click.option(
+        "--heavy-model",
+        "heavy_model",
+        default=None,
+        help="Override heavy model for this invocation",
+    )(f)
+    f = click.option(
+        "--fast-model",
+        "fast_model",
+        default=None,
+        help="Override fast model for this invocation",
+    )(f)
+    return f
+
+
+def _model_override_kwargs(
+    fast_model: str | None,
+    heavy_model: str | None,
+    provider_name: str | None,
+    provider_url: str | None,
+) -> dict:
+    """Pack CLI model-override flags into kwargs for Config.from_vault."""
+    kwargs: dict = {}
+    models: dict = {}
+    if fast_model:
+        models["fast"] = fast_model
+    if heavy_model:
+        models["heavy"] = heavy_model
+    if models:
+        kwargs["models"] = models
+    provider: dict = {}
+    if provider_name:
+        provider["name"] = provider_name
+    if provider_url:
+        provider["url"] = provider_url
+    if provider:
+        kwargs["provider"] = provider
+    return kwargs
+
+
 def _load_deps(config):
     from .client_factory import LLMError, build_client
 
@@ -668,10 +722,21 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
 @click.option("--all", "ingest_all", is_flag=True, help="Ingest all files in raw/")
 @click.option("--force", is_flag=True, help="Re-ingest already-processed notes")
 @click.argument("paths", nargs=-1, type=click.Path(exists=True))
-def ingest(vault_str, ingest_all, force, paths):
+@_model_override_options
+def ingest(
+    vault_str,
+    ingest_all,
+    force,
+    paths,
+    fast_model,
+    heavy_model,
+    provider_name,
+    provider_url,
+):
     """Analyze raw notes: extract concepts, quality, suggested topics."""
 
-    config = _load_config(vault_str)
+    overrides = _model_override_kwargs(fast_model, heavy_model, provider_name, provider_url)
+    config = _load_config(vault_str, **overrides)
     client, db = _load_deps(config)
 
     if ingest_all:
@@ -762,12 +827,25 @@ def ingest(vault_str, ingest_all, force, paths):
     is_flag=True,
     help="Re-ingest raw notes that previously failed, then compile",
 )
-def compile(vault_str, dry_run, auto_approve, force, legacy, retry_failed):
+@_model_override_options
+def compile(
+    vault_str,
+    dry_run,
+    auto_approve,
+    force,
+    legacy,
+    retry_failed,
+    fast_model,
+    heavy_model,
+    provider_name,
+    provider_url,
+):
     """Synthesize ingested notes into wiki article drafts."""
     from .git_ops import git_commit
     from .pipeline.compile import approve_drafts, compile_concepts, compile_notes
 
-    config = _load_config(vault_str)
+    overrides = _model_override_kwargs(fast_model, heavy_model, provider_name, provider_url)
+    config = _load_config(vault_str, **overrides)
     client, db = _load_deps(config)
 
     # Re-ingest previously failed notes before compiling
@@ -1334,12 +1412,24 @@ def watch(vault_str, auto_approve):
 @click.option("--fix", is_flag=True, help="Create stubs for broken wikilinks")
 @click.option("--max-rounds", default=2, show_default=True, help="Max compile rounds")
 @click.option("--dry-run", is_flag=True, help="Report what would happen, make no changes")
-def run(vault_str, auto_approve, fix, max_rounds, dry_run):
+@_model_override_options
+def run(
+    vault_str,
+    auto_approve,
+    fix,
+    max_rounds,
+    dry_run,
+    fast_model,
+    heavy_model,
+    provider_name,
+    provider_url,
+):
     """Run full pipeline: ingest → compile → lint → [approve]."""
     from .pipeline.lock import pipeline_lock
     from .pipeline.orchestrator import PipelineOrchestrator
 
-    config = _load_config(vault_str)
+    overrides = _model_override_kwargs(fast_model, heavy_model, provider_name, provider_url)
+    config = _load_config(vault_str, **overrides)
     client, db = _load_deps(config)
 
     if dry_run:
@@ -1730,3 +1820,248 @@ def unblock(vault_str, concept):
     console.print(
         f"[dim]{count} rejection(s) remain on record. Next compile will include this concept.[/dim]"
     )
+
+
+# ── compare ───────────────────────────────────────────────────────────────────
+
+
+def _parse_contestant_spec(raw: str):
+    """Parse --config 'NAME:fast=M,heavy=M[,provider=P][,url=U][,api_key_env=E]'.
+
+    First ':' is the NAME:SPEC delimiter; subsequent colons (e.g. in model
+    names like gemma4:e4b) live inside values.
+    """
+    from .compare.models import ContestantSpec
+
+    if ":" not in raw:
+        raise click.BadParameter(
+            f"--config must be NAME:fast=MODEL,heavy=MODEL[,...]; got {raw!r}"
+        )
+    name, spec_str = raw.split(":", 1)
+    name = name.strip()
+    if not name:
+        raise click.BadParameter(f"--config name is empty in {raw!r}")
+    kv: dict[str, str] = {}
+    for token in spec_str.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise click.BadParameter(f"--config token {token!r} missing '=' in {raw!r}")
+        k, v = token.split("=", 1)
+        kv[k.strip()] = v.strip()
+    fast = kv.get("fast")
+    heavy = kv.get("heavy")
+    if not fast or not heavy:
+        raise click.BadParameter(
+            f"--config {raw!r} must specify both fast=... and heavy=..."
+        )
+    return ContestantSpec(
+        name=name,
+        fast_model=fast,
+        heavy_model=heavy,
+        provider_name=kv.get("provider"),
+        provider_url=kv.get("url"),
+        api_key_env=kv.get("api_key_env"),
+    )
+
+
+def _any_cloud_contestant(specs) -> bool:
+    from .providers import get_provider
+
+    for s in specs:
+        pname = s.provider_name or "ollama"
+        info = get_provider(pname)
+        if info is not None and not info.is_local:
+            return True
+    return False
+
+
+@cli.command(name="compare")
+@click.option(
+    "--config",
+    "config_specs",
+    multiple=True,
+    help="Contestant spec: NAME:fast=MODEL,heavy=MODEL[,provider=P][,url=U]. Repeatable.",
+)
+@click.option(
+    "--corpus",
+    "corpus_path",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Curated corpus directory (must contain corpus.toml).",
+)
+@click.option(
+    "--notes",
+    "notes_path",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="BYO: directory of user .md notes (no ground truth).",
+)
+@click.option(
+    "--baseline-vault",
+    "baseline_vault_path",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Upgrade eval: path to existing olw vault (read-only).",
+)
+@click.option(
+    "--queries",
+    "queries_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Optional queries.toml (BYO mode).",
+)
+@click.option("--seeds", default=2, show_default=True, type=int, help="Seeds per contestant.")
+@click.option("--sample-n", "sample_n", default=None, type=int, help="Cap notes used.")
+@click.option(
+    "--out",
+    "out_dir",
+    type=click.Path(file_okay=False),
+    default="./.olw-compare",
+    show_default=True,
+    help="Output directory (run_id subdir created inside).",
+)
+@click.option("--keep-artifacts", is_flag=True, help="Do not delete ephemeral vaults.")
+@click.option("--quick", is_flag=True, help="3 notes, 1 seed (smoke).")
+@click.option(
+    "--self-test",
+    "self_test",
+    is_flag=True,
+    help="Duplicate single --config as second contestant; asserts near-parity.",
+)
+@click.option("--skip-queries", is_flag=True, help="Skip query stage.")
+@click.option(
+    "--allow-cloud-upload",
+    is_flag=True,
+    help="Required when a cloud contestant is used with --notes or --baseline-vault.",
+)
+@click.option(
+    "--weights",
+    "weights_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Optional weights.toml override.",
+)
+@click.option(
+    "--format",
+    "report_format",
+    type=click.Choice(["md", "json", "both"]),
+    default="both",
+    show_default=True,
+    help="Report output format.",
+)
+def compare(
+    config_specs,
+    corpus_path,
+    notes_path,
+    baseline_vault_path,
+    queries_path,
+    seeds,
+    sample_n,
+    out_dir,
+    keep_artifacts,
+    quick,
+    self_test,
+    skip_queries,
+    allow_cloud_upload,
+    weights_path,
+    report_format,
+):
+    """Run N LLM contestants against the same corpus; emit comparison report."""
+    from .compare.corpus import CorpusError, CorpusMode, load_corpus
+    from .compare.runner import run_compare
+
+    if not config_specs:
+        err_console.print("At least one --config required.")
+        sys.exit(1)
+
+    specs = [_parse_contestant_spec(s) for s in config_specs]
+    if self_test:
+        if len(specs) != 1:
+            err_console.print("--self-test requires exactly one --config.")
+            sys.exit(1)
+        from dataclasses import replace
+
+        specs.append(replace(specs[0], name=f"{specs[0].name}_b"))
+        specs[0] = replace(specs[0], name=f"{specs[0].name}_a")
+    if len(specs) < 2 and baseline_vault_path is None:
+        err_console.print("Need ≥2 contestants (or --baseline-vault to add 'current').")
+        sys.exit(1)
+
+    names = [s.name for s in specs]
+    if len(set(names)) != len(names):
+        err_console.print(f"Duplicate contestant names: {names}")
+        sys.exit(1)
+
+    if quick:
+        seeds = 1
+        sample_n = 3 if sample_n is None else min(sample_n, 3)
+
+    try:
+        corpus = load_corpus(
+            corpus_path=Path(corpus_path) if corpus_path else None,
+            notes_path=Path(notes_path) if notes_path else None,
+            baseline_vault_path=Path(baseline_vault_path) if baseline_vault_path else None,
+            queries_path=Path(queries_path) if queries_path else None,
+            sample_n=sample_n,
+        )
+    except CorpusError as e:
+        err_console.print(f"Corpus error: {e}")
+        sys.exit(1)
+
+    if corpus.mode in (CorpusMode.BYO, CorpusMode.BASELINE) and _any_cloud_contestant(specs):
+        if not allow_cloud_upload:
+            err_console.print(
+                "Cloud contestant + user notes requires --allow-cloud-upload "
+                "(privacy ack: your notes will be sent to the provider)."
+            )
+            sys.exit(1)
+
+    out = Path(out_dir).expanduser().resolve()
+    out.mkdir(parents=True, exist_ok=True)
+
+    console.print(
+        f"[bold]olw compare[/bold] — {len(specs)} contestant(s) × {seeds} seed(s) "
+        f"· mode={corpus.mode.value} · notes={len(corpus.notes)}"
+    )
+    for s in specs:
+        prov = s.provider_name or "ollama"
+        console.print(f"  · {s.name}: fast={s.fast_model} heavy={s.heavy_model} provider={prov}")
+
+    report = run_compare(
+        contestants=specs,
+        corpus=corpus,
+        out_dir=out,
+        seeds=seeds,
+        keep_artifacts=keep_artifacts,
+        skip_queries=skip_queries,
+    )
+
+    # Phase 3: score + render
+    from .compare.report import render_json, render_markdown, resolve
+
+    resolve(
+        report,
+        corpus,
+        weights_override=Path(weights_path) if weights_path else None,
+    )
+
+    run_dir = out / report.run_id / "results"
+    if report_format in ("md", "both"):
+        (run_dir / "report.md").write_text(render_markdown(report, corpus))
+    if report_format in ("json", "both"):
+        (run_dir / "report.json").write_text(render_json(report))
+
+    console.print()
+    console.print(
+        f"[green]Run complete:[/green] {report.run_id} "
+        f"· wall={report.wall_time_seconds:.1f}s"
+    )
+    console.print(f"Artifacts: {out / report.run_id}")
+    if report.winner:
+        tie = " [yellow](statistical tie)[/yellow]" if report.statistical_tie else ""
+        console.print(f"[bold]Winner:[/bold] {report.winner}{tie}")
+    for r in report.contestants:
+        status = "[yellow]partial[/yellow]" if r.partial else "[green]ok[/green]"
+        console.print(f"  · {r.spec.name}: overall={r.overall:.3f} {status}")

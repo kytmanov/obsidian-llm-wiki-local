@@ -6,6 +6,7 @@ Replaces the entire langchain/langchain-ollama dependency tree.
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 
@@ -35,6 +36,7 @@ class OllamaClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._client = httpx.Client(timeout=timeout)
+        self._last_stats: dict = {}
 
     # ── Health ────────────────────────────────────────────────────────────────
 
@@ -106,18 +108,28 @@ class OllamaClient:
         }
         if format:
             payload["format"] = format
+        t0 = time.monotonic()
         try:
             resp = self._client.post(f"{self.base_url}/api/generate", json=payload)
             resp.raise_for_status()
         except httpx.ConnectError:
+            self._last_stats = {"latency_ms": int((time.monotonic() - t0) * 1000)}
             raise OllamaError(_STARTUP_HINT)
         except httpx.TimeoutException as e:
+            self._last_stats = {"latency_ms": int((time.monotonic() - t0) * 1000)}
             raise OllamaError(f"Ollama request timed out: {e}") from e
         except httpx.HTTPStatusError as e:
+            self._last_stats = {"latency_ms": int((time.monotonic() - t0) * 1000)}
             raise OllamaError(
                 f"Ollama HTTP error: {e.response.status_code} {e.response.text}"
             ) from e
-        return resp.json()["response"]
+        body = resp.json()
+        self._last_stats = {
+            "latency_ms": int((time.monotonic() - t0) * 1000),
+            "prompt_tokens": body.get("prompt_eval_count"),
+            "completion_tokens": body.get("eval_count"),
+        }
+        return body["response"]
 
     # ── Embeddings ────────────────────────────────────────────────────────────
 

@@ -307,6 +307,131 @@ def test_generate_timeout_raises_llmerror():
             client.generate("p", model="m")
 
 
+def test_generate_captures_last_stats_on_success():
+    """`_last_stats` populated with latency + token usage from response body."""
+    client = _make_client()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "hello"}}],
+        "usage": {"prompt_tokens": 123, "completion_tokens": 45},
+    }
+    with patch.object(client._client, "post", return_value=mock_resp):
+        client.generate("p", model="m")
+    assert client._last_stats["prompt_tokens"] == 123
+    assert client._last_stats["completion_tokens"] == 45
+    assert client._last_stats["latency_ms"] >= 0
+
+
+def test_generate_last_stats_latency_only_on_error():
+    """On error paths only latency recorded, token fields absent."""
+    client = _make_client()
+    with patch.object(client._client, "post", side_effect=httpx.ConnectError("refused")):
+        with pytest.raises(LLMError):
+            client.generate("p", model="m")
+    assert "latency_ms" in client._last_stats
+    assert "prompt_tokens" not in client._last_stats
+
+
+def test_generate_last_stats_missing_usage_is_none():
+    """Provider without `usage` in response → tokens = None (not zero)."""
+    client = _make_client()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"choices": [{"message": {"content": "x"}}]}
+    with patch.object(client._client, "post", return_value=mock_resp):
+        client.generate("p", model="m")
+    assert client._last_stats["prompt_tokens"] is None
+    assert client._last_stats["completion_tokens"] is None
+
+
+def test_generate_429_backoff_retries(monkeypatch):
+    """429 triggers exponential backoff; client eventually succeeds."""
+    client = _make_client()
+
+    slept: list[float] = []
+    monkeypatch.setattr(
+        "obsidian_llm_wiki.openai_compat_client.time.sleep",
+        lambda s: slept.append(s),
+    )
+
+    rate_resp = MagicMock()
+    rate_resp.status_code = 429
+    rate_resp.headers = {}
+
+    good_resp = MagicMock()
+    good_resp.status_code = 200
+    good_resp.raise_for_status.return_value = None
+    good_resp.json.return_value = {
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    }
+
+    calls = {"n": 0}
+
+    def fake_post(url, json=None, **kw):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            return rate_resp
+        return good_resp
+
+    with patch.object(client._client, "post", side_effect=fake_post):
+        result = client.generate("p", model="m")
+    assert result == "ok"
+    assert calls["n"] == 3
+    assert len(slept) == 2  # backed off twice before success
+
+
+def test_generate_429_honors_retry_after_header(monkeypatch):
+    """Retry-After header value used as sleep delay."""
+    client = _make_client()
+    slept: list[float] = []
+    monkeypatch.setattr(
+        "obsidian_llm_wiki.openai_compat_client.time.sleep",
+        lambda s: slept.append(s),
+    )
+
+    rate_resp = MagicMock()
+    rate_resp.status_code = 429
+    rate_resp.headers = {"Retry-After": "2"}
+
+    good_resp = MagicMock()
+    good_resp.status_code = 200
+    good_resp.raise_for_status.return_value = None
+    good_resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
+
+    call_seq = [rate_resp, good_resp]
+
+    def fake_post(url, json=None, **kw):
+        return call_seq.pop(0)
+
+    with patch.object(client._client, "post", side_effect=fake_post):
+        client.generate("p", model="m")
+    assert slept == [2.0]
+
+
+def test_generate_429_gives_up_after_60s_budget(monkeypatch):
+    """After cumulative sleep > 60s budget, client returns 429 and raises LLMError."""
+    client = _make_client()
+
+    monkeypatch.setattr(
+        "obsidian_llm_wiki.openai_compat_client.time.sleep",
+        lambda s: None,  # instant
+    )
+
+    rate_resp = MagicMock()
+    rate_resp.status_code = 429
+    rate_resp.headers = {"Retry-After": "70"}  # single wait exceeds 60s → give up immediately
+    rate_resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "429", request=MagicMock(), response=rate_resp
+    )
+    rate_resp.text = "rate limit"
+
+    with patch.object(client._client, "post", return_value=rate_resp):
+        with pytest.raises(LLMError, match="429"):
+            client.generate("p", model="m")
+
+
 def test_generate_401_raises_llmerror():
     client = _make_client()
     mock_resp = MagicMock()

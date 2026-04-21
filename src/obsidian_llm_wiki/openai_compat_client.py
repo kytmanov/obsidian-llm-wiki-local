@@ -25,6 +25,7 @@ JSON mode: if supports_json_mode=True, format="json" injects
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 
@@ -68,6 +69,7 @@ class OpenAICompatClient:
             headers=self._build_headers(),
             timeout=timeout,
         )
+        self._last_stats: dict = {}
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -129,6 +131,26 @@ class OpenAICompatClient:
         return self.base_url.startswith("http://localhost") or self.base_url.startswith(
             "http://127.0.0.1"
         )
+
+    def _post_chat(self, payload: dict) -> httpx.Response:
+        """POST to chat endpoint with 429 exponential backoff (max ~60s cumulative)."""
+        delay = 1.0
+        waited = 0.0
+        while True:
+            resp = self._client.post(self._chat_url(), json=payload)
+            if resp.status_code != 429:
+                return resp
+            retry_after = resp.headers.get("Retry-After")
+            try:
+                wait = float(retry_after) if retry_after else delay
+            except ValueError:
+                wait = delay
+            if waited + wait > 60.0:
+                return resp
+            log.debug("%s: HTTP 429, backing off %.1fs", self.provider_name, wait)
+            time.sleep(wait)
+            waited += wait
+            delay = min(delay * 2, 16.0)
 
     # ── Health ────────────────────────────────────────────────────────────────
 
@@ -199,8 +221,9 @@ class OpenAICompatClient:
         if num_predict > 0:
             payload["max_tokens"] = num_predict
 
+        t0 = time.monotonic()
         try:
-            resp = self._client.post(self._chat_url(), json=payload)
+            resp = self._post_chat(payload)
             # Each auto-downgrade strips one unsupported field and retries.
             # Use current_payload so retries chain (each builds on the previous
             # stripped payload rather than the original).
@@ -215,7 +238,7 @@ class OpenAICompatClient:
                 current_payload = {
                     k: v for k, v in current_payload.items() if k != "response_format"
                 }
-                resp = self._client.post(self._chat_url(), json=current_payload)
+                resp = self._post_chat(current_payload)
 
             # Auto-downgrade 2: n_keep > context (LM Studio / llama.cpp) → retry without max_tokens
             if resp.status_code == 400 and "max_tokens" in current_payload:
@@ -228,22 +251,35 @@ class OpenAICompatClient:
                     current_payload = {
                         k: v for k, v in current_payload.items() if k != "max_tokens"
                     }
-                    resp = self._client.post(self._chat_url(), json=current_payload)
+                    resp = self._post_chat(current_payload)
 
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
+            self._last_stats = {"latency_ms": int((time.monotonic() - t0) * 1000)}
             raise self._wrap_error(e) from e
         except httpx.TimeoutException as e:
+            self._last_stats = {"latency_ms": int((time.monotonic() - t0) * 1000)}
             raise self._wrap_error(e) from e
         except httpx.RequestError as e:
+            self._last_stats = {"latency_ms": int((time.monotonic() - t0) * 1000)}
             raise self._wrap_error(e) from e
 
         try:
-            return resp.json()["choices"][0]["message"]["content"]
+            body = resp.json()
+            content = body["choices"][0]["message"]["content"]
         except (KeyError, IndexError, ValueError) as e:
+            self._last_stats = {"latency_ms": int((time.monotonic() - t0) * 1000)}
             raise LLMError(
                 f"{self.provider_name}: unexpected response format: {resp.text[:200]}"
             ) from e
+
+        usage = body.get("usage") or {}
+        self._last_stats = {
+            "latency_ms": int((time.monotonic() - t0) * 1000),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+        }
+        return content
 
     # ── Embeddings ────────────────────────────────────────────────────────────
 

@@ -131,6 +131,7 @@ def _analyze_body(
             model=config.models.fast,
             system=_SYSTEM,
             num_ctx=config.effective_provider.fast_ctx,
+            stage="ingest",
         )
 
     # Split into chunks — no overlap needed for concept extraction
@@ -157,6 +158,7 @@ def _analyze_body(
             model=config.models.fast,
             system=_SYSTEM,
             num_ctx=config.effective_provider.fast_ctx,
+            stage="ingest",
         )
         log.info("Analyzed %s %s (%.1fs)", path_name or "note", label, time.monotonic() - t0)
         return result

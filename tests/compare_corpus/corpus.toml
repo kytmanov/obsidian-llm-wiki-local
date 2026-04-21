@@ -1,0 +1,100 @@
+# obsidian-llm-wiki comparison corpus v1.0
+# 10 notes covering diverse failure modes; English only.
+
+version = "1.0"
+language = "en"
+description = "Built-in corpus for olw compare — diverse probes across concept extraction, disambiguation, table fidelity, graceful degradation."
+
+[[note]]
+file = "short_factual.md"
+category = "short_factual"
+weight = 1.0
+known_concepts = ["photosynthesis", "chlorophyll", "calvin cycle"]
+
+[[note]]
+file = "long_dense_technical.md"
+category = "long_technical"
+weight = 1.5
+known_concepts = [
+  "deep learning",
+  "neural networks",
+  "backpropagation",
+  "convolutional neural networks",
+  "recurrent neural networks",
+  "transformers",
+  "attention",
+  "batch normalization",
+  "scaling laws",
+]
+
+[[note]]
+file = "multi_concept_overlap.md"
+category = "multi_concept_overlap"
+weight = 1.2
+known_concepts = [
+  "linear algebra",
+  "multivariable calculus",
+  "probability theory",
+  "backpropagation",
+  "neural networks",
+]
+
+[[note]]
+file = "narrative_essay.md"
+category = "narrative_essay"
+weight = 1.0
+known_concepts = ["silence", "attention"]
+
+[[note]]
+file = "ambiguous_entity.md"
+category = "ambiguous_entity"
+weight = 1.2
+known_concepts = [
+  "mercury (planet)",
+  "mercury (element)",
+  "mercury (roman god)",
+]
+
+[[note]]
+file = "noisy_low_quality.md"
+category = "noisy_low_quality"
+weight = 0.8
+# Deliberately sparse — a good model reports low quality and extracts few concepts
+known_concepts = ["coffee"]
+
+[[note]]
+file = "data_heavy_table.md"
+category = "data_heavy"
+weight = 1.0
+known_concepts = ["python", "rust", "javascript", "go"]
+
+[[note]]
+file = "cross_reference.md"
+category = "cross_reference"
+weight = 1.2
+known_concepts = [
+  "photosynthesis",
+  "cellular respiration",
+  "atp",
+  "flux balance analysis",
+]
+
+[[note]]
+file = "edge_empty_list.md"
+category = "edge_degenerate"
+weight = 0.5
+# A model should NOT fabricate concepts from a grocery list
+known_concepts = []
+
+[[note]]
+file = "moderate_overlap.md"
+category = "moderate_overlap"
+weight = 1.2
+known_concepts = [
+  "transformers",
+  "attention",
+  "flash attention",
+  "rotary position embeddings",
+  "mixture of experts",
+  "quantization",
+]
