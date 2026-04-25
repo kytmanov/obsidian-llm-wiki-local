@@ -216,6 +216,20 @@ def _model_override_kwargs(
     return kwargs
 
 
+def _resolve_draft_arg(config, raw_path: str | Path) -> Path:
+    """Resolve a CLI draft argument relative to wiki/.drafts/ when appropriate."""
+    path = Path(raw_path).expanduser()
+    candidates: list[Path]
+    if path.is_absolute():
+        candidates = [path]
+    else:
+        candidates = [config.drafts_dir / path, config.vault / path, path]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    return candidates[0].resolve()
+
+
 def _load_deps(config):
     from .client_factory import LLMError, build_client
 
@@ -1156,7 +1170,7 @@ def approve(vault_str, approve_all, files):
     if approve_all:
         paths = None  # approve_drafts handles all
     elif files:
-        paths = [Path(f) for f in files]
+        paths = [_resolve_draft_arg(config, f) for f in files]
     else:
         click.echo("Specify --all or file paths.", err=True)
         sys.exit(1)
@@ -1204,7 +1218,7 @@ def reject(vault_str, reject_all, feedback, files):
         if not feedback:
             feedback = click.prompt("Reason for rejecting all drafts?", default="")
     elif files:
-        draft_paths = [Path(f).resolve() for f in files]
+        draft_paths = [_resolve_draft_arg(config, f) for f in files]
         for p in draft_paths:
             if not p.exists():
                 click.echo(f"File not found: {p}", err=True)
@@ -1321,7 +1335,7 @@ def status(vault_str, show_failed):
         console.print('[dim]Run [bold]olw unblock "Concept"[/bold] to re-enable.[/dim]')
 
     # Show pipeline lock status
-    from .pipeline.lock import lock_holder_pid
+    from .pipeline.lock import has_invalid_lock_file, lock_holder_pid
 
     pid = lock_holder_pid(config.vault)
     if pid is not None:
@@ -1332,6 +1346,8 @@ def status(vault_str, show_failed):
             console.print(f"\n[yellow]⚠ Pipeline lock held by PID {pid}[/yellow]")
         except (ProcessLookupError, PermissionError):
             console.print(f"\n[dim]Lock file present (PID {pid}) but process not running[/dim]")
+    elif has_invalid_lock_file(config.vault):
+        console.print("\n[dim]Lock file present but invalid; no live process holds it[/dim]")
 
 
 # ── undo ─────────────────────────────────────────────────────────────────────

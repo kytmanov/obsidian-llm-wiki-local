@@ -16,8 +16,10 @@ from obsidian_llm_wiki.pipeline.compile import (
     _gather_sources,
     _inject_body_sections,
     _repair_bare_bracket_links,
+    _repair_malformed_embeds,
     _rewrite_citation_markers,
     _strip_olw_annotations,
+    _strip_unknown_wikilinks,
     _write_concept_prompt,
     approve_drafts,
     compile_concepts,
@@ -192,6 +194,36 @@ def test_repair_bare_bracket_links_skips_markdown_citations_and_masks():
     assert body == (
         "Claim [S1]. Link [text](https://example.com). `code [API]` [[Already]] prose [[API]]"
     )
+
+
+def test_strip_unknown_wikilinks_unwraps_invented_links():
+    body = _strip_unknown_wikilinks(
+        "Known [[API Testing]]. Unknown [[Название статьи]]. Aliased [[Missing|display]].",
+        ["API Testing"],
+    )
+
+    assert body == "Known [[API Testing]]. Unknown Название статьи. Aliased display."
+
+
+def test_strip_unknown_wikilinks_keeps_source_links():
+    body = _strip_unknown_wikilinks(
+        "Claim ([[sources/Api Testing Example|S1]]) and [[sources/Foo]].",
+        [],
+    )
+
+    assert body == "Claim ([[sources/Api Testing Example|S1]]) and [[sources/Foo]]."
+
+
+def test_strip_unknown_wikilinks_keeps_embeds():
+    body = _strip_unknown_wikilinks("Diagram ![[file.pdf]] and unknown [[Ghost]].", [])
+
+    assert body == "Diagram ![[file.pdf]] and unknown Ghost."
+
+
+def test_repair_malformed_embeds_converts_bare_media_embed():
+    body = _repair_malformed_embeds("Diagram !./_resources/file.pdf and ![[already.pdf]].")
+
+    assert body == "Diagram ![[./_resources/file.pdf]] and ![[already.pdf]]."
 
 
 def test_inject_body_sections_uses_id_legend_when_enabled(config):
@@ -507,6 +539,34 @@ def test_approve_drafts_sets_approved_at(config, db):
     art = db.get_article(str(published[0].relative_to(config.vault)))
     assert art is not None
     assert art.approved_at is not None
+
+
+def test_approve_drafts_skips_paths_outside_drafts(config, db):
+    outside = config.vault / "elsewhere.md"
+    outside.write_text("---\ntitle: Elsewhere\nstatus: draft\n---\nBody.")
+
+    published = approve_drafts(config, db, [outside])
+
+    assert published == []
+    assert outside.exists()
+
+
+def test_approve_drafts_records_untracked_on_disk_draft(config, db):
+    import frontmatter as fm_lib
+
+    from obsidian_llm_wiki.vault import atomic_write
+
+    draft_path = config.drafts_dir / "Untracked.md"
+    meta = {"title": "Untracked", "status": "draft", "tags": [], "sources": ["raw/a.md"]}
+    atomic_write(draft_path, fm_lib.dumps(fm_lib.Post("Body.", **meta)))
+
+    published = approve_drafts(config, db, [draft_path])
+
+    assert len(published) == 1
+    art = db.get_article("wiki/Untracked.md")
+    assert art is not None
+    assert art.title == "Untracked"
+    assert art.is_draft is False
 
 
 # ── _gather_sources ───────────────────────────────────────────────────────────

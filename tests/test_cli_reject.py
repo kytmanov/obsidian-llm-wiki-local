@@ -72,6 +72,19 @@ def test_reject_single_file(vault, config, db, runner):
     assert "Draft rejected" in result.output
 
 
+def test_reject_relative_filename_resolves_under_drafts(vault, config, db, runner):
+    draft = _make_draft(vault, "My Concept")
+    _register_draft(db, vault, draft)
+
+    result = runner.invoke(
+        cli,
+        ["reject", "--vault", str(vault), "--feedback", "too vague", "My Concept.md"],
+    )
+
+    assert result.exit_code == 0
+    assert not draft.exists()
+
+
 def test_reject_all_rejects_all_drafts(vault, config, db, runner):
     drafts = [_make_draft(vault, f"Concept {i}") for i in range(3)]
     for i, d in enumerate(drafts):

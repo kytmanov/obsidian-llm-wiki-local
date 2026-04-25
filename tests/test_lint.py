@@ -254,6 +254,49 @@ def test_malformed_bracket_link_detected_in_draft(vault, config, db):
     assert malformed[0].path == "wiki/.drafts/Draft.md"
 
 
+def test_broken_wikilink_detected_in_draft(vault, config, db):
+    write_note(
+        config.drafts_dir / "Draft.md",
+        {"title": "Draft", "tags": [], "status": "draft"},
+        "Draft links to [[Invented Page]].",
+    )
+
+    result = run_lint(config, db)
+
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    assert broken
+    assert broken[0].path == "wiki/.drafts/Draft.md"
+
+
+def test_malformed_embed_detected_in_draft(vault, config, db):
+    write_note(
+        config.drafts_dir / "Draft.md",
+        {"title": "Draft", "tags": [], "status": "draft"},
+        "Draft has bad media !./_resources/file.pdf.",
+    )
+
+    result = run_lint(config, db)
+
+    malformed = [i for i in result.issues if i.issue_type == "malformed_embed"]
+    assert malformed
+    assert "file.pdf" in malformed[0].description
+
+
+def test_malformed_embed_fix_repairs_draft(vault, config, db):
+    draft = config.drafts_dir / "Draft.md"
+    write_note(
+        draft,
+        {"title": "Draft", "tags": [], "status": "draft"},
+        "Draft has bad media !./_resources/file.pdf.",
+    )
+
+    result = run_lint(config, db, fix=True)
+
+    malformed = [i for i in result.issues if i.issue_type == "malformed_embed"]
+    assert malformed
+    assert "![[./_resources/file.pdf]]" in draft.read_text()
+
+
 # ── Low confidence ────────────────────────────────────────────────────────────
 
 

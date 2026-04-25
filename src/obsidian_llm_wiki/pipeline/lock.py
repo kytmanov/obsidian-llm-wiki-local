@@ -111,3 +111,15 @@ def lock_holder_pid(vault: Path) -> int | None:
         return None  # acquired → nobody holding it
     except BlockingIOError:
         return pid  # lock is live
+
+
+def has_invalid_lock_file(vault: Path) -> bool:
+    """Return True when pipeline.lock exists but does not contain a valid PID."""
+    lock_path = vault / ".olw" / "pipeline.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        int(lock_path.read_text().strip())
+    except Exception:
+        return True
+    return False

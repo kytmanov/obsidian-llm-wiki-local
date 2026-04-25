@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from obsidian_llm_wiki.pipeline.lock import lock_holder_pid, pipeline_lock
+from obsidian_llm_wiki.pipeline.lock import has_invalid_lock_file, lock_holder_pid, pipeline_lock
 
 
 @pytest.fixture
@@ -88,6 +88,13 @@ def test_lock_holder_pid_unreadable(vault):
     lock_path = vault / ".olw" / "pipeline.lock"
     lock_path.write_text("not-a-pid")
     assert lock_holder_pid(vault) is None
+
+
+def test_has_invalid_lock_file_detects_garbage(vault):
+    lock_path = vault / ".olw" / "pipeline.lock"
+    lock_path.write_text("not-a-pid")
+
+    assert has_invalid_lock_file(vault) is True
 
 
 # ── Thread safety ─────────────────────────────────────────────────────────────

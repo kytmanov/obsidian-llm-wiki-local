@@ -33,6 +33,8 @@ from ..sanitize import sanitize_tags
 from ..state import StateDB
 from ..structured_output import StructuredOutputError, request_structured
 from ..vault import (
+    _mask_code_blocks,
+    _restore_code_blocks,
     atomic_write,
     build_wiki_frontmatter,
     ensure_wikilinks,
@@ -295,6 +297,36 @@ def _repair_bare_bracket_links(content: str) -> str:
     return _restore_masked_regions(bare_link_re.sub(replace, masked), replacements)
 
 
+def _strip_unknown_wikilinks(content: str, known_titles: list[str]) -> str:
+    """Unwrap wikilinks that do not target an existing wiki/source page."""
+    masked, replacements = _mask_code_blocks(content)
+    known = {title.lower() for title in known_titles}
+    wikilink_re = re.compile(r"\[\[([^\]|#]+)(#[^\]|]*)?(?:\|([^\]]*))?\]\]")
+
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(1).strip()
+        fragment = match.group(2) or ""
+        display = match.group(3)
+        if target.lower().startswith("sources/") or target.lower() in known:
+            return match.group(0)
+        return display or f"{target}{fragment}"
+
+    return _restore_code_blocks(wikilink_re.sub(replace, masked), replacements)
+
+
+_MALFORMED_MEDIA_EMBED_RE = re.compile(r"(?<!\S)!([^\s\[]+\.(?:pdf|png|jpe?g|gif|svg|webp))", re.I)
+
+
+def _repair_malformed_embeds(content: str) -> str:
+    """Repair LLM/media post-processing slips like !./file.pdf into ![[./file.pdf]]."""
+    masked, replacements = _mask_code_blocks(content)
+
+    def replace(match: re.Match[str]) -> str:
+        return f"![[{match.group(1).strip()}]]"
+
+    return _restore_code_blocks(_MALFORMED_MEDIA_EMBED_RE.sub(replace, masked), replacements)
+
+
 def _rewrite_citation_markers(body: str, source_refs: list[SourceRef]) -> str:
     """Rewrite [S1] markers to path-qualified Obsidian links. Never raises."""
     if not source_refs:
@@ -409,6 +441,9 @@ def _write_draft(
     source_refs = _build_source_refs(source_paths, config.vault)
     if config.pipeline.inline_source_citations:
         body = _rewrite_citation_markers(body, source_refs)
+    source_targets = [ref.wiki_target for ref in source_refs]
+    body = _strip_unknown_wikilinks(body, (existing_titles or []) + source_targets)
+    body = _repair_malformed_embeds(body)
     body = _inject_body_sections(body, source_paths, config, source_refs=source_refs)
 
     # Prepend quality annotations (invisible HTML comments, stripped on approve)
@@ -914,12 +949,18 @@ def approve_drafts(
 
     published = []
     for draft_path in paths:
+        draft_path = draft_path.resolve()
+        vault_root = config.vault.resolve()
         if not draft_path.exists():
             log.warning("Draft not found: %s", draft_path)
             continue
 
         # Target: wiki/ with same relative structure
-        rel_to_drafts = draft_path.relative_to(config.drafts_dir)
+        try:
+            rel_to_drafts = draft_path.relative_to(config.drafts_dir.resolve())
+        except ValueError:
+            log.warning("Draft is outside wiki/.drafts/: %s", draft_path)
+            continue
         target = config.wiki_dir / rel_to_drafts
         target.parent.mkdir(parents=True, exist_ok=True)
 
@@ -936,12 +977,20 @@ def approve_drafts(
         draft_path.unlink()  # only remove draft after target is safely written
 
         # Update state DB: store published content_hash for edit-protection
-        draft_rel = str(draft_path.relative_to(config.vault))
-        target_rel = str(target.relative_to(config.vault))
+        draft_rel = str(draft_path.relative_to(vault_root))
+        target_rel = str(target.resolve().relative_to(vault_root))
         db.publish_article(draft_rel, target_rel)
 
         # Store content_hash of published body and record approval
         art = db.get_article(target_rel)
+        if art is None:
+            art = WikiArticleRecord(
+                path=target_rel,
+                title=str(meta.get("title", target.stem)),
+                sources=meta.get("sources", []) if isinstance(meta.get("sources"), list) else [],
+                content_hash="",
+                is_draft=False,
+            )
         if art:
             try:
                 _, pub_body = parse_note(target)
@@ -986,7 +1035,11 @@ def reject_draft(
         except Exception:
             pass
 
-    draft_rel = str(draft_path.relative_to(config.vault))
+    try:
+        draft_rel = str(draft_path.relative_to(config.vault.resolve()))
+    except ValueError:
+        log.warning("Draft is outside vault: %s", draft_path)
+        return
     db.delete_article(draft_rel)
     if draft_path.exists():
         draft_path.unlink()

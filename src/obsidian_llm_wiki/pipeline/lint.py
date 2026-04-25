@@ -37,6 +37,7 @@ _INLINE_TAG_RE = re.compile(r"(?<![/\w])#([a-zA-Z][^\s#\]]*)")
 # Common LLM markdown slip: reference-style link syntax with no URL, e.g.
 # [astronomy] or [Zodiac] (text), which Obsidian will not resolve as a link.
 _MALFORMED_BRACKET_LINK_RE = re.compile(r"(?<![!\[])\[(?!\[)([^\]\n]+)\](?![\[(])")
+_MALFORMED_EMBED_RE = re.compile(r"(?<!\S)!([^\s\[]+\.(?:pdf|png|jpe?g|gif|svg|webp))", re.I)
 
 # Vault-internal directory names that LLMs sometimes write as wikilinks
 _VAULT_DIRS = frozenset({"wiki", "raw", "source", "sources", "queries", ".drafts", ".olw"})
@@ -113,6 +114,61 @@ def _check_malformed_links(rel_path: str, body: str, issues: list[LintIssue]) ->
                 auto_fixable=False,
             )
         )
+
+
+def _check_broken_wikilinks(
+    rel_path: str,
+    body: str,
+    title_index: dict[str, Path],
+    issues: list[LintIssue],
+) -> None:
+    seen_broken: set[str] = set()
+    for link in extract_wikilinks(body):
+        if link.lower() in title_index or link.lower() in seen_broken:
+            continue
+        # Skip bare URLs and vault path fragments accidentally wrapped in [[...]]
+        is_url = link.startswith(("http://", "https://")) or (
+            "/" in link and "." in link.split("/")[0]
+        )
+        stripped_link = link.rstrip("/")
+        is_path_fragment = stripped_link in _VAULT_DIRS or (
+            not link.lower().startswith("sources/")
+            and link.startswith(tuple(d + "/" for d in _VAULT_DIRS))
+        )
+        if is_url or is_path_fragment:
+            continue
+        seen_broken.add(link.lower())
+        issues.append(
+            LintIssue(
+                path=rel_path,
+                issue_type="broken_link",
+                description=f"[[{link}]] has no matching wiki page",
+                suggestion=f"Create a page for '{link}' or remove the link.",
+                auto_fixable=False,
+            )
+        )
+
+
+def _check_malformed_embeds(rel_path: str, body: str, issues: list[LintIssue]) -> None:
+    seen: set[str] = set()
+    for match in _MALFORMED_EMBED_RE.finditer(body):
+        target = match.group(1).strip()
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        issues.append(
+            LintIssue(
+                path=rel_path,
+                issue_type="malformed_embed",
+                description=f"!{target} is not valid Obsidian embed syntax",
+                suggestion=f"Use ![[{target}]] or remove the media reference.",
+                auto_fixable=True,
+            )
+        )
+
+
+def _repair_malformed_embeds(body: str) -> str:
+    return _MALFORMED_EMBED_RE.sub(lambda m: f"![[{m.group(1).strip()}]]", body)
 
 
 def _build_title_index(config: Config, db: StateDB | None = None) -> dict[str, Path]:
@@ -304,34 +360,16 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
                 )
 
         # ── Broken wikilinks ──────────────────────────────────────────────────
-        seen_broken: set[str] = set()
-        for link in extract_wikilinks(body):
-            if link.lower() in title_index or link.lower() in seen_broken:
-                continue
-            # Skip bare URLs and vault path fragments accidentally wrapped in [[...]]
-            is_url = link.startswith(("http://", "https://")) or (
-                "/" in link and "." in link.split("/")[0]
-            )
-            stripped_link = link.rstrip("/")
-            is_path_fragment = stripped_link in _VAULT_DIRS or (
-                not link.lower().startswith("sources/")
-                and link.startswith(tuple(d + "/" for d in _VAULT_DIRS))
-            )
-            if is_url or is_path_fragment:
-                continue
-            seen_broken.add(link.lower())
-            issues.append(
-                LintIssue(
-                    path=rel_path,
-                    issue_type="broken_link",
-                    description=f"[[{link}]] has no matching wiki page",
-                    suggestion=f"Create a page for '{link}' or remove the link.",
-                    auto_fixable=False,
-                )
-            )
+        _check_broken_wikilinks(rel_path, body, title_index, issues)
 
         # ── Malformed markdown links ─────────────────────────────────────────
         _check_malformed_links(rel_path, body, issues)
+        _check_malformed_embeds(rel_path, body, issues)
+        if fix:
+            fixed_body = _repair_malformed_embeds(body)
+            if fixed_body != body:
+                body = fixed_body
+                write_note(page, meta, body)
 
         # ── Inline hashtags ───────────────────────────────────────────────────
         inline_tags = _INLINE_TAG_RE.findall(body)
@@ -389,6 +427,16 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
 
         # Malformed links in sources/queries are useful to surface too.
         _check_malformed_links(rel_path, body, issues)
+        _check_malformed_embeds(rel_path, body, issues)
+        if fix:
+            fixed_body = _repair_malformed_embeds(body)
+            if fixed_body != body:
+                body = fixed_body
+                write_note(page, meta, body)
+
+        # Draft/source/query links should be valid too; otherwise review sees a
+        # healthy vault while pending drafts contain invented pages.
+        _check_broken_wikilinks(rel_path, body, title_index, issues)
 
         # Missing required frontmatter
         missing = _REQUIRED_FIELDS - set(meta.keys())

@@ -136,6 +136,7 @@ class LintIssue(BaseModel):
         "stale",
         "low_confidence",
         "invalid_tag",
+        "malformed_embed",
         "inline_tag",
     ]
     description: str
