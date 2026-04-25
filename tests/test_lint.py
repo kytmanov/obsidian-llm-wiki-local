@@ -164,6 +164,29 @@ def test_vault_path_fragments_not_broken(vault, config, db):
     assert not broken
 
 
+def test_source_path_wikilink_valid_when_source_page_exists(vault, config, db):
+    (config.sources_dir).mkdir(parents=True, exist_ok=True)
+    _write_page(config, "Alpha", "See [[sources/Source Note|S1]].")
+    write_note(
+        config.sources_dir / "Source Note.md",
+        {"title": "Source Note", "tags": ["source"], "status": "published"},
+        "Source summary.",
+    )
+
+    result = run_lint(config, db)
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    assert not broken
+
+
+def test_source_path_wikilink_missing_is_broken(vault, config, db):
+    _write_page(config, "Alpha", "See [[sources/Missing Source|S1]].")
+
+    result = run_lint(config, db)
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    assert broken
+    assert "sources/Missing Source" in broken[0].description
+
+
 def test_duplicate_broken_links_deduplicated(vault, config, db):
     """Same broken target appearing multiple times in one page → only one issue."""
     body = "See [[Ghost]] here. Also [[Ghost]] there. And [[Ghost]] again."

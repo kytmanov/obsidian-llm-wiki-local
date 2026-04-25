@@ -21,8 +21,13 @@ uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run ruff format src/ tests/        # auto-fix
 
-# Smoke test (requires running Ollama)
-OLLAMA_URL=http://localhost:11434 bash scripts/smoke_test.sh
+# Smoke tests (user preference: run against LM Studio with gemma4:e4b)
+# Requires LM Studio server at http://localhost:1234/v1 with gemma4:e4b loaded.
+PROVIDER=lm_studio FAST_MODEL=gemma4:e4b HEAVY_MODEL=gemma4:e4b bash scripts/smoke_test.sh
+PROVIDER=lm_studio FAST_MODEL=gemma4:e4b HEAVY_MODEL=gemma4:e4b bash scripts/compare_smoke.sh
+# If LM Studio rejects the alias, use the exact loaded id it reports, e.g.
+# PROVIDER=lm_studio FAST_MODEL=google/gemma-4-e4b HEAVY_MODEL=google/gemma-4-e4b bash scripts/smoke_test.sh
+# The main smoke can take 15+ minutes with gemma4:e4b; use a long command timeout.
 ```
 
 ## Architecture

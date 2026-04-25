@@ -38,6 +38,14 @@ def _load_index(config: Config) -> str:
 
 def _find_page(config: Config, title: str, db: StateDB | None = None) -> Path | None:
     """Resolve a title to a file path. Checks wiki/ root then sources/."""
+    if title.lower().startswith("sources/"):
+        source_title = title.split("/", 1)[1]
+        candidate = config.wiki_dir / f"{title}.md"
+        if candidate.exists():
+            return candidate
+        candidate = config.sources_dir / f"{source_title}.md"
+        if candidate.exists():
+            return candidate
     # Exact filename match (wiki root)
     candidate = config.wiki_dir / f"{title}.md"
     if candidate.exists():

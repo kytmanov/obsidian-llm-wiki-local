@@ -688,11 +688,11 @@ def test_setup_wizard_cloud_provider_empty_api_key(tmp_path, cfg_dir):
         instance.list_models_detailed.return_value = []
         MockClient.return_value = instance
 
-        # provider=groq, URL=default, api_key=empty(Enter), fast, heavy, no vault
+        # provider=groq, URL=default, api_key=empty, fast, heavy, no vault, citations off
         result = runner.invoke(
             cli,
             ["setup"],
-            input=f"{groq_number}\n\n\nllama3\nllama3\n\n",
+            input=f"{groq_number}\n\n\nllama3\nllama3\n\n\n",
             catch_exceptions=False,
         )
 
@@ -724,8 +724,11 @@ def test_setup_wizard_azure_saves_provider_name(tmp_path, cfg_dir):
         result = runner.invoke(
             cli,
             ["setup"],
-            # provider=azure, URL, api key, fast model, heavy model, no vault
-            input=f"{azure_number}\nhttps://myres.openai.azure.com/openai/deployments/gpt4\nmy-key\nmodel-a\nmodel-b\n\n",
+            # provider=azure, URL, api key, fast model, heavy model, no vault, citations off
+            input=(
+                f"{azure_number}\nhttps://myres.openai.azure.com/openai/deployments/gpt4\n"
+                "my-key\nmodel-a\nmodel-b\n\n\n"
+            ),
             catch_exceptions=False,
         )
 

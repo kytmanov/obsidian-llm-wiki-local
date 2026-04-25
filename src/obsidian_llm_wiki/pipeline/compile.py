@@ -19,6 +19,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -65,6 +66,21 @@ _WRITE_SYSTEM = (
     "Be accurate, cite sources via [[wikilinks]] in body text, use ## section headings, "
     "write in evergreen style. Put [[wikilinks]] inline in prose — do not save them for later."
 )
+
+_WRITE_SYSTEM_WITH_CITATIONS = (
+    "You are a wiki editor. Write a single wiki article from the provided source material. "
+    "Be accurate, cite factual claims with provided [S1] style source ids, use ## section "
+    "headings, write in evergreen style. Use [[wikilinks]] inline for related concepts."
+)
+
+
+@dataclass(frozen=True)
+class SourceRef:
+    id: str
+    raw_path: str
+    title: str
+    safe_title: str
+    wiki_target: str
 
 
 def _load_vault_schema(config: Config) -> str:
@@ -139,10 +155,64 @@ def _truncate_to_budget(text: str, max_chars: int) -> str:
     return text
 
 
+def _resolve_source_path(source_path: str, vault: Path) -> tuple[Path, str] | None:
+    """Resolve a model/DB source path to an on-disk path and vault-relative path."""
+    candidates = [
+        vault / source_path,
+        vault / "raw" / source_path,
+        vault / "raw" / Path(source_path).name,
+    ]
+    path = next((c for c in candidates if c.exists()), None)
+    if path is None:
+        return None
+    try:
+        rel = str(path.relative_to(vault))
+    except ValueError:
+        rel = source_path
+    return path, rel
+
+
+def _source_title(path: Path, fallback: str) -> str:
+    try:
+        meta, _ = parse_note(path)
+        title = meta.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+    except Exception:
+        pass
+    return Path(fallback).stem.replace("-", " ").title()
+
+
+def _build_source_refs(source_paths: list[str], vault: Path) -> list[SourceRef]:
+    refs: list[SourceRef] = []
+    seen: set[str] = set()
+    for sp in source_paths:
+        resolved = _resolve_source_path(sp, vault)
+        if resolved is None:
+            continue
+        path, rel = resolved
+        if rel in seen:
+            continue
+        seen.add(rel)
+        title = _source_title(path, rel)
+        safe_title = sanitize_filename(title)
+        refs.append(
+            SourceRef(
+                id=f"S{len(refs) + 1}",
+                raw_path=rel,
+                title=title,
+                safe_title=safe_title,
+                wiki_target=f"sources/{safe_title}",
+            )
+        )
+    return refs
+
+
 def _gather_sources(
     source_paths: list[str],
     vault: Path,
     max_chars: int = 20000,
+    source_refs: list[SourceRef] | None = None,
 ) -> tuple[str, list[str]]:
     """
     Read source files, return (combined_text, resolved_paths).
@@ -150,17 +220,21 @@ def _gather_sources(
     """
     parts = []
     resolved = []
+    ref_by_raw = {r.raw_path: r for r in source_refs or []}
     for sp in source_paths:
-        # Try path as-is, then prepend raw/ (model often returns bare filenames)
-        candidates = [vault / sp, vault / "raw" / sp, vault / "raw" / Path(sp).name]
-        p = next((c for c in candidates if c.exists()), None)
-        if p is None:
+        resolved_path = _resolve_source_path(sp, vault)
+        if resolved_path is None:
             log.warning("Source not found: %s", sp)
             continue
+        p, rel = resolved_path
         try:
-            meta, body = parse_note(p)
-            parts.append(f"## Source: {p.name}\n{body}")
-            resolved.append(sp)
+            _, body = parse_note(p)
+            ref = ref_by_raw.get(rel)
+            if ref is not None:
+                parts.append(f"## Source [{ref.id}]: {ref.title} ({ref.raw_path})\n{body}")
+            else:
+                parts.append(f"## Source: {p.name}\n{body}")
+            resolved.append(rel)
         except Exception as e:
             log.warning("Could not read %s: %s", sp, e)
 
@@ -182,7 +256,56 @@ def _compute_confidence(source_paths: list[str], db: StateDB) -> float:
     return min(1.0, len(source_paths) * 0.25 + _QUALITY_BONUS.get(best, 0.0))
 
 
-def _inject_body_sections(body: str, source_paths: list[str], config: Config) -> str:
+def _mask_citation_rewrite_regions(content: str) -> tuple[str, list[tuple[int, int, str]]]:
+    """Protect markdown regions where [S1] markers must not be rewritten."""
+    combined_re = re.compile(
+        r"```[\s\S]*?```|`[^`]+`|!\[\[.*?\]\]|!\[[^\]]*\]\([^)]*\)|\[\[.*?\]\]"
+    )
+    spans: list[tuple[int, int, str]] = []
+    masked = content
+    offset = 0
+    for match in combined_re.finditer(content):
+        start, end = match.start() + offset, match.end() + offset
+        placeholder = "X" * (end - start)
+        masked = masked[:start] + placeholder + masked[end:]
+        spans.append((start, end, match.group(0)))
+    return masked, spans
+
+
+def _restore_masked_regions(content: str, spans: list[tuple[int, int, str]]) -> str:
+    for start, end, original in spans:
+        content = content[:start] + original + content[end:]
+    return content
+
+
+def _rewrite_citation_markers(body: str, source_refs: list[SourceRef]) -> str:
+    """Rewrite [S1] markers to path-qualified Obsidian links. Never raises."""
+    if not source_refs:
+        return body
+    by_id = {ref.id: ref for ref in source_refs}
+    masked, spans = _mask_citation_rewrite_regions(body)
+    marker_re = re.compile(r"\[(S\d+(?:\s*,\s*S\d+)*)\]")
+
+    def replace(match: re.Match[str]) -> str:
+        ids = [part.strip() for part in match.group(1).split(",")]
+        links = [f"[[{by_id[id_].wiki_target}|{id_}]]" for id_ in ids if id_ in by_id]
+        if not links:
+            return ""
+        return "(" + ", ".join(links) + ")"
+
+    try:
+        return _restore_masked_regions(marker_re.sub(replace, masked), spans)
+    except Exception as exc:  # noqa: BLE001 - citations must never fail compilation
+        log.warning("Citation rewrite failed: %s", exc)
+        return body
+
+
+def _inject_body_sections(
+    body: str,
+    source_paths: list[str],
+    config: Config,
+    source_refs: list[SourceRef] | None = None,
+) -> str:
     """
     Append ## Sources and ## See Also sections to article body.
 
@@ -193,32 +316,43 @@ def _inject_body_sections(body: str, source_paths: list[str], config: Config) ->
     body = re.sub(r"\n## Sources\b.*", "", body, flags=re.DOTALL).rstrip()
     body = re.sub(r"\n## See Also\b.*", "", body, flags=re.DOTALL).rstrip()
 
+    refs = (
+        source_refs if source_refs is not None else _build_source_refs(source_paths, config.vault)
+    )
+
     # ## Sources: link to wiki/sources/{title}.md pages
     source_lines = []
-    for sp in source_paths:
-        # Resolve source file to get its title
-        candidates = [
-            config.vault / sp,
-            config.vault / "raw" / sp,
-            config.vault / "raw" / Path(sp).name,
-        ]
-        raw_path = next((c for c in candidates if c.exists()), None)
-        if raw_path:
-            try:
-                raw_meta, _ = parse_note(raw_path)
-                src_title = raw_meta.get("title") or raw_path.stem.replace("-", " ").title()
-            except Exception:
-                src_title = Path(sp).stem.replace("-", " ").title()
-        else:
+    if config.pipeline.inline_source_citations:
+        for ref in refs:
+            source_lines.append(f"- [{ref.id}] [[{ref.wiki_target}|{ref.title}]]")
+    else:
+        for ref in refs:
+            if ref.safe_title != ref.title:
+                link = f"[[{ref.safe_title}|{ref.title}]]"
+            else:
+                link = f"[[{ref.title}]]"
+            source_lines.append(f"- {link}")
+
+        # Keep historical fallback for unresolved paths when the feature is disabled.
+        resolved_raw = {ref.raw_path for ref in refs}
+        for sp in source_paths:
+            if sp in resolved_raw:
+                continue
             src_title = Path(sp).stem.replace("-", " ").title()
-        safe_src = sanitize_filename(src_title)
-        display = src_title if safe_src != src_title else src_title
-        link = f"[[{safe_src}|{display}]]" if safe_src != src_title else f"[[{src_title}]]"
-        source_lines.append(f"- {link}")
+            safe_src = sanitize_filename(src_title)
+            display = src_title if safe_src != src_title else src_title
+            link = f"[[{safe_src}|{display}]]" if safe_src != src_title else f"[[{src_title}]]"
+            source_lines.append(f"- {link}")
 
     # ## See Also: wikilinks already in body (sorted, deduplicated)
     linked = sorted(set(extract_wikilinks(body)))
-    see_also_lines = [f"- [[{t}]]" for t in linked if t]
+    see_also_lines = []
+    for target in linked:
+        if not target:
+            continue
+        if target.lower().startswith("sources/"):
+            continue
+        see_also_lines.append(f"- [[{target}]]")
 
     sections = "\n\n## Sources"
     if source_lines:
@@ -252,7 +386,10 @@ def _write_draft(
     if alias_map:
         known = {t.lower() for t in (existing_titles or [])}
         body = normalize_wikilinks(body, alias_map, known)
-    body = _inject_body_sections(body, source_paths, config)
+    source_refs = _build_source_refs(source_paths, config.vault)
+    if config.pipeline.inline_source_citations:
+        body = _rewrite_citation_markers(body, source_refs)
+    body = _inject_body_sections(body, source_paths, config, source_refs=source_refs)
 
     # Prepend quality annotations (invisible HTML comments, stripped on approve)
     annotations = _build_olw_annotations(confidence, source_paths, db)
@@ -302,6 +439,7 @@ def _write_concept_prompt(
     vault_schema: str = "",
     rejection_history: list[str] | None = None,
     language: str | None = None,
+    inline_source_citations: bool = False,
 ) -> str:
     titles_str = ", ".join(existing_titles[:50]) if existing_titles else "none yet"
     lang_instruction = (
@@ -322,8 +460,15 @@ def _write_concept_prompt(
         f"so they can be embedded later (e.g. ![[diagram.png]]).\n"
         f"Use [[wikilinks]] inline in prose to link to related concepts.\n\n"
         f"Existing wiki articles to link to: {titles_str}\n\n"
-        f"SOURCE MATERIAL:\n{sources}"
     )
+    if inline_source_citations:
+        prompt += (
+            "Inline source citations: cite factual sentences/paragraphs with [S1] or "
+            "[S1,S2]. Use only ids listed in SOURCE MATERIAL. Do not invent ids. "
+            "Do not emit raw [[sources/...]] links. Example: Quantum states can be "
+            "entangled [S1,S2].\n\n"
+        )
+    prompt += f"SOURCE MATERIAL:\n{sources}"
     if existing_content:
         prompt += f"\n\nEXISTING ARTICLE (you are updating this):\n{existing_content}"
     if rejection_history:
@@ -456,8 +601,16 @@ def compile_concepts(
             continue
 
         # Gather source material within context budget
+        source_refs = (
+            _build_source_refs(source_paths, config.vault)
+            if config.pipeline.inline_source_citations
+            else None
+        )
         sources_text, resolved_paths = _gather_sources(
-            source_paths, config.vault, max_chars=config.effective_provider.heavy_ctx // 2
+            source_paths,
+            config.vault,
+            max_chars=config.effective_provider.heavy_ctx // 2,
+            source_refs=source_refs,
         )
         if not resolved_paths:
             log.warning("No readable sources for concept '%s', skipping", name)
@@ -490,6 +643,7 @@ def compile_concepts(
             vault_schema,
             rejection_history,
             language=lang,
+            inline_source_citations=config.pipeline.inline_source_citations,
         )
 
         try:
@@ -498,7 +652,11 @@ def compile_concepts(
                 prompt=write_prompt,
                 model_class=SingleArticle,
                 model=config.models.heavy,
-                system=_WRITE_SYSTEM,
+                system=(
+                    _WRITE_SYSTEM_WITH_CITATIONS
+                    if config.pipeline.inline_source_citations
+                    else _WRITE_SYSTEM
+                ),
                 num_ctx=config.effective_provider.heavy_ctx,
                 num_predict=min(_MAX_ARTICLE_PREDICT, config.effective_provider.heavy_ctx),
                 stage="compile_article",

@@ -121,6 +121,15 @@ def test_find_page_by_filename(vault, config):
     assert found.stem == "Machine Learning"
 
 
+def test_find_page_by_explicit_sources_path(vault, config):
+    path = config.sources_dir / "Source Note.md"
+    write_note(path, {"title": "Source Note", "tags": ["source"]}, "Source body.")
+
+    found = _find_page(config, "sources/Source Note")
+
+    assert found == path
+
+
 def test_find_page_by_frontmatter_title(vault, config):
     # File named differently from its frontmatter title
     path = config.wiki_dir / "ml.md"

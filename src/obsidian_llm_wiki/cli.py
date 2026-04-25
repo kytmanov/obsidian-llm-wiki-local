@@ -16,6 +16,7 @@ Commands:
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -28,6 +29,64 @@ from rich.table import Table
 
 console = Console()
 err_console = Console(stderr=True, style="bold red")
+
+_EXPERIMENTAL_CITATIONS_COPY = (
+    "Inline source citations link generated claims back to source pages. "
+    "Experimental: small models may omit citations or add noisy markers. "
+    "Default: off. Turn off later with `olw config inline-source-citations off --vault <path>`."
+)
+
+
+def _format_optional_bool(value: bool | None) -> str:
+    if value is None:
+        return "[dim]not set[/dim]"
+    return "on" if value else "off"
+
+
+def _read_inline_source_citations_setting(toml_path: Path) -> bool | None:
+    import tomllib
+
+    if not toml_path.exists():
+        return None
+    try:
+        with open(toml_path, "rb") as f:
+            data = tomllib.load(f)
+    except Exception:
+        return None
+    pipeline = data.get("pipeline", {})
+    value = pipeline.get("inline_source_citations") if isinstance(pipeline, dict) else None
+    return value if isinstance(value, bool) else None
+
+
+def _set_inline_source_citations(toml_path: Path, enabled: bool) -> None:
+    """Patch one pipeline key while preserving unrelated wiki.toml content."""
+    from .vault import atomic_write
+
+    if not toml_path.exists():
+        raise FileNotFoundError(toml_path)
+
+    text = toml_path.read_text(encoding="utf-8")
+    line = f"inline_source_citations = {'true' if enabled else 'false'}"
+    section_match = re.search(r"(?m)^\[pipeline\]\s*$", text)
+
+    if section_match is None:
+        separator = "" if text.endswith("\n") or not text else "\n"
+        atomic_write(toml_path, f"{text}{separator}\n[pipeline]\n{line}\n")
+        return
+
+    section_start = section_match.end()
+    next_section = re.search(r"(?m)^\[[^\]]+\]\s*$", text[section_start:])
+    section_end = section_start + next_section.start() if next_section else len(text)
+    section = text[section_start:section_end]
+    key_re = re.compile(r"(?m)^(\s*)#?\s*inline_source_citations\s*=.*$")
+
+    if key_re.search(section):
+        new_section = key_re.sub(rf"\1{line}", section, count=1)
+    else:
+        insertion = ("" if section.endswith("\n") or not section else "\n") + line + "\n"
+        new_section = section + insertion
+
+    atomic_write(toml_path, text[:section_start] + new_section + text[section_end:])
 
 
 # ── Context helpers ───────────────────────────────────────────────────────────
@@ -222,6 +281,9 @@ def init(vault_path: str, existing: bool, non_interactive: bool):
                 provider_url=effective_url if provider_name != "ollama" else None,
                 provider_timeout=timeout,
                 azure_api_version=azure_api_version,
+                inline_source_citations=(
+                    bool(gcfg.experimental_inline_source_citations) if gcfg else False
+                ),
             )
         )
     else:
@@ -466,6 +528,10 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
         table.add_row("Fast model", gcfg.fast_model or "[dim]not set[/dim]")
         table.add_row("Heavy model", gcfg.heavy_model or "[dim]not set[/dim]")
         table.add_row("Default vault", gcfg.vault or "[dim]not set[/dim]")
+        table.add_row(
+            "Inline source citations for new vaults",
+            _format_optional_bool(gcfg.experimental_inline_source_citations),
+        )
         console.print(table)
         return
 
@@ -660,6 +726,48 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
         if vault_input.strip():
             vault_path = str(Path(vault_input).expanduser().resolve())
 
+        # ── Experimental features ─────────────────────────────────────────────
+        console.print()
+        step_label = f"Step {6 + step_offset}"
+        console.print(f"  [bold]{step_label}[/bold]  Experimental features (optional)")
+        console.print(f"    {_EXPERIMENTAL_CITATIONS_COPY}")
+        raw_citations = (
+            Prompt.ask(
+                "    Enable inline source citations for new vaults?",
+                choices=["y", "n"],
+                default="n",
+                show_choices=False,
+                console=console,
+            )
+            .strip()
+            .lower()
+        )
+        experimental_inline_source_citations = raw_citations == "y"
+
+        applied_to_existing_vault = False
+        current_vault_setting: bool | None = None
+        current_toml_exists = False
+        if vault_path:
+            current_toml = Path(vault_path) / "wiki.toml"
+            current_toml_exists = current_toml.exists()
+            current_vault_setting = _read_inline_source_citations_setting(current_toml)
+            if current_toml_exists:
+                apply_now = (
+                    Prompt.ask(
+                        f"    Apply this setting to {current_toml} now?",
+                        choices=["y", "n"],
+                        default="n",
+                        show_choices=False,
+                        console=console,
+                    )
+                    .strip()
+                    .lower()
+                )
+                if apply_now == "y":
+                    _set_inline_source_citations(current_toml, experimental_inline_source_citations)
+                    current_vault_setting = experimental_inline_source_citations
+                    applied_to_existing_vault = True
+
         # ── Save ──────────────────────────────────────────────────────────────
         # Preserve existing azure_api_version so re-running setup doesn't reset it.
         existing_cfg = load_global_config()
@@ -682,6 +790,7 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             provider_url=provider_url,
             api_key=api_key,
             azure_api_version=azure_api_ver,
+            experimental_inline_source_citations=experimental_inline_source_citations,
         )
         save_global_config(cfg)
 
@@ -700,6 +809,25 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             summary_lines.append(f"  Heavy model:  [bold]{heavy_model}[/bold]")
         if vault_path:
             summary_lines.append(f"  Vault:        {vault_path}")
+        summary_lines.append(
+            "  Inline source citations: "
+            f"{'on' if experimental_inline_source_citations else 'off'} for new vaults"
+        )
+        if vault_path:
+            if current_toml_exists:
+                current_display = (
+                    _format_optional_bool(current_vault_setting)
+                    if current_vault_setting is not None
+                    else "[dim]not set (default: off)[/dim]"
+                )
+                suffix = " [dim](updated)[/dim]" if applied_to_existing_vault else ""
+            else:
+                current_display = (
+                    f"[dim]not initialized yet; will be "
+                    f"{'on' if experimental_inline_source_citations else 'off'} after init[/dim]"
+                )
+                suffix = ""
+            summary_lines.append(f"  Current vault: {current_display}{suffix}")
         summary_lines += [
             "",
             "  Next steps:",
@@ -714,6 +842,47 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
     except (EOFError, KeyboardInterrupt):
         console.print("\n[yellow]Setup interrupted.[/yellow]")
         sys.exit(1)
+
+
+# ── config ───────────────────────────────────────────────────────────────────
+
+
+@cli.group(name="config")
+def config_cmd():
+    """Inspect or update vault-local configuration."""
+
+
+@config_cmd.command(name="inline-source-citations")
+@click.argument("action", type=click.Choice(["on", "off", "status"]))
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+def config_inline_source_citations(action: str, vault_str: str | None):
+    """Enable, disable, or inspect inline source citations for one vault."""
+    config = _load_config(vault_str)
+    toml_path = config.vault / "wiki.toml"
+    if not toml_path.exists():
+        click.echo(
+            f"Error: {toml_path} not found. Run `olw init {config.vault}` first.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if action == "status":
+        setting = _read_inline_source_citations_setting(toml_path)
+        if setting is None:
+            status = "not set (default: disabled)"
+        else:
+            status = "enabled" if setting else "disabled"
+        console.print(f"inline_source_citations: {status} in {toml_path}")
+        return
+
+    enabled = action == "on"
+    _set_inline_source_citations(toml_path, enabled)
+    console.print(f"inline_source_citations = {'true' if enabled else 'false'} in {toml_path}")
+    if enabled:
+        console.print(
+            "[dim]Turn off later with `olw config inline-source-citations off --vault "
+            f"{config.vault}`.[/dim]"
+        )
 
 
 # ── ingest ────────────────────────────────────────────────────────────────────

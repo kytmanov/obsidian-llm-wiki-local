@@ -88,6 +88,14 @@ def test_save_load_full_config(cfg_dir: Path):
     assert loaded == cfg
 
 
+def test_save_load_experimental_inline_source_citations(cfg_dir: Path):
+    cfg = GlobalConfig(experimental_inline_source_citations=True)
+    save_global_config(cfg)
+    loaded = load_global_config()
+    assert loaded is not None
+    assert loaded.experimental_inline_source_citations is True
+
+
 def test_save_creates_parent_dirs(cfg_dir: Path):
     cfg = GlobalConfig(fast_model="gemma4:e4b")
     save_global_config(cfg)
@@ -239,6 +247,7 @@ def test_setup_non_interactive_with_config(runner: CliRunner, cfg_dir: Path):
             fast_model="gemma4:e4b",
             heavy_model="qwen2.5:14b",
             ollama_url="http://192.168.1.10:11434",
+            experimental_inline_source_citations=True,
         )
     )
     result = runner.invoke(cli, ["setup", "--non-interactive"])
@@ -246,6 +255,8 @@ def test_setup_non_interactive_with_config(runner: CliRunner, cfg_dir: Path):
     assert "gemma4:e4b" in result.output
     assert "qwen2.5:14b" in result.output
     assert "192.168.1.10" in result.output
+    assert "Inline source citations" in result.output
+    assert "on" in result.output
 
 
 # ── olw setup --reset ─────────────────────────────────────────────────────────
@@ -255,11 +266,11 @@ def test_setup_reset_clears_config(runner: CliRunner, cfg_dir: Path):
     save_global_config(GlobalConfig(fast_model="old-model"))
 
     # Provide all wizard inputs via stdin so it runs non-interactively in tests
-    # Inputs: URL (default), fast model (default), heavy model (default), vault (skip)
+    # Inputs: URL, fast model, heavy model, vault, citations
     result = runner.invoke(
         cli,
         ["setup", "--reset"],
-        input="\n\n\n\n\n",
+        input="\n\n\n\n\n\n",
         catch_exceptions=False,
     )
     assert result.exit_code == 0
@@ -283,8 +294,8 @@ def test_setup_wizard_saves_config(runner: CliRunner, cfg_dir: Path):
         result = runner.invoke(
             cli,
             ["setup"],
-            # provider default, URL default, fast, heavy, no vault
-            input="\n\ngemma4:e4b\nqwen2.5:14b\n\n",
+            # provider default, URL default, fast, heavy, no vault, citations off
+            input="\n\ngemma4:e4b\nqwen2.5:14b\n\n\n",
             catch_exceptions=False,
         )
 
@@ -293,6 +304,50 @@ def test_setup_wizard_saves_config(runner: CliRunner, cfg_dir: Path):
     assert cfg is not None
     assert cfg.fast_model == "gemma4:e4b"
     assert cfg.heavy_model == "qwen2.5:14b"
+    assert cfg.experimental_inline_source_citations is False
+
+
+def test_setup_wizard_saves_experimental_inline_source_citations(runner: CliRunner, cfg_dir: Path):
+    with patch("obsidian_llm_wiki.ollama_client.OllamaClient") as MockClient:
+        instance = MagicMock()
+        instance.healthcheck.return_value = False
+        instance.list_models_detailed.return_value = []
+        MockClient.return_value = instance
+
+        result = runner.invoke(
+            cli,
+            ["setup"],
+            input="\n\ngemma4:e4b\nqwen2.5:14b\n\ny\n",
+            catch_exceptions=False,
+        )
+
+    assert result.exit_code == 0
+    cfg = load_global_config()
+    assert cfg is not None
+    assert cfg.experimental_inline_source_citations is True
+
+
+def test_setup_wizard_summary_says_uninitialized_vault_will_use_preference(
+    runner: CliRunner, cfg_dir: Path, tmp_path: Path
+):
+    vault = tmp_path / "new-vault"
+    with patch("obsidian_llm_wiki.ollama_client.OllamaClient") as MockClient:
+        instance = MagicMock()
+        instance.healthcheck.return_value = False
+        instance.list_models_detailed.return_value = []
+        MockClient.return_value = instance
+
+        result = runner.invoke(
+            cli,
+            ["setup"],
+            input=f"\n\ngemma4:e4b\nqwen2.5:14b\n{vault}\ny\n",
+            catch_exceptions=False,
+        )
+
+    assert result.exit_code == 0
+    assert "Inline source citations: on for new vaults" in result.output
+    assert "Current vault: not initialized yet; will be on after init" in result.output
+    assert "Current vault: not set" not in result.output
 
 
 def test_setup_wizard_model_number_selection(runner: CliRunner, cfg_dir: Path):
@@ -309,8 +364,8 @@ def test_setup_wizard_model_number_selection(runner: CliRunner, cfg_dir: Path):
         result = runner.invoke(
             cli,
             ["setup"],
-            # provider default, URL default, pick #1 fast, pick #2 heavy, no vault
-            input="\n\n1\n2\n\n",
+            # provider default, URL default, pick #1 fast, pick #2 heavy, no vault, citations off
+            input="\n\n1\n2\n\n\n",
             catch_exceptions=False,
         )
 
@@ -333,8 +388,8 @@ def test_setup_wizard_whitespace_input_uses_default(runner: CliRunner, cfg_dir: 
         result = runner.invoke(
             cli,
             ["setup"],
-            # provider default, URL default, spaces for fast, spaces for heavy, no vault
-            input="\n\n   \n   \n\n",
+            # provider default, URL default, blank models, no vault, citations off
+            input="\n\n   \n   \n\n\n",
             catch_exceptions=False,
         )
 
@@ -359,7 +414,7 @@ def test_setup_wizard_with_vault(runner: CliRunner, cfg_dir: Path, tmp_path: Pat
         result = runner.invoke(
             cli,
             ["setup"],
-            input=f"\n\ngemma4:e4b\nqwen2.5:14b\n{vault}\n",
+            input=f"\n\ngemma4:e4b\nqwen2.5:14b\n{vault}\n\n",
             catch_exceptions=False,
         )
 
@@ -393,6 +448,24 @@ def test_init_uses_global_config_models(runner: CliRunner, cfg_dir: Path, tmp_pa
     assert "192.168.1.5" in content
 
 
+def test_init_applies_experimental_inline_source_citations_preference(
+    runner: CliRunner, cfg_dir: Path, tmp_path: Path
+):
+    save_global_config(
+        GlobalConfig(
+            fast_model="gemma4:e4b",
+            heavy_model="gemma4:e4b",
+            experimental_inline_source_citations=True,
+        )
+    )
+    vault = tmp_path / "test-vault"
+    result = runner.invoke(cli, ["init", str(vault)])
+    assert result.exit_code == 0
+
+    content = (vault / "wiki.toml").read_text()
+    assert "inline_source_citations = true" in content
+
+
 def test_init_defaults_without_global_config(runner: CliRunner, cfg_dir: Path, tmp_path: Path):
     """olw init without global config should use built-in defaults."""
     vault = tmp_path / "test-vault"
@@ -402,6 +475,7 @@ def test_init_defaults_without_global_config(runner: CliRunner, cfg_dir: Path, t
     content = (vault / "wiki.toml").read_text()
     assert "gemma4:e4b" in content
     assert "qwen2.5:14b" in content
+    assert "# inline_source_citations = false" in content
 
 
 def test_init_syncs_models_into_existing_wiki_toml(
@@ -447,3 +521,54 @@ def test_default_wiki_toml_contains_auto_maintain():
     # Must be valid TOML
     parsed = tomllib.loads(content)
     assert parsed["pipeline"]["auto_maintain"] is False
+
+
+def test_config_inline_source_citations_status_not_set(
+    runner: CliRunner, cfg_dir: Path, tmp_path: Path
+):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "wiki.toml").write_text('[models]\nfast="a"\nheavy="b"\n')
+
+    result = runner.invoke(
+        cli, ["config", "inline-source-citations", "status", "--vault", str(vault)]
+    )
+
+    assert result.exit_code == 0
+    assert "not set (default: disabled)" in result.output
+
+
+def test_config_inline_source_citations_on_off_preserves_comments(
+    runner: CliRunner, cfg_dir: Path, tmp_path: Path
+):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    toml = vault / "wiki.toml"
+    toml.write_text(
+        '[models]\nfast = "a"\nheavy = "b"\n\n[pipeline]\n# keep me\nauto_commit = true\n'
+    )
+
+    on = runner.invoke(cli, ["config", "inline-source-citations", "on", "--vault", str(vault)])
+    off = runner.invoke(cli, ["config", "inline-source-citations", "off", "--vault", str(vault)])
+
+    content = toml.read_text()
+    assert on.exit_code == 0
+    assert off.exit_code == 0
+    assert "# keep me" in content
+    assert "auto_commit = true" in content
+    assert "inline_source_citations = false" in content
+
+
+def test_config_inline_source_citations_creates_pipeline_section(
+    runner: CliRunner, cfg_dir: Path, tmp_path: Path
+):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    toml = vault / "wiki.toml"
+    toml.write_text('[models]\nfast = "a"\nheavy = "b"\n')
+
+    result = runner.invoke(cli, ["config", "inline-source-citations", "on", "--vault", str(vault)])
+
+    assert result.exit_code == 0
+    assert "[pipeline]" in toml.read_text()
+    assert "inline_source_citations = true" in toml.read_text()

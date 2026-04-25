@@ -17,3 +17,9 @@ build/
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Local planning/review artifacts
+CONTEXT.md
+IMPLEMENTATION_PLAN.md
+IMPLEMENTAION_PLAN.md
+REVIEW.md

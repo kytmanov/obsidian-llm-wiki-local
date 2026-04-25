@@ -56,6 +56,7 @@ esac
 
 SKIP_PULL="${SKIP_PULL:-0}"
 KEEP_VAULT="${KEEP_VAULT:-0}"
+INLINE_SOURCE_CITATIONS="${INLINE_SOURCE_CITATIONS:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -240,6 +241,7 @@ heavy_ctx = $HEAVY_CTX
 auto_approve = false
 auto_commit = true
 watch_debounce = 3.0
+inline_source_citations = ${INLINE_SOURCE_CITATIONS}
 
 [rag]
 chunk_size = 512
@@ -263,6 +265,7 @@ heavy_ctx = $HEAVY_CTX
 auto_approve = false
 auto_commit = true
 watch_debounce = 3.0
+inline_source_citations = ${INLINE_SOURCE_CITATIONS}
 
 [rag]
 chunk_size = 512
@@ -472,6 +475,15 @@ if [[ "$DRAFT_COUNT" -gt 0 ]]; then
     check "draft has content"            "test \$(wc -l < \"$FIRST_DRAFT\") -ge 10"
     check "draft has ## Sources section" "grep -q '^## Sources' \"$FIRST_DRAFT\""
     check "draft has confidence field"   "grep -q 'confidence:' \"$FIRST_DRAFT\""
+    if [[ "$INLINE_SOURCE_CITATIONS" == "1" ]]; then
+        check "draft source legend has citation ids" "grep -q '^- \[S[0-9]\+\] \[\[sources/' \"$FIRST_DRAFT\""
+        if grep -q '\[\[sources/.*|S[0-9]' "$FIRST_DRAFT"; then
+            pass "draft has inline source citation link"
+            PASS_COUNT=$((PASS_COUNT + 1))
+        else
+            info "No inline source citation link found in first draft; model may have omitted markers."
+        fi
+    fi
     DRAFT_YAML_OK=$(uv run --project "$REPO_DIR" python - "$FIRST_DRAFT" 2>/dev/null <<'PYEOF'
 import sys
 try:

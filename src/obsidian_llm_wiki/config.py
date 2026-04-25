@@ -26,6 +26,7 @@ def default_wiki_toml(
     provider_url: str | None = None,
     provider_timeout: float = 600.0,
     azure_api_version: str | None = None,
+    inline_source_citations: bool = False,
 ) -> str:
     """Generate wiki.toml content, optionally pre-filled from global config.
 
@@ -55,6 +56,11 @@ def default_wiki_toml(
         if provider_name == "azure":
             api_ver = azure_api_version or "2024-02-15-preview"
             provider_section += f"azure_api_version = {_toml_quote(api_ver)}\n"
+    citation_line = (
+        "inline_source_citations = true  # Experimental: add inline source links\n"
+        if inline_source_citations
+        else "# inline_source_citations = false  # Experimental: add inline source links\n"
+    )
     return (
         f"[models]\n"
         f"fast = {_toml_quote(fast_model)}\n"
@@ -68,6 +74,7 @@ def default_wiki_toml(
         f"watch_debounce = 3.0\n"
         f"max_concepts_per_source = 8\n"
         f"ingest_parallel = false   # true = parallel chunks\n"
+        f"{citation_line}"
         f'# language = "en"  # ISO 639-1 output language; autodetects from notes if unset\n'
     )
 
@@ -103,6 +110,7 @@ class PipelineConfig(BaseModel):
     max_concepts_per_source: int = 8
     auto_maintain: bool = False
     ingest_parallel: bool = False  # parallel chunk analysis (needs OLLAMA_NUM_PARALLEL≥4)
+    inline_source_citations: bool = False
     language: str | None = None  # ISO 639-1 output language; autodetects from notes if unset
 
 

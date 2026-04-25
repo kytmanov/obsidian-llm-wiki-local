@@ -12,8 +12,10 @@ from obsidian_llm_wiki.models import RawNoteRecord, WikiArticleRecord
 from obsidian_llm_wiki.ollama_client import OllamaClient
 from obsidian_llm_wiki.pipeline.compile import (
     _build_olw_annotations,
+    _build_source_refs,
     _gather_sources,
     _inject_body_sections,
+    _rewrite_citation_markers,
     _strip_olw_annotations,
     _write_concept_prompt,
     approve_drafts,
@@ -103,6 +105,91 @@ def test_strip_annotations_no_annotations_unchanged(db):
 def test_inject_body_sections_always_includes_sources_heading(config):
     body = _inject_body_sections("## Overview\n\nContent.", [], config)
     assert "## Sources" in body
+
+
+def test_build_source_refs_stable_order_and_metadata(vault):
+    (vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nBody A.")
+    (vault / "raw" / "b.md").write_text("Body B.")
+
+    refs = _build_source_refs(["raw/a.md", "raw/b.md"], vault)
+
+    assert [r.id for r in refs] == ["S1", "S2"]
+    assert refs[0].raw_path == "raw/a.md"
+    assert refs[0].title == "Alpha Source"
+    assert refs[0].wiki_target == "sources/Alpha Source"
+    assert refs[1].title == "B"
+
+
+def test_gather_sources_with_refs_labels_source_ids(vault):
+    (vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nBody A.")
+    refs = _build_source_refs(["raw/a.md"], vault)
+
+    text, resolved = _gather_sources(["raw/a.md"], vault, source_refs=refs)
+
+    assert "## Source [S1]: Alpha Source (raw/a.md)" in text
+    assert resolved == ["raw/a.md"]
+
+
+def test_rewrite_citation_markers_single_and_multi(vault):
+    (vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nA")
+    (vault / "raw" / "b.md").write_text("---\ntitle: Beta Source\n---\nB")
+    refs = _build_source_refs(["raw/a.md", "raw/b.md"], vault)
+
+    body = _rewrite_citation_markers("Claim [S1]. Joint [S1, S2].", refs)
+
+    assert "([[sources/Alpha Source|S1]])" in body
+    assert "([[sources/Alpha Source|S1]], [[sources/Beta Source|S2]])" in body
+
+
+def test_rewrite_citation_markers_ignores_unknown_ids(vault):
+    (vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nA")
+    refs = _build_source_refs(["raw/a.md"], vault)
+
+    body = _rewrite_citation_markers("Known [S1]. Unknown [S99]. Mixed [S1,S99].", refs)
+
+    assert "Known ([[sources/Alpha Source|S1]])." in body
+    assert "Unknown ." in body
+    assert "Mixed ([[sources/Alpha Source|S1]])." in body
+
+
+def test_rewrite_citation_markers_skips_code_embeds_and_existing_links(vault):
+    (vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nA")
+    refs = _build_source_refs(["raw/a.md"], vault)
+
+    body = _rewrite_citation_markers(
+        "`code [S1]`\n\n```\nblock [S1]\n```\n![[image [S1].png]] [[Existing [S1]]] prose [S1]",
+        refs,
+    )
+
+    assert "`code [S1]`" in body
+    assert "block [S1]" in body
+    assert "![[image [S1].png]]" in body
+    assert "[[Existing [S1]]]" in body
+    assert "prose ([[sources/Alpha Source|S1]])" in body
+
+
+def test_inject_body_sections_uses_id_legend_when_enabled(config):
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nA")
+    config.pipeline.inline_source_citations = True
+
+    body = _inject_body_sections(
+        "See [[Concept]] and [[sources/Alpha Source|S1]].", ["raw/a.md"], config
+    )
+
+    assert "- [S1] [[sources/Alpha Source|Alpha Source]]" in body
+    assert "- [[Concept]]" in body
+    assert "- [[sources/Alpha Source]]" not in body
+
+
+def test_write_concept_prompt_citation_instructions_flagged():
+    prompt = _write_concept_prompt("Topic", "source", [], inline_source_citations=True)
+    assert "Inline source citations" in prompt
+    assert "[S1,S2]" in prompt
+
+
+def test_write_concept_prompt_no_citation_instructions_by_default():
+    prompt = _write_concept_prompt("Topic", "source", [])
+    assert "Inline source citations" not in prompt
 
 
 def test_annotations_stripped_on_approve(config, db, tmp_path):

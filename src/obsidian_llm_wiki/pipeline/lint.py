@@ -103,6 +103,11 @@ def _build_title_index(config: Config, db: StateDB | None = None) -> dict[str, P
             continue
         index[md.stem.lower()] = md
         try:
+            rel_no_suffix = str(md.relative_to(config.wiki_dir).with_suffix(""))
+            index[rel_no_suffix.lower()] = md
+        except ValueError:
+            pass
+        try:
             meta, _ = parse_note(md)
             title = meta.get("title", "")
             if title:
@@ -282,8 +287,10 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
             is_url = link.startswith(("http://", "https://")) or (
                 "/" in link and "." in link.split("/")[0]
             )
-            is_path_fragment = link.rstrip("/") in _VAULT_DIRS or link.startswith(
-                tuple(d + "/" for d in _VAULT_DIRS)
+            stripped_link = link.rstrip("/")
+            is_path_fragment = stripped_link in _VAULT_DIRS or (
+                not link.lower().startswith("sources/")
+                and link.startswith(tuple(d + "/" for d in _VAULT_DIRS))
             )
             if is_url or is_path_fragment:
                 continue

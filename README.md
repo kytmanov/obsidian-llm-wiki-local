@@ -42,7 +42,7 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Selective recompile** — after a file save, only concepts linked to that source are recompiled (not the entire wiki)
 - **Self-maintenance** — `olw maintain --fix` repairs broken wikilinks via the alias map, creates stub articles for genuinely missing targets, and normalizes `[[Alias]]` links across published pages to `[[Canonical|Alias]]`
 - **Manual edit protection** — edited an article by hand? The compiler detects the change and skips it
-- **Source traceability** — every article links back to the raw notes it was built from
+- **Source traceability** — every article links back to the raw notes it was built from; optional inline citations can link individual claims to source pages
 - **File watcher** — `olw watch` auto-processes anything dropped into `raw/`
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
@@ -97,7 +97,7 @@ ollama pull qwen2.5:14b     # heavy model — article writing (optional, 7B+ rec
 olw setup
 ```
 
-An interactive wizard selects a provider, configures the URL and optional API key, picks fast and heavy models, and sets an optional default vault. Takes ~30 seconds.
+An interactive wizard selects a provider, configures the URL and optional API key, picks fast and heavy models, sets an optional default vault, and offers experimental features. Takes ~30 seconds.
 
 ```
 ╭──────────────────────────────────────────────────╮
@@ -132,6 +132,8 @@ An interactive wizard selects a provider, configures the URL and optional API ke
 
 Settings are saved to `~/.config/olw/config.toml` (Mac/Linux) or `%APPDATA%\olw\config.toml` (Windows). API keys are stored only in this user-private file, never in `wiki.toml`.
 
+Experimental setup choices are saved only as defaults for new vaults. Runtime behavior is controlled by each vault's `wiki.toml`.
+
 ### 4. Set up your vault
 
 ```bash
@@ -139,6 +141,26 @@ olw init ~/my-wiki
 ```
 
 This creates the folder structure and a `wiki.toml` pre-filled with your setup wizard choices.
+
+To enable experimental inline source citations for an existing vault:
+
+```bash
+olw config inline-source-citations on --vault ~/my-wiki
+olw config inline-source-citations status --vault ~/my-wiki
+```
+
+Turn them off at any time with:
+
+```bash
+olw config inline-source-citations off --vault ~/my-wiki
+```
+
+Manual fallback:
+
+```toml
+[pipeline]
+inline_source_citations = true
+```
 
 ### 5. Add some notes
 
