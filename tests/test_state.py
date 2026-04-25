@@ -72,6 +72,15 @@ def test_article_upsert_and_draft(db):
     assert got.title == "Test Article"
 
 
+def test_stats_counts_on_disk_drafts(tmp_path):
+    db = StateDB(tmp_path / ".olw" / "state.db")
+    drafts_dir = tmp_path / "wiki" / ".drafts"
+    drafts_dir.mkdir(parents=True)
+    (drafts_dir / "Untracked.md").write_text("---\ntitle: Untracked\n---\nBody.")
+
+    assert db.stats(tmp_path)["drafts"] == 1
+
+
 def test_publish_article(db):
     a = WikiArticleRecord(
         path="wiki/.drafts/test.md",

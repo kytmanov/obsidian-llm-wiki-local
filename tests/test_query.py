@@ -181,3 +181,19 @@ def test_query_answer_prompt_has_language_instruction(vault, config, db):
 
     second_call_prompt = client.generate.call_args_list[1].kwargs.get("prompt", "")
     assert "same language as the user's question" in second_call_prompt
+
+
+def test_query_answer_prompt_limits_wikilinks_to_existing_pages(vault, config, db):
+    _write_index(config, "# Wiki Index\n\n## Concepts\n- [[Scrum]]\n")
+    _write_concept_page(config, "Scrum", "Product Backlog is mentioned but has no page.")
+
+    selection_json = json.dumps({"pages": ["Scrum"]})
+    answer_json = json.dumps({"answer": "Answer."})
+    client = _make_client(selection_json, answer_json)
+
+    run_query(config, client, db, "What is Scrum?")
+
+    second_call_prompt = client.generate.call_args_list[1].kwargs.get("prompt", "")
+    assert "Use [[wikilinks]] only for existing wiki pages" in second_call_prompt
+    assert "Scrum" in second_call_prompt
+    assert "Product Backlog," not in second_call_prompt

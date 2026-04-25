@@ -146,6 +146,21 @@ def test_valid_wikilink_not_broken(vault, config, db):
     assert not broken
 
 
+def test_parenthesized_title_base_resolves(vault, config, db):
+    _write_page(config, "Alpha", "See [[Scrum]].")
+    _write_page(
+        config,
+        "Scrum (Фреймворк гибкой разработки)",
+        "Linked from Alpha.",
+        meta_override={"title": "Scrum (Фреймворк гибкой разработки)"},
+    )
+
+    result = run_lint(config, db)
+
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    assert not broken
+
+
 def test_url_wikilinks_not_broken(vault, config, db):
     """[[https://example.com]] and domain/path links must not trigger broken_link."""
     body = "See [[https://example.com/page]] and [[scrummasters.com.ua/book]]."
@@ -209,6 +224,15 @@ def test_malformed_bracket_link_detected(vault, config, db):
 
 def test_citation_markers_not_malformed_links(vault, config, db):
     _write_page(config, "Alpha", "Claim [S1]. Joint [S1,S2].")
+
+    result = run_lint(config, db)
+
+    malformed = [i for i in result.issues if i.issue_type == "malformed_link"]
+    assert not malformed
+
+
+def test_obsidian_callout_marker_not_malformed_link(vault, config, db):
+    _write_page(config, "Alpha", "> [!info] This is a callout.")
 
     result = run_lint(config, db)
 

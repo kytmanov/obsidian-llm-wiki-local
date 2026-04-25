@@ -1253,10 +1253,12 @@ def reject(vault_str, reject_all, feedback, files):
 @click.option("--failed", "show_failed", is_flag=True, help="List failed notes with error messages")
 def status(vault_str, show_failed):
     """Show vault health, pending drafts, and pipeline stats."""
+    from .models import WikiArticleRecord
+
     config = _load_config(vault_str)
     db = _load_db(config)
 
-    stats = db.stats()
+    stats = db.stats(config.vault)
     raw = stats.get("raw", {})
 
     table = Table(title="Vault Status", show_header=True)
@@ -1274,6 +1276,23 @@ def status(vault_str, show_failed):
 
     # List pending drafts
     drafts = db.list_articles(drafts_only=True)
+    known_draft_paths = {article.path for article in drafts}
+    if config.drafts_dir.exists():
+        from .vault import list_draft_articles
+
+        for title, path, sources in list_draft_articles(config.drafts_dir):
+            rel_path = str(path.relative_to(config.vault))
+            if rel_path in known_draft_paths:
+                continue
+            drafts.append(
+                WikiArticleRecord(
+                    path=rel_path,
+                    title=title,
+                    sources=sources,
+                    content_hash="",
+                    is_draft=True,
+                )
+            )
     if drafts:
         console.print(f"\n[bold]{len(drafts)} draft(s) pending review:[/bold]")
         for article in drafts:
@@ -1452,7 +1471,7 @@ def doctor(vault_str):
 
     # ── Vault stats ───────────────────────────────────────────────────────────
     console.print("\n[bold]Vault stats[/bold]")
-    stats = db.stats()
+    stats = db.stats(config.vault)
     raw = stats.get("raw", {})
     console.print(f"  Raw notes:         {sum(raw.values())}")
     console.print(f"  Ingested:          {raw.get('ingested', 0) + raw.get('compiled', 0)}")

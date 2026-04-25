@@ -99,6 +99,8 @@ def _check_malformed_links(rel_path: str, body: str, issues: list[LintIssue]) ->
         text = match.group(1).strip()
         if not text or text in seen:
             continue
+        if text.startswith("!"):
+            continue
         if text.startswith("S") and re.fullmatch(r"S\d+(?:\s*,\s*S\d+)*", text):
             continue
         seen.add(text)
@@ -134,6 +136,9 @@ def _build_title_index(config: Config, db: StateDB | None = None) -> dict[str, P
             title = meta.get("title", "")
             if title:
                 index[title.lower()] = md
+                base_title = re.sub(r"\s*\([^)]*\)\s*$", "", title).strip()
+                if base_title and base_title != title:
+                    alias_targets.setdefault(base_title.lower(), []).append(md)
             aliases = meta.get("aliases", [])
             if isinstance(aliases, str):
                 aliases = [aliases]

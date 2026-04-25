@@ -609,22 +609,27 @@ class StateDB:
 
     # ── Stats ─────────────────────────────────────────────────────────────────
 
-    def stats(self) -> dict:
+    def stats(self, vault: Path | None = None) -> dict:
         raw_counts = {
             row["status"]: row["cnt"]
             for row in self._conn.execute(
                 "SELECT status, COUNT(*) as cnt FROM raw_notes GROUP BY status"
             ).fetchall()
         }
-        draft_count = self._conn.execute(
+        db_draft_count = self._conn.execute(
             "SELECT COUNT(*) FROM wiki_articles WHERE is_draft=1"
         ).fetchone()[0]
+        disk_draft_count = 0
+        if vault is not None:
+            drafts_dir = vault / "wiki" / ".drafts"
+            if drafts_dir.exists():
+                disk_draft_count = sum(1 for _ in drafts_dir.rglob("*.md"))
         pub_count = self._conn.execute(
             "SELECT COUNT(*) FROM wiki_articles WHERE is_draft=0"
         ).fetchone()[0]
         return {
             "raw": raw_counts,
-            "drafts": draft_count,
+            "drafts": max(db_draft_count, disk_draft_count),
             "published": pub_count,
         }
 
