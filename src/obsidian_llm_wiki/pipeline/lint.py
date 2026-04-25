@@ -34,6 +34,10 @@ _SYSTEM_STEMS = frozenset({"index", "log"})
 # Inline hashtag pattern — Obsidian indexes these as tags
 _INLINE_TAG_RE = re.compile(r"(?<![/\w])#([a-zA-Z][^\s#\]]*)")
 
+# Common LLM markdown slip: reference-style link syntax with no URL, e.g.
+# [astronomy] or [Zodiac] (text), which Obsidian will not resolve as a link.
+_MALFORMED_BRACKET_LINK_RE = re.compile(r"(?<![!\[])\[(?!\[)([^\]\n]+)\](?![\[(])")
+
 # Vault-internal directory names that LLMs sometimes write as wikilinks
 _VAULT_DIRS = frozenset({"wiki", "raw", "source", "sources", "queries", ".drafts", ".olw"})
 
@@ -89,8 +93,28 @@ def _body_hash(body: str) -> str:
     return hashlib.sha256(body.encode()).hexdigest()
 
 
+def _check_malformed_links(rel_path: str, body: str, issues: list[LintIssue]) -> None:
+    seen: set[str] = set()
+    for match in _MALFORMED_BRACKET_LINK_RE.finditer(body):
+        text = match.group(1).strip()
+        if not text or text in seen:
+            continue
+        if text.startswith("S") and re.fullmatch(r"S\d+(?:\s*,\s*S\d+)*", text):
+            continue
+        seen.add(text)
+        issues.append(
+            LintIssue(
+                path=rel_path,
+                issue_type="malformed_link",
+                description=f"[{text}] is not a valid Markdown or Obsidian link",
+                suggestion=f"Use [[{text}]] for an Obsidian link or remove the brackets.",
+                auto_fixable=False,
+            )
+        )
+
+
 def _build_title_index(config: Config, db: StateDB | None = None) -> dict[str, Path]:
-    """Map lowercase title/stem → path for every published wiki page.
+    """Map lowercase title/stem → path for every wiki page, including drafts.
 
     Also indexes frontmatter aliases and (when db provided) DB alias map.
     Ambiguous aliases (same alias → multiple pages) are excluded so they stay broken.
@@ -99,8 +123,6 @@ def _build_title_index(config: Config, db: StateDB | None = None) -> dict[str, P
     alias_targets: dict[str, list[Path]] = {}  # alias_lower → candidate paths
 
     for md in config.wiki_dir.rglob("*.md"):
-        if ".drafts" in md.parts:
-            continue
         index[md.stem.lower()] = md
         try:
             rel_no_suffix = str(md.relative_to(config.wiki_dir).with_suffix(""))
@@ -168,13 +190,11 @@ def _concept_pages(config: Config) -> list[Path]:
 
 
 def _all_wiki_pages(config: Config) -> list[Path]:
-    """All wiki pages including sources/ and queries/ (excluded: drafts, system stems)."""
+    """All wiki pages including drafts, sources/ and queries/ (excluded: system stems)."""
     if not config.wiki_dir.exists():
         return []
     pages = []
     for md in sorted(config.wiki_dir.rglob("*.md")):
-        if ".drafts" in md.parts:
-            continue
         if md.parent == config.wiki_dir and md.stem.lower() in _SYSTEM_STEMS:
             continue
         pages.append(md)
@@ -305,6 +325,9 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
                 )
             )
 
+        # ── Malformed markdown links ─────────────────────────────────────────
+        _check_malformed_links(rel_path, body, issues)
+
         # ── Inline hashtags ───────────────────────────────────────────────────
         inline_tags = _INLINE_TAG_RE.findall(body)
         if inline_tags:
@@ -358,6 +381,9 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
 
         # Invalid tags
         _check_tags(rel_path, meta, issues, fix, page, body)
+
+        # Malformed links in sources/queries are useful to surface too.
+        _check_malformed_links(rel_path, body, issues)
 
         # Missing required frontmatter
         missing = _REQUIRED_FIELDS - set(meta.keys())

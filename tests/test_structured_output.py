@@ -227,6 +227,21 @@ def test_single_article_missing_required_field():
         )
 
 
+def test_invalid_backslash_escape_in_content_is_repaired():
+    raw = r'{"title":"T","content":"Windows path C:\Projects\Vault\File.md","tags":["t"]}'
+    c = _client(raw)
+
+    result = request_structured(
+        client=c,
+        prompt="write",
+        model_class=SingleArticle,
+        model="qwen2.5:14b",
+        max_retries=0,
+    )
+
+    assert result.content == r"Windows path C:\Projects\Vault\File.md"
+
+
 # ── _make_template: nested object rendering ──────────────────────────────────
 
 

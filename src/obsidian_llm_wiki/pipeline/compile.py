@@ -37,6 +37,7 @@ from ..vault import (
     build_wiki_frontmatter,
     ensure_wikilinks,
     extract_wikilinks,
+    list_draft_articles,
     list_wiki_articles,
     normalize_wikilinks,
     parse_note,
@@ -278,6 +279,22 @@ def _restore_masked_regions(content: str, replacements: list[tuple[str, str]]) -
     return content
 
 
+def _repair_bare_bracket_links(content: str) -> str:
+    """Convert LLM-produced [Concept] slips into Obsidian [[Concept]] links."""
+    masked, replacements = _mask_citation_rewrite_regions(content)
+    bare_link_re = re.compile(r"(?<![!\[])\[(?!\[)([^\]\n]+)\](?![\[(])")
+
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(1).strip()
+        if not target:
+            return match.group(0)
+        if re.fullmatch(r"S\d+(?:\s*,\s*S\d+)*", target):
+            return match.group(0)
+        return f"[[{target}]]"
+
+    return _restore_masked_regions(bare_link_re.sub(replace, masked), replacements)
+
+
 def _rewrite_citation_markers(body: str, source_refs: list[SourceRef]) -> str:
     """Rewrite [S1] markers to path-qualified Obsidian links. Never raises."""
     if not source_refs:
@@ -373,15 +390,18 @@ def _write_draft(
     existing_titles: list[str] | None = None,
     concept_aliases: list[str] | None = None,
     alias_map: dict[str, str] | None = None,
+    canonical_title: str | None = None,
 ) -> Path:
     """Write SingleArticle to wiki/.drafts/ and record in state DB."""
     config.drafts_dir.mkdir(parents=True, exist_ok=True)
 
-    safe_name = sanitize_filename(content_result.title)
+    article_title = canonical_title or content_result.title
+    safe_name = sanitize_filename(article_title)
     draft_path = config.drafts_dir / f"{safe_name}.md"
 
     # Inject wikilinks for known article titles mentioned in body
-    body = ensure_wikilinks(content_result.content, existing_titles or [])
+    body = _repair_bare_bracket_links(content_result.content)
+    body = ensure_wikilinks(body, existing_titles or [])
     # Normalize alias-based links to canonical targets
     if alias_map:
         known = {t.lower() for t in (existing_titles or [])}
@@ -403,7 +423,7 @@ def _write_draft(
             body = annotation_block + body
 
     meta = build_wiki_frontmatter(
-        title=content_result.title,
+        title=article_title,
         tags=content_result.tags,
         sources=source_paths,
         confidence=confidence,
@@ -418,7 +438,7 @@ def _write_draft(
     db.upsert_article(
         WikiArticleRecord(
             path=str(draft_path.relative_to(config.vault)),
-            title=content_result.title,
+            title=article_title,
             sources=source_paths,
             content_hash=_content_hash(body),
             is_draft=True,
@@ -512,27 +532,16 @@ def compile_concepts(
 
     log.info("Compiling %d concept(s)", len(concept_names))
     existing_titles = [t for t, _ in list_wiki_articles(config.wiki_dir)]
+    draft_titles = [t for t, _, _ in list_draft_articles(config.drafts_dir)]
+    link_titles = existing_titles + [t for t in draft_titles if t not in existing_titles]
     vault_schema = _load_vault_schema(config)
     total = len(concept_names)
     # Build alias resolution map once per compile run
     alias_map = db.list_alias_map()
 
-    if dry_run:
-        for name in concept_names:
-            srcs = db.get_sources_for_concept(name)
-            is_stub = db.has_stub(name)
-            stub_tag = " [stub]" if is_stub else ""
-            print(
-                f"  [concept{stub_tag}] {name} — {len(srcs)} source(s): "
-                f"{', '.join(Path(s).name for s in srcs)}"
-            )
-        return [], [], {}
-
     draft_paths: list[Path] = []
     failed: list[str] = []
     concept_timings: dict[str, float] = {}
-    compiled_sources: set[str] = set()
-
     for idx, name in enumerate(concept_names, 1):
         if on_progress:
             on_progress(idx, total, name)
@@ -547,7 +556,17 @@ def compile_concepts(
         # Manual edit protection
         safe_name = sanitize_filename(name)
         wiki_path = config.wiki_dir / f"{safe_name}.md"
+        draft_path = config.drafts_dir / f"{safe_name}.md"
         existing_meta: dict | None = None
+
+        if draft_path.exists() and not force:
+            if dry_run:
+                print(f"  [skip] {name} — draft already pending review")
+                continue
+            log.info(
+                "Skipping '%s' — draft already pending review (use --force to overwrite)", name
+            )
+            continue
 
         if wiki_path.exists():
             try:
@@ -555,10 +574,21 @@ def compile_concepts(
                 if not force:
                     art_rec = db.get_article(str(wiki_path.relative_to(config.vault)))
                     if art_rec and art_rec.content_hash != _content_hash(existing_body):
+                        if dry_run:
+                            print(f"  [skip] {name} — published article manually edited")
+                            continue
                         log.info("Skipping '%s' — manually edited (use --force to override)", name)
                         continue
             except Exception:
                 pass
+
+        if dry_run:
+            stub_tag = " [stub]" if is_stub else ""
+            print(
+                f"  [concept{stub_tag}] {name} — {len(source_paths)} source(s): "
+                f"{', '.join(Path(s).name for s in source_paths)}"
+            )
+            continue
 
         # For stubs: compile with empty sources using a lightweight stub prompt
         if is_stub and not source_paths:
@@ -589,7 +619,8 @@ def compile_concepts(
                 db=db,
                 confidence=0.0,
                 existing_meta=existing_meta,
-                existing_titles=existing_titles,
+                existing_titles=link_titles,
+                canonical_title=name,
                 concept_aliases=db.get_aliases(name),
                 alias_map=alias_map,
             )
@@ -638,7 +669,7 @@ def compile_concepts(
         write_prompt = _write_concept_prompt(
             name,
             sources_text,
-            existing_titles,
+            link_titles,
             existing_content,
             vault_schema,
             rejection_history,
@@ -673,19 +704,17 @@ def compile_concepts(
             db=db,
             confidence=confidence,
             existing_meta=existing_meta,
-            existing_titles=existing_titles,
+            existing_titles=link_titles,
+            canonical_title=name,
             concept_aliases=db.get_aliases(name),
             alias_map=alias_map,
         )
         draft_paths.append(draft_path)
-        compiled_sources.update(resolved_paths)
+        for sp in resolved_paths:
+            db.mark_raw_status(sp, "compiled")
         elapsed = time.monotonic() - _t_concept
         concept_timings[name] = elapsed
         log.info("Draft written: %s (%.1fs)", draft_path.name, elapsed)
-
-    # Mark all sources that fed any compiled concept as 'compiled'
-    for sp in compiled_sources:
-        db.mark_raw_status(sp, "compiled")
 
     return draft_paths, failed, concept_timings
 

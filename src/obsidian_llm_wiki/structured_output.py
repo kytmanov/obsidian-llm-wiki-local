@@ -169,7 +169,13 @@ def _try_parse(raw: str, model_class: type[T]) -> tuple[T | None, str]:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
-        return None, f"Invalid JSON: {e}"
+        if "Invalid \\escape" in str(e):
+            try:
+                data = json.loads(re.sub(r"\\(?![\"\\/bfnrtu])", r"\\\\", raw))
+            except json.JSONDecodeError:
+                return None, f"Invalid JSON: {e}"
+        else:
+            return None, f"Invalid JSON: {e}"
     # Try direct validation first
     last_err = ""
     try:

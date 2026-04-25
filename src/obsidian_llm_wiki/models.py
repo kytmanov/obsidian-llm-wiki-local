@@ -131,6 +131,7 @@ class LintIssue(BaseModel):
     issue_type: Literal[
         "orphan",
         "broken_link",
+        "malformed_link",
         "missing_frontmatter",
         "stale",
         "low_confidence",

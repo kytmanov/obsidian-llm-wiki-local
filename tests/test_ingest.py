@@ -191,13 +191,13 @@ def test_normalize_strips_empty(vault, config, db):
 # ── ingest_note ───────────────────────────────────────────────────────────────
 
 
-def _analysis_json(concepts=None, quality="high", summary="A summary."):
-    names = concepts or ["Quantum Computing", "Qubit"]
+def _analysis_json(concepts=None, quality="high", summary="A summary.", suggested_topics=None):
+    names = ["Quantum Computing", "Qubit"] if concepts is None else concepts
     return json.dumps(
         {
             "summary": summary,
             "concepts": [{"name": c, "aliases": []} for c in names],
-            "suggested_topics": ["Quantum Computing"],
+            "suggested_topics": suggested_topics or ["Quantum Computing"],
             "quality": quality,
         }
     )
@@ -260,6 +260,15 @@ def test_ingest_note_stores_concepts(vault, config, db):
     names = db.list_all_concept_names()
     assert "Neural Networks" in names
     assert "Backpropagation" in names
+
+
+def test_ingest_note_uses_suggested_topics_when_concepts_empty(vault, config, db):
+    path = _write_raw(vault, "api.md", "# API testing\n\nChecklist for response validation.")
+    client = _make_client(_analysis_json(concepts=[], suggested_topics=["API Response Testing"]))
+
+    ingest_note(path, config, client, db)
+
+    assert db.list_all_concept_names() == ["API Response Testing"]
 
 
 def test_ingest_note_failure_marks_db_status(vault, config, db):

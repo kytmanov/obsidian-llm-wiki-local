@@ -197,6 +197,39 @@ def test_duplicate_broken_links_deduplicated(vault, config, db):
     assert "Ghost" in broken[0].description
 
 
+def test_malformed_bracket_link_detected(vault, config, db):
+    _write_page(config, "Alpha", "This mentions [astronomy] without a URL.")
+
+    result = run_lint(config, db)
+
+    malformed = [i for i in result.issues if i.issue_type == "malformed_link"]
+    assert malformed
+    assert "[astronomy]" in malformed[0].description
+
+
+def test_citation_markers_not_malformed_links(vault, config, db):
+    _write_page(config, "Alpha", "Claim [S1]. Joint [S1,S2].")
+
+    result = run_lint(config, db)
+
+    malformed = [i for i in result.issues if i.issue_type == "malformed_link"]
+    assert not malformed
+
+
+def test_malformed_bracket_link_detected_in_draft(vault, config, db):
+    write_note(
+        config.drafts_dir / "Draft.md",
+        {"title": "Draft", "tags": [], "status": "draft"},
+        "Draft mentions [astronomy] without a URL.",
+    )
+
+    result = run_lint(config, db)
+
+    malformed = [i for i in result.issues if i.issue_type == "malformed_link"]
+    assert malformed
+    assert malformed[0].path == "wiki/.drafts/Draft.md"
+
+
 # ── Low confidence ────────────────────────────────────────────────────────────
 
 

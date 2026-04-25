@@ -15,6 +15,7 @@ from obsidian_llm_wiki.pipeline.compile import (
     _build_source_refs,
     _gather_sources,
     _inject_body_sections,
+    _repair_bare_bracket_links,
     _rewrite_citation_markers,
     _strip_olw_annotations,
     _write_concept_prompt,
@@ -175,6 +176,22 @@ def test_rewrite_citation_markers_restores_masks_after_length_changes(vault):
     body = _rewrite_citation_markers("prose [S1] then `code [S1]` and [[Link [S1]]].", refs)
 
     assert body == ("prose ([[sources/Alpha Source|S1]]) then `code [S1]` and [[Link [S1]]].")
+
+
+def test_repair_bare_bracket_links_converts_llm_slips():
+    body = _repair_bare_bracket_links("See [API] and [Product Backlog].")
+
+    assert body == "See [[API]] and [[Product Backlog]]."
+
+
+def test_repair_bare_bracket_links_skips_markdown_citations_and_masks():
+    body = _repair_bare_bracket_links(
+        "Claim [S1]. Link [text](https://example.com). `code [API]` [[Already]] prose [API]"
+    )
+
+    assert body == (
+        "Claim [S1]. Link [text](https://example.com). `code [API]` [[Already]] prose [[API]]"
+    )
 
 
 def test_inject_body_sections_uses_id_legend_when_enabled(config):
@@ -388,6 +405,80 @@ def test_compile_concepts_none_compiles_all(config, db):
 
     drafts, failed, _ = compile_concepts(config, client, db, concepts=None)
     assert len(drafts) == 1
+
+
+def test_compile_concepts_preserves_canonical_title(config, db):
+    import json
+
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Product Backlog"])
+    db.upsert_aliases("Product Backlog", ["Продуктовый бэклог"])
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: A\n---\nContent.")
+
+    mock_response = json.dumps({"title": "Продуктовый бэклог", "content": "Content.", "tags": []})
+    client = make_mock_client(mock_response)
+
+    drafts, failed, _ = compile_concepts(config, client, db, concepts=["Product Backlog"])
+
+    assert failed == []
+    assert len(drafts) == 1
+    assert drafts[0].name == "Product Backlog.md"
+    assert db.get_article("wiki/.drafts/Product Backlog.md").title == "Product Backlog"
+
+
+def test_compile_concepts_skips_pending_draft(config, db):
+    import json
+
+    import frontmatter as fm_lib
+
+    from obsidian_llm_wiki.vault import atomic_write
+
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha"])
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: A\n---\nContent.")
+    draft_path = config.drafts_dir / "Alpha.md"
+    atomic_write(
+        draft_path,
+        fm_lib.dumps(
+            fm_lib.Post("User-reviewed draft body.", title="Alpha", tags=[], status="draft")
+        ),
+    )
+
+    mock_response = json.dumps({"title": "Alpha", "content": "New content.", "tags": []})
+    client = make_mock_client(mock_response)
+
+    drafts, failed, _ = compile_concepts(config, client, db, concepts=["Alpha"])
+
+    assert drafts == []
+    assert failed == []
+    assert client.generate.call_count == 0
+    assert "User-reviewed draft body." in draft_path.read_text()
+
+
+def test_compile_concepts_marks_sources_after_each_success(config, db):
+    import json
+
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha"])
+    db.upsert_concepts("raw/b.md", ["Beta"])
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: A\n---\nContent.")
+    (config.vault / "raw" / "b.md").write_text("---\ntitle: B\n---\nContent.")
+
+    client = make_mock_client()
+    client.generate.side_effect = [
+        json.dumps({"title": "Alpha", "content": "Alpha content.", "tags": []}),
+        "not valid json",
+        "not valid json",
+        "not valid json",
+    ]
+
+    drafts, failed, _ = compile_concepts(config, client, db)
+
+    assert len(drafts) == 1
+    assert failed == ["Beta"]
+    assert db.get_raw("raw/a.md").status == "compiled"
+    assert db.get_raw("raw/b.md").status == "ingested"
 
 
 # ── Approval records approved_at ─────────────────────────────────────────────

@@ -450,7 +450,10 @@ def ingest_note(
 
     # Normalize concept names against existing canonical names, store linkages
     max_concepts = config.pipeline.max_concepts_per_source
-    normalized = _normalize_concepts(result.concepts[:max_concepts], db)
+    concept_candidates = result.concepts[:max_concepts]
+    if not concept_candidates:
+        concept_candidates = [Concept(name=topic, aliases=[]) for topic in result.suggested_topics]
+    normalized = _normalize_concepts(concept_candidates[:max_concepts], db)
     canonical_names = [name for name, _ in normalized]
     db.upsert_concepts(rel_path, canonical_names)
     for canonical, aliases in normalized:
