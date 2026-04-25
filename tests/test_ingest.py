@@ -434,6 +434,23 @@ def test_ingest_note_filters_weak_llm_concept_without_evidence(vault, config, db
     assert db.list_all_concept_names() == []
 
 
+def test_ingest_note_preserves_title_entity_as_item(vault, config, db):
+    path = _write_raw(
+        vault,
+        "A new look at an old country Mark Power at TEDxKrakow.md",
+        "https://youtube.com/watch?v=example",
+    )
+    client = _make_client(_analysis_json(concepts=[], quality="low", suggested_topics=[]))
+
+    ingest_note(path, config, client, db)
+
+    assert db.list_all_concept_names() == []
+    item = db.get_item("Mark Power")
+    assert item is not None
+    assert item.kind == "ambiguous"
+    assert item.subtype == "person"
+
+
 def test_ingest_note_failure_marks_db_status(vault, config, db):
     path = _write_raw(vault, "fail.md", "# Fail\n\nContent.")
     client = MagicMock()

@@ -2088,6 +2088,65 @@ def unblock(vault_str, concept):
     )
 
 
+# ── items ─────────────────────────────────────────────────────────────────────
+
+
+@cli.group()
+def items():
+    """Audit preserved non-concept knowledge item candidates."""
+
+
+@items.command("audit")
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+@click.option("--limit", default=30, show_default=True, help="Maximum items to show")
+def items_audit(vault_str, limit):
+    """Show ambiguous/entity candidates preserved during ingest."""
+    config = _load_config(vault_str)
+    db = _load_db(config)
+    candidates = [item for item in db.list_items(status="candidate") if item.kind != "concept"]
+    if not candidates:
+        console.print("[green]No candidate knowledge items found.[/green]")
+        return
+
+    console.print(f"[bold]{len(candidates)} candidate knowledge item(s)[/bold]\n")
+    for item in candidates[:limit]:
+        mentions = db.get_item_mentions(item.name)
+        console.print(
+            f"[yellow]{item.name}[/yellow]  "
+            f"kind={item.kind} subtype={item.subtype or 'unknown'} "
+            f"confidence={item.confidence:.2f} mentions={len(mentions)}"
+        )
+        for mention in mentions[:3]:
+            console.print(
+                f"  - {mention.evidence_level}: {mention.source_path} ({mention.mention_text})"
+            )
+        console.print("  suggested: classify / ignore / keep candidate\n")
+
+
+@items.command("show")
+@click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
+@click.argument("name")
+def items_show(vault_str, name):
+    """Show one preserved knowledge item and its mentions."""
+    config = _load_config(vault_str)
+    db = _load_db(config)
+    item = db.get_item(name)
+    if item is None:
+        console.print(f"[red]Item not found:[/red] {name}")
+        raise SystemExit(1)
+    console.print(f"[bold]{item.name}[/bold]")
+    console.print(f"  kind: {item.kind}")
+    console.print(f"  subtype: {item.subtype or 'unknown'}")
+    console.print(f"  status: {item.status}")
+    console.print(f"  confidence: {item.confidence:.2f}")
+    mentions = db.get_item_mentions(item.name)
+    console.print(f"\n[bold]Mentions ({len(mentions)})[/bold]")
+    for mention in mentions:
+        console.print(f"- {mention.evidence_level}: {mention.source_path}")
+        if mention.context:
+            console.print(f"  {mention.context}")
+
+
 # ── compare ───────────────────────────────────────────────────────────────────
 
 

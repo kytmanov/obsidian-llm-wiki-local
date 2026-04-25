@@ -177,3 +177,23 @@ class WikiArticleRecord(BaseModel):
     is_draft: bool = True
     approved_at: datetime | None = None
     approval_notes: str | None = None
+
+
+class KnowledgeItemRecord(BaseModel):
+    name: str
+    kind: Literal["concept", "entity", "ambiguous"] = "ambiguous"
+    subtype: str | None = None
+    status: Literal["candidate", "confirmed", "ignored"] = "candidate"
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class ItemMentionRecord(BaseModel):
+    item_name: str
+    source_path: str
+    mention_text: str
+    context: str | None = None
+    evidence_level: Literal["title_supported", "filename_supported", "source_supported"]
+    confidence: float = Field(ge=0.0, le=1.0, default=0.5)
+    id: int | None = None

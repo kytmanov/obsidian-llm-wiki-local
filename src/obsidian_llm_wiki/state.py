@@ -9,6 +9,7 @@ Schema versioning: schema_version table tracks migration level.
   v2 — rejections, stubs, blocked_concepts tables; approved_at/approval_notes on wiki_articles
   v3 — language column on raw_notes
   v4 — concept_aliases table; backfill from existing concept titles
+  v5 — knowledge_items + item_mentions tables; backfill existing concepts
 """
 
 from __future__ import annotations
@@ -19,9 +20,9 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from .models import RawNoteRecord, WikiArticleRecord
+from .models import ItemMentionRecord, KnowledgeItemRecord, RawNoteRecord, WikiArticleRecord
 
-_CURRENT_SCHEMA_VERSION = 4
+_CURRENT_SCHEMA_VERSION = 5
 
 # Full current schema — idempotent (CREATE IF NOT EXISTS).
 # Fresh DBs get all tables + columns from here. Existing DBs use _VERSIONED_MIGRATIONS.
@@ -86,11 +87,36 @@ CREATE TABLE IF NOT EXISTS concept_aliases (
     PRIMARY KEY (concept_name, alias)
 );
 
+CREATE TABLE IF NOT EXISTS knowledge_items (
+    name       TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL DEFAULT 'ambiguous',
+    subtype    TEXT,
+    status     TEXT NOT NULL DEFAULT 'candidate',
+    confidence REAL NOT NULL DEFAULT 0.5,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS item_mentions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_name      TEXT NOT NULL,
+    source_path    TEXT NOT NULL,
+    mention_text   TEXT NOT NULL,
+    context        TEXT,
+    evidence_level TEXT NOT NULL,
+    confidence     REAL NOT NULL DEFAULT 0.5,
+    UNIQUE(item_name, source_path, mention_text, evidence_level)
+);
+
 CREATE INDEX IF NOT EXISTS idx_raw_hash ON raw_notes(content_hash);
 CREATE INDEX IF NOT EXISTS idx_raw_status ON raw_notes(status);
 CREATE INDEX IF NOT EXISTS idx_concept_name ON concepts(name);
 CREATE INDEX IF NOT EXISTS idx_rejections_concept ON rejections(concept);
 CREATE INDEX IF NOT EXISTS idx_alias_lookup ON concept_aliases(lower(alias));
+CREATE INDEX IF NOT EXISTS idx_items_kind ON knowledge_items(kind);
+CREATE INDEX IF NOT EXISTS idx_items_status ON knowledge_items(status);
+CREATE INDEX IF NOT EXISTS idx_mentions_item ON item_mentions(item_name);
+CREATE INDEX IF NOT EXISTS idx_mentions_source ON item_mentions(source_path);
 """
 
 # Migrations keyed by version they bring the DB to.
@@ -132,6 +158,31 @@ _VERSIONED_MIGRATIONS: dict[int, list[str]] = {
                PRIMARY KEY (concept_name, alias)
            )""",
         "CREATE INDEX IF NOT EXISTS idx_alias_lookup ON concept_aliases(lower(alias))",
+    ],
+    5: [
+        """CREATE TABLE IF NOT EXISTS knowledge_items (
+               name TEXT PRIMARY KEY,
+               kind TEXT NOT NULL DEFAULT 'ambiguous',
+               subtype TEXT,
+               status TEXT NOT NULL DEFAULT 'candidate',
+               confidence REAL NOT NULL DEFAULT 0.5,
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )""",
+        """CREATE TABLE IF NOT EXISTS item_mentions (
+               id INTEGER PRIMARY KEY AUTOINCREMENT,
+               item_name TEXT NOT NULL,
+               source_path TEXT NOT NULL,
+               mention_text TEXT NOT NULL,
+               context TEXT,
+               evidence_level TEXT NOT NULL,
+               confidence REAL NOT NULL DEFAULT 0.5,
+               UNIQUE(item_name, source_path, mention_text, evidence_level)
+           )""",
+        "CREATE INDEX IF NOT EXISTS idx_items_kind ON knowledge_items(kind)",
+        "CREATE INDEX IF NOT EXISTS idx_items_status ON knowledge_items(status)",
+        "CREATE INDEX IF NOT EXISTS idx_mentions_item ON item_mentions(item_name)",
+        "CREATE INDEX IF NOT EXISTS idx_mentions_source ON item_mentions(source_path)",
     ],
 }
 
@@ -216,6 +267,8 @@ class StateDB:
                         raise
             if version == 4:
                 self._backfill_aliases_v4()
+            if version == 5:
+                self._backfill_items_v5()
             with self._tx():
                 self._conn.execute(
                     "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
@@ -250,6 +303,19 @@ class StateDB:
                         "INSERT OR IGNORE INTO concept_aliases (concept_name, alias) VALUES (?, ?)",
                         (name, alias),
                     )
+        self._conn.commit()
+
+    def _backfill_items_v5(self) -> None:
+        """Backfill existing concepts into the neutral knowledge item ledger."""
+        rows = self._conn.execute("SELECT DISTINCT name FROM concepts").fetchall()
+        now = datetime.now().isoformat()
+        for (name,) in rows:
+            self._conn.execute(
+                """INSERT OR IGNORE INTO knowledge_items
+                   (name, kind, subtype, status, confidence, created_at, updated_at)
+                   VALUES (?, 'concept', NULL, 'confirmed', 1.0, ?, ?)""",
+                (name, now, now),
+            )
         self._conn.commit()
 
     def close(self) -> None:
@@ -354,6 +420,13 @@ class StateDB:
                     "INSERT OR IGNORE INTO concepts (name, source_path) VALUES (?, ?)",
                     (name, source_path),
                 )
+                now = datetime.now().isoformat()
+                self._conn.execute(
+                    """INSERT OR IGNORE INTO knowledge_items
+                       (name, kind, subtype, status, confidence, created_at, updated_at)
+                       VALUES (?, 'concept', NULL, 'confirmed', 1.0, ?, ?)""",
+                    (name, now, now),
+                )
 
     def list_all_concept_names(self) -> list[str]:
         """All unique canonical concept names, sorted."""
@@ -432,6 +505,78 @@ class StateDB:
             source_paths,
         ).fetchall()
         return [r[0] for r in rows]
+
+    # ── Knowledge Items ───────────────────────────────────────────────────────
+
+    def upsert_item(self, record: KnowledgeItemRecord) -> None:
+        now = datetime.now().isoformat()
+        with self._tx():
+            self._conn.execute(
+                """INSERT INTO knowledge_items
+                       (name, kind, subtype, status, confidence, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(name) DO UPDATE SET
+                       kind=excluded.kind,
+                       subtype=excluded.subtype,
+                       status=excluded.status,
+                       confidence=max(knowledge_items.confidence, excluded.confidence),
+                       updated_at=excluded.updated_at""",
+                (
+                    record.name,
+                    record.kind,
+                    record.subtype,
+                    record.status,
+                    record.confidence,
+                    record.created_at.isoformat(),
+                    now,
+                ),
+            )
+
+    def get_item(self, name: str) -> KnowledgeItemRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM knowledge_items WHERE lower(name) = lower(?)", (name,)
+        ).fetchone()
+        return _row_to_item(row) if row else None
+
+    def list_items(
+        self, kind: str | None = None, status: str | None = None
+    ) -> list[KnowledgeItemRecord]:
+        clauses: list[str] = []
+        params: list[str] = []
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT * FROM knowledge_items{where} ORDER BY lower(name)", params
+        ).fetchall()
+        return [_row_to_item(row) for row in rows]
+
+    def add_item_mention(self, record: ItemMentionRecord) -> None:
+        with self._tx():
+            self._conn.execute(
+                """INSERT OR IGNORE INTO item_mentions
+                       (item_name, source_path, mention_text, context, evidence_level, confidence)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    record.item_name,
+                    record.source_path,
+                    record.mention_text,
+                    record.context,
+                    record.evidence_level,
+                    record.confidence,
+                ),
+            )
+
+    def get_item_mentions(self, name: str) -> list[ItemMentionRecord]:
+        rows = self._conn.execute(
+            "SELECT * FROM item_mentions WHERE lower(item_name) = lower(?) ORDER BY source_path",
+            (name,),
+        ).fetchall()
+        return [_row_to_item_mention(row) for row in rows]
 
     def concepts_needing_compile(self) -> list[str]:
         """Concepts where any linked source has status='ingested', plus stub concepts.
@@ -680,4 +825,28 @@ def _row_to_article(row: sqlite3.Row) -> WikiArticleRecord:
             else None
         ),
         approval_notes=row["approval_notes"] if "approval_notes" in keys else None,
+    )
+
+
+def _row_to_item(row: sqlite3.Row) -> KnowledgeItemRecord:
+    return KnowledgeItemRecord(
+        name=row["name"],
+        kind=row["kind"],
+        subtype=row["subtype"],
+        status=row["status"],
+        confidence=float(row["confidence"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _row_to_item_mention(row: sqlite3.Row) -> ItemMentionRecord:
+    return ItemMentionRecord(
+        id=row["id"],
+        item_name=row["item_name"],
+        source_path=row["source_path"],
+        mention_text=row["mention_text"],
+        context=row["context"],
+        evidence_level=row["evidence_level"],
+        confidence=float(row["confidence"]),
     )

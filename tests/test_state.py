@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from obsidian_llm_wiki.models import RawNoteRecord, WikiArticleRecord
+from obsidian_llm_wiki.models import (
+    ItemMentionRecord,
+    KnowledgeItemRecord,
+    RawNoteRecord,
+    WikiArticleRecord,
+)
 from obsidian_llm_wiki.state import _CURRENT_SCHEMA_VERSION, StateDB
 
 
@@ -159,6 +164,14 @@ def test_get_sources_case_insensitive(db):
     assert srcs == ["raw/a.md"]
 
 
+def test_upsert_concepts_backfills_knowledge_items(db):
+    db.upsert_concepts("raw/a.md", ["Quantum Computing"])
+    item = db.get_item("Quantum Computing")
+    assert item is not None
+    assert item.kind == "concept"
+    assert item.status == "confirmed"
+
+
 def test_concepts_needing_compile(db):
     db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
     db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="compiled"))
@@ -173,6 +186,39 @@ def test_concepts_needing_compile_empty_when_all_compiled(db):
     db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="compiled"))
     db.upsert_concepts("raw/a.md", ["Done Concept"])
     assert db.concepts_needing_compile() == []
+
+
+def test_knowledge_item_crud(db):
+    db.upsert_item(
+        KnowledgeItemRecord(
+            name="Mark Power",
+            kind="ambiguous",
+            subtype="person",
+            status="candidate",
+            confidence=0.6,
+        )
+    )
+    item = db.get_item("mark power")
+    assert item is not None
+    assert item.name == "Mark Power"
+    assert item.subtype == "person"
+    assert db.list_items(kind="ambiguous")[0].name == "Mark Power"
+
+
+def test_item_mentions_idempotent(db):
+    mention = ItemMentionRecord(
+        item_name="Mark Power",
+        source_path="raw/talk.md",
+        mention_text="Mark Power",
+        context="A talk by Mark Power",
+        evidence_level="title_supported",
+        confidence=0.7,
+    )
+    db.add_item_mention(mention)
+    db.add_item_mention(mention)
+    mentions = db.get_item_mentions("Mark Power")
+    assert len(mentions) == 1
+    assert mentions[0].source_path == "raw/talk.md"
 
 
 def test_stats(db):

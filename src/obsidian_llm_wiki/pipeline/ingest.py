@@ -26,6 +26,7 @@ from ..vault import (
     sanitize_wikilink_target,
     write_note,
 )
+from .items import extract_title_items, store_extracted_items
 
 log = logging.getLogger(__name__)
 
@@ -643,6 +644,9 @@ def ingest_note(
     for canonical, aliases in normalized:
         if aliases:
             db.upsert_aliases(canonical, aliases)
+
+    title_for_items = str(meta.get("title") or path.stem.replace("-", " ").strip())
+    store_extracted_items(db, rel_path, extract_title_items(title_for_items, rel_path))
 
     # Create source summary page in wiki/sources/ (no extra LLM call)
     try:
