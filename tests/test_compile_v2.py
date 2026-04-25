@@ -168,6 +168,15 @@ def test_rewrite_citation_markers_skips_code_embeds_and_existing_links(vault):
     assert "prose ([[sources/Alpha Source|S1]])" in body
 
 
+def test_rewrite_citation_markers_restores_masks_after_length_changes(vault):
+    (vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nA")
+    refs = _build_source_refs(["raw/a.md"], vault)
+
+    body = _rewrite_citation_markers("prose [S1] then `code [S1]` and [[Link [S1]]].", refs)
+
+    assert body == ("prose ([[sources/Alpha Source|S1]]) then `code [S1]` and [[Link [S1]]].")
+
+
 def test_inject_body_sections_uses_id_legend_when_enabled(config):
     (config.vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nA")
     config.pipeline.inline_source_citations = True

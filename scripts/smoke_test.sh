@@ -57,6 +57,11 @@ esac
 SKIP_PULL="${SKIP_PULL:-0}"
 KEEP_VAULT="${KEEP_VAULT:-0}"
 INLINE_SOURCE_CITATIONS="${INLINE_SOURCE_CITATIONS:-0}"
+if [[ "$INLINE_SOURCE_CITATIONS" == "1" || "$INLINE_SOURCE_CITATIONS" == "true" ]]; then
+    INLINE_SOURCE_CITATIONS_TOML="true"
+else
+    INLINE_SOURCE_CITATIONS_TOML="false"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -241,7 +246,7 @@ heavy_ctx = $HEAVY_CTX
 auto_approve = false
 auto_commit = true
 watch_debounce = 3.0
-inline_source_citations = ${INLINE_SOURCE_CITATIONS}
+inline_source_citations = ${INLINE_SOURCE_CITATIONS_TOML}
 
 [rag]
 chunk_size = 512
@@ -265,7 +270,7 @@ heavy_ctx = $HEAVY_CTX
 auto_approve = false
 auto_commit = true
 watch_debounce = 3.0
-inline_source_citations = ${INLINE_SOURCE_CITATIONS}
+inline_source_citations = ${INLINE_SOURCE_CITATIONS_TOML}
 
 [rag]
 chunk_size = 512

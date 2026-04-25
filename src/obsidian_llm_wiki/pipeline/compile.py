@@ -256,25 +256,25 @@ def _compute_confidence(source_paths: list[str], db: StateDB) -> float:
     return min(1.0, len(source_paths) * 0.25 + _QUALITY_BONUS.get(best, 0.0))
 
 
-def _mask_citation_rewrite_regions(content: str) -> tuple[str, list[tuple[int, int, str]]]:
+def _mask_citation_rewrite_regions(content: str) -> tuple[str, list[tuple[str, str]]]:
     """Protect markdown regions where [S1] markers must not be rewritten."""
     combined_re = re.compile(
         r"```[\s\S]*?```|`[^`]+`|!\[\[.*?\]\]|!\[[^\]]*\]\([^)]*\)|\[\[.*?\]\]"
     )
-    spans: list[tuple[int, int, str]] = []
-    masked = content
-    offset = 0
-    for match in combined_re.finditer(content):
-        start, end = match.start() + offset, match.end() + offset
-        placeholder = "X" * (end - start)
-        masked = masked[:start] + placeholder + masked[end:]
-        spans.append((start, end, match.group(0)))
-    return masked, spans
+    replacements: list[tuple[str, str]] = []
+
+    def replace(match: re.Match[str]) -> str:
+        token = f"__OBSIDIAN_LLM_WIKI_MASK_{len(replacements)}__"
+        replacements.append((token, match.group(0)))
+        return token
+
+    masked = combined_re.sub(replace, content)
+    return masked, replacements
 
 
-def _restore_masked_regions(content: str, spans: list[tuple[int, int, str]]) -> str:
-    for start, end, original in spans:
-        content = content[:start] + original + content[end:]
+def _restore_masked_regions(content: str, replacements: list[tuple[str, str]]) -> str:
+    for token, original in replacements:
+        content = content.replace(token, original)
     return content
 
 
