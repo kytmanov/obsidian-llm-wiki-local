@@ -13,10 +13,18 @@ from obsidian_llm_wiki.models import AnalysisResult, Concept
 from obsidian_llm_wiki.pipeline.ingest import (
     _SYSTEM,
     _analyze_body,
+    _base_concept_name,
     _build_analysis_prompt,
+    _concept_key,
+    _filter_concept_candidates,
+    _is_noise_concept,
+    _meaningful_text_stats,
     _merge_chunk_results,
     _normalize_concepts,
     _preprocess_web_clip,
+    _safe_aliases_for_name,
+    _suggested_topic_candidates,
+    ingest_all,
     ingest_note,
 )
 from obsidian_llm_wiki.state import StateDB
@@ -162,6 +170,83 @@ def test_build_prompt_no_chunk_label_by_default():
 # ── _normalize_concepts ───────────────────────────────────────────────────────
 
 
+def test_concept_key_normalizes_case_punctuation_and_unicode():
+    assert _concept_key(" Extreme-Programming: XP ") == "extreme programming xp"
+    assert _concept_key("Ｆｕｓｅ　Diagram") == "fuse diagram"
+
+
+def test_base_concept_name_strips_only_safe_abbreviations():
+    assert _base_concept_name("Extreme Programming (XP)") == "Extreme Programming"
+    assert _base_concept_name("Scrum (framework)") == "Scrum (framework)"
+
+
+def test_safe_aliases_for_name_extracts_parenthetical_abbreviation():
+    aliases = _safe_aliases_for_name("Extreme Programming (XP)")
+    assert "Extreme Programming" in aliases
+    assert "XP" in aliases
+
+
+def test_is_noise_concept_detects_generic_unknowns():
+    assert _is_noise_concept("Image content unknown") is True
+    assert _is_noise_concept("Untitled") is True
+    assert _is_noise_concept("Extreme Programming") is False
+
+
+def test_meaningful_text_stats_ignores_media_and_urls():
+    chars, words = _meaningful_text_stats("![[image.png]] https://example.com")
+    assert chars == 0
+    assert words == 0
+
+
+def test_suggested_topic_candidates_require_meaningful_text():
+    result = AnalysisResult(
+        summary="Only media.",
+        concepts=[],
+        suggested_topics=["Image content unknown"],
+        quality="low",
+    )
+    assert _suggested_topic_candidates(result, "![[image.png]]") == []
+
+
+def test_suggested_topic_candidates_allow_meaningful_text():
+    result = AnalysisResult(
+        summary="API note.",
+        concepts=[],
+        suggested_topics=["API Response Testing"],
+        quality="high",
+    )
+    body = "API response testing validates response status, schema, headers, boundaries. " * 2
+    candidates = _suggested_topic_candidates(result, body)
+    assert [c.name for c in candidates] == ["API Response Testing"]
+
+
+def test_filter_concept_candidates_drops_weak_abstract_without_evidence():
+    result = AnalysisResult(
+        summary="Astrology article.",
+        concepts=[Concept(name="Personality Profile", aliases=[])],
+        suggested_topics=[],
+        quality="medium",
+    )
+    body = "This article discusses zodiac signs, astronomy, astrology, and precession." * 2
+
+    assert _filter_concept_candidates(result.concepts, result, body) == []
+
+
+def test_filter_concept_candidates_keeps_low_quality_title_evidence():
+    result = AnalysisResult(
+        summary="Warhol documentary.",
+        concepts=[Concept(name="Andy Warhol documentary", aliases=[])],
+        suggested_topics=[],
+        quality="low",
+    )
+
+    kept = _filter_concept_candidates(
+        result.concepts, result, "![[image.png]]", "Andy Warhol documentary.md"
+    )
+
+    assert [c.name for c in kept] == ["Andy Warhol documentary"]
+
+
 def _make_concepts(names):
     from obsidian_llm_wiki.models import Concept
 
@@ -172,6 +257,52 @@ def test_normalize_reuses_canonical_case(vault, config, db):
     db.upsert_concepts("raw/a.md", ["Quantum Computing"])
     result = _normalize_concepts(_make_concepts(["quantum computing"]), db)
     assert [name for name, _ in result] == ["Quantum Computing"]
+
+
+def test_normalize_reuses_canonical_for_punctuation_variant(vault, config, db):
+    db.upsert_concepts("raw/a.md", ["Extreme Programming"])
+    result = _normalize_concepts(_make_concepts(["extreme-programming"]), db)
+    assert [name for name, _ in result] == ["Extreme Programming"]
+
+
+def test_normalize_merges_parenthetical_abbreviation_variant(vault, config, db):
+    db.upsert_concepts("raw/a.md", ["Extreme Programming"])
+    result = _normalize_concepts(_make_concepts(["Extreme Programming (XP)"]), db)
+    assert [name for name, _ in result] == ["Extreme Programming"]
+    assert "XP" in result[0][1]
+
+
+def test_normalize_uses_base_name_for_new_parenthetical_abbreviation(vault, config, db):
+    result = _normalize_concepts(_make_concepts(["Extreme Programming (XP)"]), db)
+    assert [name for name, _ in result] == ["Extreme Programming"]
+    assert "XP" in result[0][1]
+
+
+def test_normalize_deduplicates_same_note_parenthetical_variant(vault, config, db):
+    result = _normalize_concepts(
+        _make_concepts(["Extreme Programming", "Extreme Programming (XP)"]), db
+    )
+    assert [name for name, _ in result] == ["Extreme Programming"]
+
+
+def test_normalize_merges_unambiguous_abbreviation(vault, config, db):
+    db.upsert_concepts("raw/a.md", ["Extreme Programming (XP)"])
+    result = _normalize_concepts(_make_concepts(["XP"]), db)
+    assert [name for name, _ in result] == ["Extreme Programming (XP)"]
+
+
+def test_normalize_does_not_merge_ambiguous_abbreviation(vault, config, db):
+    db.upsert_concepts("raw/a.md", ["Extreme Programming (XP)"])
+    db.upsert_concepts("raw/b.md", ["Experience Points (XP)"])
+    result = _normalize_concepts(_make_concepts(["XP"]), db)
+    assert [name for name, _ in result] == ["XP"]
+
+
+def test_normalize_does_not_use_llm_aliases_for_merge(vault, config, db):
+    db.upsert_concepts("raw/a.md", ["Scrum"])
+    concept = Concept(name="Iterative development", aliases=["Scrum"])
+    result = _normalize_concepts([concept], db)
+    assert [name for name, _ in result] == ["Iterative development"]
 
 
 def test_normalize_deduplicates(vault, config, db):
@@ -193,11 +324,12 @@ def test_normalize_strips_empty(vault, config, db):
 
 def _analysis_json(concepts=None, quality="high", summary="A summary.", suggested_topics=None):
     names = ["Quantum Computing", "Qubit"] if concepts is None else concepts
+    topics = ["Quantum Computing"] if suggested_topics is None else suggested_topics
     return json.dumps(
         {
             "summary": summary,
             "concepts": [{"name": c, "aliases": []} for c in names],
-            "suggested_topics": suggested_topics or ["Quantum Computing"],
+            "suggested_topics": topics,
             "quality": quality,
         }
     )
@@ -263,12 +395,43 @@ def test_ingest_note_stores_concepts(vault, config, db):
 
 
 def test_ingest_note_uses_suggested_topics_when_concepts_empty(vault, config, db):
-    path = _write_raw(vault, "api.md", "# API testing\n\nChecklist for response validation.")
+    path = _write_raw(
+        vault,
+        "api.md",
+        "# API testing\n\nChecklist for response validation with schemas, headers, status codes, "
+        "boundary values, and data type checks.",
+    )
     client = _make_client(_analysis_json(concepts=[], suggested_topics=["API Response Testing"]))
 
     ingest_note(path, config, client, db)
 
     assert db.list_all_concept_names() == ["API Response Testing"]
+
+
+def test_ingest_note_does_not_use_suggested_topics_for_media_only_note(vault, config, db):
+    path = _write_raw(vault, "image.md", "![[unknown_filename.png]]")
+    client = _make_client(
+        _analysis_json(concepts=[], quality="low", suggested_topics=["Image content unknown"])
+    )
+
+    ingest_note(path, config, client, db)
+
+    assert db.list_all_concept_names() == []
+
+
+def test_ingest_note_filters_weak_llm_concept_without_evidence(vault, config, db):
+    path = _write_raw(
+        vault,
+        "zodiac.md",
+        "This article discusses zodiac signs, astronomy, astrology, and precession. " * 2,
+    )
+    client = _make_client(
+        _analysis_json(concepts=["Personality Profile"], quality="medium", suggested_topics=[])
+    )
+
+    ingest_note(path, config, client, db)
+
+    assert db.list_all_concept_names() == []
 
 
 def test_ingest_note_failure_marks_db_status(vault, config, db):
@@ -301,6 +464,18 @@ def test_source_page_preserves_filename_casing(vault, config, db):
     sources = list((vault / "wiki" / "sources").glob("*.md"))
     meta, _ = parse_note(sources[0])
     assert meta["title"] == "Api testing example"
+
+
+def test_source_page_uses_normalized_canonical_concepts(vault, config, db):
+    db.upsert_concepts("raw/existing.md", ["Extreme Programming"])
+    path = _write_raw(vault, "xp.md", "# XP\n\nExtreme Programming notes.")
+    client = _make_client(_analysis_json(concepts=["Extreme Programming (XP)"]))
+    ingest_note(path, config, client, db)
+
+    sources = list((vault / "wiki" / "sources").glob("*.md"))
+    source_text = sources[0].read_text()
+    assert "[[Extreme Programming]]" in source_text
+    assert "[[Extreme Programming (XP)]]" not in source_text
 
 
 def test_source_page_yaml_with_colon_title(vault, config, db):
@@ -384,6 +559,21 @@ def test_ingest_note_respects_max_concepts_per_source(vault, config, db):
     names = db.list_all_concept_names()
     # Only first 2 should be stored
     assert len(names) <= 2
+
+
+def test_ingest_all_updates_existing_topics_within_run(vault, config, db):
+    _write_raw(vault, "a.md", "# A\n\nAlpha content.")
+    _write_raw(vault, "b.md", "# B\n\nBeta content.")
+    client = MagicMock()
+    client.generate.side_effect = [
+        _analysis_json(concepts=["Alpha Concept"]),
+        _analysis_json(concepts=["Beta Concept"]),
+    ]
+
+    ingest_all(config, client, db)
+
+    second_prompt = client.generate.call_args_list[1].kwargs["prompt"]
+    assert "Alpha Concept" in second_prompt
 
 
 # ── _merge_chunk_results ──────────────────────────────────────────────────────

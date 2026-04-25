@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -209,6 +210,128 @@ _STOPWORDS = frozenset(
     }
 )
 
+_NOISE_CONCEPT_KEYS = frozenset(
+    {
+        "document",
+        "file",
+        "image content unknown",
+        "unknown content",
+        "unknown file",
+        "unknown filename",
+        "untitled",
+    }
+)
+
+_WEAK_ABSTRACT_CONCEPT_KEYS = frozenset(
+    {
+        "astrological system mechanics",
+        "cognitive biases",
+        "diy publishing process",
+        "financial resources",
+        "image content unknown",
+        "personality profile",
+    }
+)
+
+_PAREN_ABBR_RE = re.compile(r"^(?P<base>.+?)\s*\((?P<abbr>[A-ZА-Я0-9][A-ZА-Я0-9.+-]{1,8})\)$")
+_SURROUNDING_QUOTES_RE = re.compile(r"^[`'\"“”‘’«»]+|[`'\"“”‘’«»]+$")
+
+
+def _clean_concept_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text).strip()
+    text = _SURROUNDING_QUOTES_RE.sub("", text).strip()
+    return re.sub(r"\s+", " ", text)
+
+
+def _concept_key(text: str) -> str:
+    """Deterministic key for safe concept matching; not used as display text."""
+    text = _clean_concept_text(text).casefold()
+    text = re.sub(r"[_\-/:]+", " ", text)
+    text = re.sub(r"[^\w\s]+", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _base_concept_name(text: str) -> str:
+    """Strip only safe parenthetical abbreviations, e.g. Extreme Programming (XP)."""
+    cleaned = _clean_concept_text(text)
+    match = _PAREN_ABBR_RE.match(cleaned)
+    if not match:
+        return cleaned
+    abbr = match.group("abbr")
+    if not abbr.isupper():
+        return cleaned
+    return match.group("base").strip()
+
+
+def _safe_aliases_for_name(text: str) -> list[str]:
+    """Aliases safe enough for deterministic matching, independent of LLM aliases."""
+    cleaned = _clean_concept_text(text)
+    aliases: list[str] = []
+    base = _base_concept_name(cleaned)
+    if base != cleaned:
+        aliases.append(base)
+        match = _PAREN_ABBR_RE.match(cleaned)
+        if match:
+            aliases.append(match.group("abbr"))
+    lower = cleaned.casefold()
+    if lower != cleaned:
+        aliases.append(lower)
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for alias in aliases:
+        key = _concept_key(alias)
+        if key and key != _concept_key(cleaned) and key not in seen:
+            seen.add(key)
+            result.append(alias)
+    return result
+
+
+def _is_noise_concept(text: str) -> bool:
+    key = _concept_key(text)
+    if not key:
+        return True
+    if key in _NOISE_CONCEPT_KEYS:
+        return True
+    if key.startswith("unknown ") or key.endswith(" unknown"):
+        return True
+    return False
+
+
+def _has_title_or_body_evidence(concept_name: str, body: str, path_name: str = "") -> bool:
+    key = _concept_key(concept_name)
+    if not key:
+        return False
+    haystack_key = _concept_key(f"{path_name} {body}")
+    if key in haystack_key:
+        return True
+    base_key = _concept_key(_base_concept_name(concept_name))
+    return bool(base_key and base_key != key and base_key in haystack_key)
+
+
+def _filter_concept_candidates(
+    concepts: list[Concept],
+    result: AnalysisResult,
+    body: str,
+    path_name: str = "",
+) -> list[Concept]:
+    """Conservatively drop weak LLM concepts before canonical normalization."""
+    chars, words = _meaningful_text_stats(body)
+    meaningful_text = chars >= 80 or words >= 12
+    filtered: list[Concept] = []
+    for concept in concepts:
+        name = _clean_concept_text(concept.name)
+        if not name or _is_noise_concept(name):
+            continue
+        key = _concept_key(name)
+        has_evidence = _has_title_or_body_evidence(name, body, path_name)
+        if key in _WEAK_ABSTRACT_CONCEPT_KEYS and not has_evidence:
+            continue
+        if result.quality == "low" and not meaningful_text and not has_evidence:
+            continue
+        filtered.append(concept)
+    return filtered
+
 
 def _validate_aliases(canonical: str, raw_aliases: list[str]) -> list[str]:
     """Filter LLM-produced aliases: remove too-short, stopwords, self-matches, duplicates."""
@@ -229,23 +352,40 @@ def _validate_aliases(canonical: str, raw_aliases: list[str]) -> list[str]:
     return valid[:5]
 
 
+def _build_safe_concept_index(names: list[str]) -> dict[str, str]:
+    """Return unambiguous deterministic match keys for existing canonical names."""
+    candidates: dict[str, set[str]] = {}
+    for name in names:
+        keys = {_concept_key(name), _concept_key(_base_concept_name(name))}
+        keys.update(_concept_key(alias) for alias in _safe_aliases_for_name(name))
+        for key in keys:
+            if key:
+                candidates.setdefault(key, set()).add(name)
+    return {key: next(iter(values)) for key, values in candidates.items() if len(values) == 1}
+
+
 def _normalize_concepts(raw_concepts: list[Concept], db: StateDB) -> list[tuple[str, list[str]]]:
-    """Case-insensitive dedup against existing canonical concept names.
+    """Dedup against existing canonical concept names using safe deterministic keys.
 
     Returns (canonical_name, validated_aliases) pairs.
     """
-    existing = {n.lower(): n for n in db.list_all_concept_names()}
+    existing = _build_safe_concept_index(db.list_all_concept_names())
     seen: set[str] = set()
     result: list[tuple[str, list[str]]] = []
     for concept in raw_concepts:
-        name = concept.name.strip()
-        if not name:
+        name = _clean_concept_text(concept.name)
+        if not name or _is_noise_concept(name):
             continue
-        canonical = existing.get(name.lower(), name)
-        if canonical in seen:
+        safe_keys = [_concept_key(name), _concept_key(_base_concept_name(name))]
+        safe_keys.extend(_concept_key(alias) for alias in _safe_aliases_for_name(name))
+        canonical = next(
+            (existing[key] for key in safe_keys if key in existing), _base_concept_name(name)
+        )
+        canonical_key = _concept_key(canonical)
+        if canonical_key in seen:
             continue
-        seen.add(canonical)
-        aliases = _validate_aliases(canonical, concept.aliases)
+        seen.add(canonical_key)
+        aliases = _validate_aliases(canonical, [*_safe_aliases_for_name(name), *concept.aliases])
         result.append((canonical, aliases))
     return result
 
@@ -258,6 +398,44 @@ _OBSIDIAN_EMBED_RE = re.compile(
     re.IGNORECASE,
 )
 _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_BARE_URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+
+
+def _meaningful_text_stats(body: str) -> tuple[int, int]:
+    """Return (chars, words) after removing media, URLs, and markdown boilerplate."""
+    text = _OBSIDIAN_EMBED_RE.sub(" ", body)
+    text = _MD_IMAGE_RE.sub(" ", text)
+    text = _BARE_URL_RE.sub(" ", text)
+    text = re.sub(r"`[^`]*`", " ", text)
+    text = re.sub(r"[#>*_\-\[\]()]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    words = re.findall(r"\w{2,}", text, flags=re.UNICODE)
+    return len(text), len(words)
+
+
+def _topic_has_text_evidence(topic: str, body: str, path_name: str = "") -> bool:
+    topic_key = _concept_key(topic)
+    if not topic_key:
+        return False
+    return _has_title_or_body_evidence(topic, body, path_name)
+
+
+def _suggested_topic_candidates(
+    result: AnalysisResult,
+    body: str,
+    path_name: str = "",
+) -> list[Concept]:
+    chars, words = _meaningful_text_stats(body)
+    if chars < 80 and words < 12:
+        return []
+    candidates: list[Concept] = []
+    for topic in result.suggested_topics:
+        if _is_noise_concept(topic):
+            continue
+        if result.quality == "low" and not _topic_has_text_evidence(topic, body, path_name):
+            continue
+        candidates.append(Concept(name=topic, aliases=[]))
+    return candidates
 
 
 def _preprocess_web_clip(content: str) -> str:
@@ -299,6 +477,7 @@ def _create_source_summary_page(
     result: AnalysisResult,
     config: Config,
     body: str = "",
+    canonical_concepts: list[str] | None = None,
 ) -> Path:
     """
     Generate wiki/sources/{Title}.md from AnalysisResult. No extra LLM call.
@@ -316,8 +495,11 @@ def _create_source_summary_page(
     aliases = generate_aliases(title, "")  # source pages rarely have abbreviations
 
     # Build concept list as [[wikilinks]]
+    concept_names = (
+        canonical_concepts if canonical_concepts is not None else [c.name for c in result.concepts]
+    )
     concept_lines = "\n".join(
-        f"- [[{sanitize_wikilink_target(c.name)}]]" for c in result.concepts[:8] if c.name.strip()
+        f"- [[{sanitize_wikilink_target(name)}]]" for name in concept_names[:8] if name.strip()
     )
 
     out_meta: dict = {
@@ -450,9 +632,11 @@ def ingest_note(
 
     # Normalize concept names against existing canonical names, store linkages
     max_concepts = config.pipeline.max_concepts_per_source
-    concept_candidates = result.concepts[:max_concepts]
+    concept_candidates = _filter_concept_candidates(
+        result.concepts[:max_concepts], result, body, path.name
+    )
     if not concept_candidates:
-        concept_candidates = [Concept(name=topic, aliases=[]) for topic in result.suggested_topics]
+        concept_candidates = _suggested_topic_candidates(result, body, path.name)
     normalized = _normalize_concepts(concept_candidates[:max_concepts], db)
     canonical_names = [name for name, _ in normalized]
     db.upsert_concepts(rel_path, canonical_names)
@@ -462,7 +646,14 @@ def ingest_note(
 
     # Create source summary page in wiki/sources/ (no extra LLM call)
     try:
-        _create_source_summary_page(path, meta, result, config, body=body)
+        _create_source_summary_page(
+            path,
+            meta,
+            result,
+            config,
+            body=body,
+            canonical_concepts=canonical_names,
+        )
     except Exception as e:
         log.warning("Source summary page failed for %s: %s", path.name, e)
 
@@ -502,4 +693,8 @@ def ingest_all(
             force=force,
         )
         results.append((path, result))
+        if result is not None:
+            for name in db.list_all_concept_names():
+                if name not in existing_topics:
+                    existing_topics.append(name)
     return results
