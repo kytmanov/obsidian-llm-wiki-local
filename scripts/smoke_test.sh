@@ -480,7 +480,7 @@ if [[ "$DRAFT_COUNT" -gt 0 ]]; then
     check "draft has content"            "test \$(wc -l < \"$FIRST_DRAFT\") -ge 10"
     check "draft has ## Sources section" "grep -q '^## Sources' \"$FIRST_DRAFT\""
     check "draft has confidence field"   "grep -q 'confidence:' \"$FIRST_DRAFT\""
-    if [[ "$INLINE_SOURCE_CITATIONS" == "1" ]]; then
+    if [[ "$INLINE_SOURCE_CITATIONS_TOML" == "true" ]]; then
         check "draft source legend has citation ids" "grep -q '^- \[S[0-9]\+\] \[\[sources/' \"$FIRST_DRAFT\""
         if grep -q '\[\[sources/.*|S[0-9]' "$FIRST_DRAFT"; then
             pass "draft has inline source citation link"

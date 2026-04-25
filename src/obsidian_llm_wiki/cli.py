@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 import click
@@ -43,18 +44,34 @@ def _format_optional_bool(value: bool | None) -> str:
     return "on" if value else "off"
 
 
-def _read_inline_source_citations_setting(toml_path: Path) -> bool | None:
-    import tomllib
+class InlineSourceCitationsConfigError(Exception):
+    """Raised when inline citation config cannot be read safely."""
+
+
+def _read_inline_source_citations_setting(toml_path: Path, *, strict: bool = False) -> bool | None:
 
     if not toml_path.exists():
         return None
     try:
         with open(toml_path, "rb") as f:
             data = tomllib.load(f)
-    except Exception:
+    except tomllib.TOMLDecodeError as exc:
+        if strict:
+            raise InlineSourceCitationsConfigError(f"Invalid TOML in {toml_path}: {exc}") from exc
+        return None
+    except OSError as exc:
+        if strict:
+            raise InlineSourceCitationsConfigError(f"Could not read {toml_path}: {exc}") from exc
         return None
     pipeline = data.get("pipeline", {})
     value = pipeline.get("inline_source_citations") if isinstance(pipeline, dict) else None
+    if value is not None and not isinstance(value, bool):
+        if strict:
+            raise InlineSourceCitationsConfigError(
+                "Invalid pipeline.inline_source_citations in "
+                f"{toml_path}: expected boolean true/false, got {type(value).__name__}"
+            )
+        return None
     return value if isinstance(value, bool) else None
 
 
@@ -92,8 +109,7 @@ def _set_inline_source_citations(toml_path: Path, enabled: bool) -> None:
 # ── Context helpers ───────────────────────────────────────────────────────────
 
 
-def _load_config(vault_str: str | None, **kwargs):
-    from .config import Config
+def _resolve_vault_path(vault_str: str | None) -> Path:
     from .global_config import load_global_config
 
     if vault_str is None:
@@ -131,7 +147,13 @@ def _load_config(vault_str: str | None, **kwargs):
             err=True,
         )
         sys.exit(1)
-    return Config.from_vault(vault_path, **kwargs)
+    return vault_path
+
+
+def _load_config(vault_str: str | None, **kwargs):
+    from .config import Config
+
+    return Config.from_vault(_resolve_vault_path(vault_str), **kwargs)
 
 
 def _load_db(config):
@@ -857,17 +879,21 @@ def config_cmd():
 @click.option("--vault", "vault_str", envvar="OLW_VAULT", default=None)
 def config_inline_source_citations(action: str, vault_str: str | None):
     """Enable, disable, or inspect inline source citations for one vault."""
-    config = _load_config(vault_str)
-    toml_path = config.vault / "wiki.toml"
+    vault_path = _resolve_vault_path(vault_str)
+    toml_path = vault_path / "wiki.toml"
     if not toml_path.exists():
         click.echo(
-            f"Error: {toml_path} not found. Run `olw init {config.vault}` first.",
+            f"Error: {toml_path} not found. Run `olw init {vault_path}` first.",
             err=True,
         )
         sys.exit(1)
 
     if action == "status":
-        setting = _read_inline_source_citations_setting(toml_path)
+        try:
+            setting = _read_inline_source_citations_setting(toml_path, strict=True)
+        except InlineSourceCitationsConfigError as exc:
+            click.echo(f"Error: {exc}", err=True)
+            sys.exit(1)
         if setting is None:
             status = "not set (default: disabled)"
         else:
@@ -881,7 +907,7 @@ def config_inline_source_citations(action: str, vault_str: str | None):
     if enabled:
         console.print(
             "[dim]Turn off later with `olw config inline-source-citations off --vault "
-            f"{config.vault}`.[/dim]"
+            f"{vault_path}`.[/dim]"
         )
 
 

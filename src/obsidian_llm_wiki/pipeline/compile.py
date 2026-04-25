@@ -283,7 +283,7 @@ def _rewrite_citation_markers(body: str, source_refs: list[SourceRef]) -> str:
     if not source_refs:
         return body
     by_id = {ref.id: ref for ref in source_refs}
-    masked, spans = _mask_citation_rewrite_regions(body)
+    masked, replacements = _mask_citation_rewrite_regions(body)
     marker_re = re.compile(r"\[(S\d+(?:\s*,\s*S\d+)*)\]")
 
     def replace(match: re.Match[str]) -> str:
@@ -294,7 +294,7 @@ def _rewrite_citation_markers(body: str, source_refs: list[SourceRef]) -> str:
         return "(" + ", ".join(links) + ")"
 
     try:
-        return _restore_masked_regions(marker_re.sub(replace, masked), spans)
+        return _restore_masked_regions(marker_re.sub(replace, masked), replacements)
     except Exception as exc:  # noqa: BLE001 - citations must never fail compilation
         log.warning("Citation rewrite failed: %s", exc)
         return body

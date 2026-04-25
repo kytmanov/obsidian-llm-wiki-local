@@ -83,27 +83,26 @@ def extract_wikilinks(content: str) -> list[str]:
     return [t for t in raw if not any(t.lower().endswith(ext) for ext in _MEDIA_EXTENSIONS)]
 
 
-def _mask_code_blocks(content: str) -> tuple[str, list[tuple[int, int, str]]]:
+def _mask_code_blocks(content: str) -> tuple[str, list[tuple[str, str]]]:
     """Replace code blocks and image/embed syntax with placeholders.
 
     Protects: ```...```, `...`, ![[embed]], ![alt](url) from wikilink insertion.
     """
     # Combine: code blocks + embed/image patterns
     combined_re = re.compile(r"```[\s\S]*?```|`[^`]+`|!\[\[[^\]]+\]\]|!\[[^\]]*\]\([^)]*\)")
-    spans: list[tuple[int, int, str]] = []
-    masked = content
-    offset = 0
-    for m in combined_re.finditer(content):
-        start, end = m.start() + offset, m.end() + offset
-        placeholder = "X" * (end - start)
-        masked = masked[:start] + placeholder + masked[end:]
-        spans.append((start, end, m.group(0)))
-    return masked, spans
+    replacements: list[tuple[str, str]] = []
+
+    def replace(match: re.Match[str]) -> str:
+        token = f"__OBSIDIAN_LLM_WIKI_MASK_{len(replacements)}__"
+        replacements.append((token, match.group(0)))
+        return token
+
+    return combined_re.sub(replace, content), replacements
 
 
-def _restore_code_blocks(content: str, spans: list[tuple[int, int, str]]) -> str:
-    for start, end, original in spans:
-        content = content[:start] + original + content[end:]
+def _restore_code_blocks(content: str, replacements: list[tuple[str, str]]) -> str:
+    for token, original in replacements:
+        content = content.replace(token, original)
     return content
 
 

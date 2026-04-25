@@ -538,6 +538,38 @@ def test_config_inline_source_citations_status_not_set(
     assert "not set (default: disabled)" in result.output
 
 
+def test_config_inline_source_citations_status_invalid_toml(
+    runner: CliRunner, cfg_dir: Path, tmp_path: Path
+):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "wiki.toml").write_text("[models\n")
+
+    result = runner.invoke(
+        cli, ["config", "inline-source-citations", "status", "--vault", str(vault)]
+    )
+
+    assert result.exit_code == 1
+    assert "Invalid TOML" in result.output
+
+
+def test_config_inline_source_citations_status_rejects_integer(
+    runner: CliRunner, cfg_dir: Path, tmp_path: Path
+):
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "wiki.toml").write_text(
+        '[models]\nfast="a"\nheavy="b"\n\n[pipeline]\ninline_source_citations = 1\n'
+    )
+
+    result = runner.invoke(
+        cli, ["config", "inline-source-citations", "status", "--vault", str(vault)]
+    )
+
+    assert result.exit_code == 1
+    assert "expected boolean true/false" in result.output
+
+
 def test_config_inline_source_citations_on_off_preserves_comments(
     runner: CliRunner, cfg_dir: Path, tmp_path: Path
 ):

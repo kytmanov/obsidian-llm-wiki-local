@@ -131,6 +131,24 @@ def test_ensure_wikilinks_skip_code_blocks():
     assert "`Python`" in result or "`[[Python]]`" not in result
 
 
+def test_ensure_wikilinks_restores_inline_code_after_length_change():
+    content = "Machine learning then `code`"
+    result = ensure_wikilinks(content, ["Machine learning"])
+    assert result == "[[Machine learning]] then `code`"
+
+
+def test_ensure_wikilinks_restores_fenced_code_after_length_change():
+    content = "Python before\n```\nPython in code\n```"
+    result = ensure_wikilinks(content, ["Python"])
+    assert result == "[[Python]] before\n```\nPython in code\n```"
+
+
+def test_ensure_wikilinks_restores_embed_after_length_change():
+    content = "Python before ![[Python.png]]"
+    result = ensure_wikilinks(content, ["Python"])
+    assert result == "[[Python]] before ![[Python.png]]"
+
+
 def test_ensure_wikilinks_empty_targets():
     content = "Some text here."
     assert ensure_wikilinks(content, []) == content
