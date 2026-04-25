@@ -20,6 +20,7 @@ htmlcov/
 
 # Local planning/review artifacts
 CONTEXT.md
+REQUIREMENTS.md
 IMPLEMENTATION_PLAN.md
 IMPLEMENTAION_PLAN.md
 REVIEW.md
