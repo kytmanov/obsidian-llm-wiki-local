@@ -11,14 +11,17 @@ from obsidian_llm_wiki.config import Config
 from obsidian_llm_wiki.models import RawNoteRecord, WikiArticleRecord
 from obsidian_llm_wiki.ollama_client import OllamaClient
 from obsidian_llm_wiki.pipeline.compile import (
+    _apply_draft_media_mode,
     _build_olw_annotations,
     _build_source_refs,
     _gather_sources,
     _inject_body_sections,
     _repair_bare_bracket_links,
+    _repair_literal_newlines,
     _repair_malformed_embeds,
     _rewrite_citation_markers,
     _strip_olw_annotations,
+    _strip_self_wikilinks,
     _strip_unknown_wikilinks,
     _write_concept_prompt,
     approve_drafts,
@@ -144,6 +147,17 @@ def test_rewrite_citation_markers_single_and_multi(vault):
     assert "([[sources/Alpha Source|S1]], [[sources/Beta Source|S2]])" in body
 
 
+def test_rewrite_citation_markers_legend_only_keeps_plain_ids(vault):
+    (vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nA")
+    (vault / "raw" / "b.md").write_text("---\ntitle: Beta Source\n---\nB")
+    refs = _build_source_refs(["raw/a.md", "raw/b.md"], vault)
+
+    body = _rewrite_citation_markers("Claim [S1]. Joint [S1, S2].", refs, link_inline=False)
+
+    assert body == "Claim [S1](#Sources). Joint [S1,S2](#Sources)."
+    assert "sources/" not in body
+
+
 def test_rewrite_citation_markers_ignores_unknown_ids(vault):
     (vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nA")
     refs = _build_source_refs(["raw/a.md"], vault)
@@ -196,6 +210,12 @@ def test_repair_bare_bracket_links_skips_markdown_citations_and_masks():
     )
 
 
+def test_repair_literal_newlines_converts_escaped_markdown():
+    body = _repair_literal_newlines("## A\\n\\nBody\\n- item")
+
+    assert body == "## A\n\nBody\n- item"
+
+
 def test_strip_unknown_wikilinks_unwraps_invented_links():
     body = _strip_unknown_wikilinks(
         "Known [[API Testing]]. Unknown [[Название статьи]]. Aliased [[Missing|display]].",
@@ -220,10 +240,34 @@ def test_strip_unknown_wikilinks_keeps_embeds():
     assert body == "Diagram ![[file.pdf]] and unknown Ghost."
 
 
+def test_strip_self_wikilinks_unwraps_self_links():
+    body = _strip_self_wikilinks("[[Scrum]] and [[Scrum|this page]] link to [[Kanban]].", "Scrum")
+
+    assert body == "Scrum and this page link to [[Kanban]]."
+
+
 def test_repair_malformed_embeds_converts_bare_media_embed():
     body = _repair_malformed_embeds("Diagram !./_resources/file.pdf and ![[already.pdf]].")
 
     assert body == "Diagram ![[./_resources/file.pdf]] and ![[already.pdf]]."
+
+
+def test_apply_draft_media_mode_reference_replaces_embeds():
+    body = _apply_draft_media_mode("Diagram ![[./_resources/file.pdf]].", "reference")
+
+    assert body == "Diagram Media reference: ./_resources/file.pdf."
+
+
+def test_apply_draft_media_mode_embed_keeps_embeds():
+    body = _apply_draft_media_mode("Diagram ![[./_resources/file.pdf]].", "embed")
+
+    assert body == "Diagram ![[./_resources/file.pdf]]."
+
+
+def test_apply_draft_media_mode_omit_removes_embeds():
+    body = _apply_draft_media_mode("Diagram ![[./_resources/file.pdf]].", "omit")
+
+    assert body == "Diagram ."
 
 
 def test_inject_body_sections_uses_id_legend_when_enabled(config):
@@ -237,6 +281,13 @@ def test_inject_body_sections_uses_id_legend_when_enabled(config):
     assert "- [S1] [[sources/Alpha Source|Alpha Source]]" in body
     assert "- [[Concept]]" in body
     assert "- [[sources/Alpha Source]]" not in body
+
+
+def test_inject_body_sections_skips_self_link_in_see_also(config):
+    body = _inject_body_sections("See [[Scrum]] and [[Kanban]].", [], config, article_title="Scrum")
+
+    assert "- [[Kanban]]" in body
+    assert "- [[Scrum]]" not in body
 
 
 def test_write_concept_prompt_citation_instructions_flagged():
@@ -456,6 +507,71 @@ def test_compile_concepts_preserves_canonical_title(config, db):
     assert len(drafts) == 1
     assert drafts[0].name == "Product Backlog.md"
     assert db.get_article("wiki/.drafts/Product Backlog.md").title == "Product Backlog"
+
+
+def test_compile_concepts_legend_only_citations_do_not_link_inline(config, db):
+    import json
+
+    config.pipeline.inline_source_citations = True
+    config.pipeline.source_citation_style = "legend-only"
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha"])
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nContent.")
+
+    mock_response = json.dumps({"title": "Alpha", "content": "Claim [S1].", "tags": []})
+    client = make_mock_client(mock_response)
+
+    drafts, failed, _ = compile_concepts(config, client, db, concepts=["Alpha"])
+
+    assert failed == []
+    body = drafts[0].read_text()
+    assert "Claim [S1](#Sources)." in body
+    assert "Claim ([[sources/Alpha Source|S1]])." not in body
+    assert "- [S1] [[sources/Alpha Source|Alpha Source]]" in body
+
+
+def test_compile_concepts_draft_media_reference_mode(config, db):
+    import json
+
+    config.pipeline.draft_media = "reference"
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha"])
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: Alpha Source\n---\nContent.")
+
+    mock_response = json.dumps(
+        {"title": "Alpha", "content": "Diagram ![[./_resources/file.pdf]].", "tags": []}
+    )
+    client = make_mock_client(mock_response)
+
+    drafts, failed, _ = compile_concepts(config, client, db, concepts=["Alpha"])
+
+    assert failed == []
+    body = drafts[0].read_text()
+    assert "![[./_resources/file.pdf]]" not in body
+    assert "Media reference: ./_resources/file.pdf" in body
+
+
+def test_compile_concepts_links_to_same_batch_concepts(config, db):
+    import json
+
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha"])
+    db.upsert_concepts("raw/b.md", ["Beta"])
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: A\n---\nAlpha mentions Beta.")
+    (config.vault / "raw" / "b.md").write_text("---\ntitle: B\n---\nBeta.")
+
+    client = make_mock_client()
+    client.generate.side_effect = [
+        json.dumps({"title": "Alpha", "content": "Alpha relates to Beta.", "tags": []}),
+        json.dumps({"title": "Beta", "content": "Beta details.", "tags": []}),
+    ]
+
+    drafts, failed, _ = compile_concepts(config, client, db)
+
+    assert failed == []
+    alpha = next(path for path in drafts if path.name == "Alpha.md")
+    assert "[[Beta]]" in alpha.read_text()
 
 
 def test_compile_concepts_skips_pending_draft(config, db):

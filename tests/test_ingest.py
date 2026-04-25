@@ -291,6 +291,18 @@ def test_ingest_note_creates_source_summary_page(vault, config, db):
     assert sources, "Source summary page should be created"
 
 
+def test_source_page_preserves_filename_casing(vault, config, db):
+    path = _write_raw(vault, "Api testing example.md", "# API\n\nContent.")
+    client = _make_client(_analysis_json(concepts=["API Testing"]))
+    ingest_note(path, config, client, db)
+
+    from obsidian_llm_wiki.vault import parse_note
+
+    sources = list((vault / "wiki" / "sources").glob("*.md"))
+    meta, _ = parse_note(sources[0])
+    assert meta["title"] == "Api testing example"
+
+
 def test_source_page_yaml_with_colon_title(vault, config, db):
     """Source page title containing ':' must not break YAML parsing."""
     # Raw note uses quoted title (valid YAML) — the colon in title flows to source page

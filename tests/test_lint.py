@@ -297,6 +297,147 @@ def test_malformed_embed_fix_repairs_draft(vault, config, db):
     assert "![[./_resources/file.pdf]]" in draft.read_text()
 
 
+def test_lint_fix_repairs_plain_source_citations(vault, config, db):
+    page = _write_page(
+        config,
+        "Alpha",
+        "Claim [S1].\n\n## Sources\n- [S1] [[sources/Alpha Source|Alpha Source]]",
+    )
+
+    run_lint(config, db, fix=True)
+
+    assert "Claim [S1](#Sources)." in page.read_text()
+    assert "- [S1] [[sources/Alpha Source|Alpha Source]]" in page.read_text()
+
+
+def test_lint_fix_repairs_linked_source_legend_labels(vault, config, db):
+    page = _write_page(
+        config,
+        "Alpha",
+        "Claim [S1](#Sources).\n\n"
+        "## Sources\n- [S1](#Sources) [[sources/Alpha Source|Alpha Source]]",
+    )
+
+    run_lint(config, db, fix=True)
+
+    assert "Claim [S1](#Sources)." in page.read_text()
+    assert "- [S1] [[sources/Alpha Source|Alpha Source]]" in page.read_text()
+
+
+def test_markdown_anchor_links_not_inline_tags(vault, config, db):
+    _write_page(config, "Alpha", "Claim [S1](#Sources).")
+
+    result = run_lint(config, db)
+
+    inline = [i for i in result.issues if i.issue_type == "inline_tag"]
+    assert not inline
+
+
+def test_lint_fix_updates_article_hash(vault, config, db):
+    body = "Claim [S1].\n\n## Sources\n- [S1] [[sources/Alpha Source|Alpha Source]]"
+    page = _write_page(config, "Alpha", body)
+    from obsidian_llm_wiki.pipeline.lint import _body_hash
+
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/Alpha.md",
+            title="Alpha",
+            sources=[],
+            content_hash=_body_hash(body),
+            is_draft=False,
+        )
+    )
+
+    run_lint(config, db, fix=True)
+    result = run_lint(config, db)
+
+    assert "Claim [S1](#Sources)." in page.read_text()
+    assert not [i for i in result.issues if i.issue_type == "stale"]
+
+
+def test_graph_quality_flags_welcome(vault, config, db):
+    (config.vault / "Welcome.md").write_text("Welcome. [[create a link]]")
+
+    result = run_lint(config, db)
+
+    graph = [i for i in result.issues if i.issue_type == "graph_noise"]
+    assert graph
+    assert graph[0].path == "Welcome.md"
+
+
+def test_graph_quality_flags_media_embeds_in_drafts(vault, config, db):
+    write_note(
+        config.drafts_dir / "Draft.md",
+        {"title": "Draft", "tags": [], "status": "draft"},
+        "Draft embeds ![[./_resources/file.pdf]].",
+    )
+
+    result = run_lint(config, db)
+
+    graph = [i for i in result.issues if i.issue_type == "graph_noise"]
+    assert graph
+    assert "media embeds" in graph[0].description
+
+
+def test_graph_quality_flags_duplicate_raw_source_titles(vault, config, db):
+    raw = config.raw_dir / "Api testing example.md"
+    raw.write_text("Raw body.")
+    write_note(
+        config.sources_dir / "Api Testing Example.md",
+        {"title": "Api Testing Example", "tags": ["source"], "status": "published"},
+        "Source body.",
+    )
+
+    result = run_lint(config, db)
+
+    graph = [i for i in result.issues if i.issue_type == "graph_noise"]
+    assert any("duplicate raw note titles" in i.description for i in graph)
+
+
+def test_graph_quality_flags_low_concept_connectivity(vault, config, db):
+    write_note(
+        config.drafts_dir / "Alpha.md",
+        {"title": "Alpha", "tags": [], "status": "draft"},
+        "No links.",
+    )
+    write_note(
+        config.drafts_dir / "Beta.md",
+        {"title": "Beta", "tags": [], "status": "draft"},
+        "No links.",
+    )
+
+    result = run_lint(config, db)
+
+    connectivity = [i for i in result.issues if i.issue_type == "graph_connectivity"]
+    assert len(connectivity) == 1
+    assert "and 1 more" in connectivity[0].description
+
+
+def test_graph_quality_checks_can_be_disabled(vault, config, db):
+    config.pipeline.graph_quality_checks = False
+    (config.vault / "Welcome.md").write_text("Welcome. [[create a link]]")
+
+    result = run_lint(config, db)
+
+    assert not [i for i in result.issues if i.issue_type == "graph_noise"]
+
+
+def test_graph_quality_issues_do_not_reduce_health_score(vault, config, db):
+    (config.vault / "Welcome.md").write_text("Welcome. [[create a link]]")
+    raw = config.raw_dir / "Api testing example.md"
+    raw.write_text("Raw body.")
+    write_note(
+        config.sources_dir / "Api Testing Example.md",
+        {"title": "Api Testing Example", "tags": ["source"], "status": "published"},
+        "Source body.",
+    )
+
+    result = run_lint(config, db)
+
+    assert [i for i in result.issues if i.issue_type == "graph_noise"]
+    assert result.health_score == 100.0
+
+
 # ── Low confidence ────────────────────────────────────────────────────────────
 
 

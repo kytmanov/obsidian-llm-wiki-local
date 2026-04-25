@@ -314,7 +314,32 @@ def _strip_unknown_wikilinks(content: str, known_titles: list[str]) -> str:
     return _restore_code_blocks(wikilink_re.sub(replace, masked), replacements)
 
 
+def _strip_self_wikilinks(content: str, article_title: str) -> str:
+    """Unwrap links that point to the article itself."""
+    title_key = article_title.lower()
+    wikilink_re = re.compile(r"\[\[([^\]|#]+)(#[^\]|]*)?(?:\|([^\]]*))?\]\]")
+
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(1).strip()
+        if target.lower() != title_key:
+            return match.group(0)
+        display = match.group(3)
+        return display or target
+
+    return wikilink_re.sub(replace, content)
+
+
+def _repair_literal_newlines(content: str) -> str:
+    """Repair LLM output that escaped Markdown newlines into literal \n text."""
+    if "\\n" not in content:
+        return content
+    if content.count("\\n") < 2:
+        return content
+    return content.replace("\\n", "\n")
+
+
 _MALFORMED_MEDIA_EMBED_RE = re.compile(r"(?<!\S)!([^\s\[]+\.(?:pdf|png|jpe?g|gif|svg|webp))", re.I)
+_OBSIDIAN_MEDIA_EMBED_RE = re.compile(r"!\[\[([^\]]+\.(?:pdf|png|jpe?g|gif|svg|webp))\]\]", re.I)
 
 
 def _repair_malformed_embeds(content: str) -> str:
@@ -327,8 +352,24 @@ def _repair_malformed_embeds(content: str) -> str:
     return _restore_code_blocks(_MALFORMED_MEDIA_EMBED_RE.sub(replace, masked), replacements)
 
 
-def _rewrite_citation_markers(body: str, source_refs: list[SourceRef]) -> str:
-    """Rewrite [S1] markers to path-qualified Obsidian links. Never raises."""
+def _apply_draft_media_mode(content: str, mode: str) -> str:
+    """Control media embeds in synthesized drafts to reduce graph noise."""
+    if mode == "embed":
+        return content
+
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(1).strip()
+        if mode == "omit":
+            return ""
+        return f"Media reference: {target}"
+
+    return _OBSIDIAN_MEDIA_EMBED_RE.sub(replace, content)
+
+
+def _rewrite_citation_markers(
+    body: str, source_refs: list[SourceRef], *, link_inline: bool = True
+) -> str:
+    """Normalize [S1] markers. Optionally rewrite them to source wikilinks."""
     if not source_refs:
         return body
     by_id = {ref.id: ref for ref in source_refs}
@@ -337,9 +378,13 @@ def _rewrite_citation_markers(body: str, source_refs: list[SourceRef]) -> str:
 
     def replace(match: re.Match[str]) -> str:
         ids = [part.strip() for part in match.group(1).split(",")]
-        links = [f"[[{by_id[id_].wiki_target}|{id_}]]" for id_ in ids if id_ in by_id]
-        if not links:
+        valid_ids = [id_ for id_ in ids if id_ in by_id]
+        if not valid_ids:
             return ""
+        if not link_inline:
+            text = ",".join(valid_ids)
+            return f"[{text}](#Sources)"
+        links = [f"[[{by_id[id_].wiki_target}|{id_}]]" for id_ in valid_ids]
         return "(" + ", ".join(links) + ")"
 
     try:
@@ -354,6 +399,7 @@ def _inject_body_sections(
     source_paths: list[str],
     config: Config,
     source_refs: list[SourceRef] | None = None,
+    article_title: str | None = None,
 ) -> str:
     """
     Append ## Sources and ## See Also sections to article body.
@@ -401,6 +447,8 @@ def _inject_body_sections(
             continue
         if target.lower().startswith("sources/"):
             continue
+        if article_title and target.lower() == article_title.lower():
+            continue
         see_also_lines.append(f"- [[{target}]]")
 
     sections = "\n\n## Sources"
@@ -432,7 +480,8 @@ def _write_draft(
     draft_path = config.drafts_dir / f"{safe_name}.md"
 
     # Inject wikilinks for known article titles mentioned in body
-    body = _repair_bare_bracket_links(content_result.content)
+    body = _repair_literal_newlines(content_result.content)
+    body = _repair_bare_bracket_links(body)
     body = ensure_wikilinks(body, existing_titles or [])
     # Normalize alias-based links to canonical targets
     if alias_map:
@@ -440,11 +489,23 @@ def _write_draft(
         body = normalize_wikilinks(body, alias_map, known)
     source_refs = _build_source_refs(source_paths, config.vault)
     if config.pipeline.inline_source_citations:
-        body = _rewrite_citation_markers(body, source_refs)
+        body = _rewrite_citation_markers(
+            body,
+            source_refs,
+            link_inline=config.pipeline.source_citation_style == "inline-wikilink",
+        )
     source_targets = [ref.wiki_target for ref in source_refs]
     body = _strip_unknown_wikilinks(body, (existing_titles or []) + source_targets)
+    body = _strip_self_wikilinks(body, article_title)
     body = _repair_malformed_embeds(body)
-    body = _inject_body_sections(body, source_paths, config, source_refs=source_refs)
+    body = _apply_draft_media_mode(body, config.pipeline.draft_media)
+    body = _inject_body_sections(
+        body,
+        source_paths,
+        config,
+        source_refs=source_refs,
+        article_title=article_title,
+    )
 
     # Prepend quality annotations (invisible HTML comments, stripped on approve)
     annotations = _build_olw_annotations(confidence, source_paths, db)
@@ -569,6 +630,9 @@ def compile_concepts(
     existing_titles = [t for t, _ in list_wiki_articles(config.wiki_dir)]
     draft_titles = [t for t, _, _ in list_draft_articles(config.drafts_dir)]
     link_titles = existing_titles + [t for t in draft_titles if t not in existing_titles]
+    for concept_name in concept_names:
+        if concept_name not in link_titles:
+            link_titles.append(concept_name)
     vault_schema = _load_vault_schema(config)
     total = len(concept_names)
     # Build alias resolution map once per compile run

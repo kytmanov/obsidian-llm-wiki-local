@@ -138,6 +138,8 @@ class LintIssue(BaseModel):
         "invalid_tag",
         "malformed_embed",
         "inline_tag",
+        "graph_noise",
+        "graph_connectivity",
     ]
     description: str
     suggestion: str

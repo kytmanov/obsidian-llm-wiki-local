@@ -188,6 +188,19 @@ olw review        # interactive draft review
 If you set a default vault in `olw setup`, the `--vault` flag is optional. Otherwise use `--vault ~/my-wiki` or `export OLW_VAULT=~/my-wiki`.
 
 Open `~/my-wiki` as an Obsidian vault. The graph view shows your connected wiki.
+Before approving drafts, use a draft-review graph filter:
+
+```text
+-path:raw -path:wiki/sources -path:_resources -file:Welcome
+```
+
+After approving drafts, use a published-only graph filter:
+
+```text
+-path:raw -path:wiki/sources -path:wiki/.drafts -path:_resources -file:Welcome
+```
+
+The published-only filter hides `wiki/.drafts`, so it will look empty until drafts are approved. Run `olw doctor` to print graph guidance for the current vault.
 
 Want to preview a model or provider switch before changing `wiki.toml`?
 
@@ -554,7 +567,9 @@ Any model with JSON format / `response_format: json_object` support works. The t
 
 ## Obsidian tips
 
-- **Graph view** — concept pages link to source pages and each other via `[[wikilinks]]`; the graph shows how your knowledge connects
+- **Graph view** — concept pages link to source pages and each other via `[[wikilinks]]`; before approval use `-path:raw -path:wiki/sources -path:_resources -file:Welcome`, after approval add `-path:wiki/.drafts`
+- **Source citations** — by default inline citations stay graph-quiet as `[S1](#Sources)` links and source pages link once in `## Sources`; set `source_citation_style = "inline-wikilink"` if you want every citation to create a source edge
+- **Media** — source pages preserve `![[media]]` embeds; generated drafts default to plain media references to avoid attachment nodes dominating the graph (`draft_media = "reference"`)
 - **Dataview** — query by `status: published`, `confidence: > 0.7`, `tags: [physics]`, etc.
 - **Backlinks** — every concept page shows which source pages mention it
 - **Web Clipper** — save web articles directly to `raw/` (see [docs/web-clipper-setup.md](docs/web-clipper-setup.md))

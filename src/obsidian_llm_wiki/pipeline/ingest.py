@@ -305,7 +305,7 @@ def _create_source_summary_page(
     Returns the path written.
     """
     # Derive title from note frontmatter > file stem
-    title = src_meta.get("title") or path.stem.replace("-", " ").title()
+    title = src_meta.get("title") or path.stem.replace("-", " ").strip()
     safe_name = sanitize_filename(title)
     out_path = config.sources_dir / f"{safe_name}.md"
     config.sources_dir.mkdir(parents=True, exist_ok=True)

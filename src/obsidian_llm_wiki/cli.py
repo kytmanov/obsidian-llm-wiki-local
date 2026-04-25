@@ -1494,6 +1494,40 @@ def doctor(vault_str):
     console.print(f"  Drafts pending:    {stats['drafts']}")
     console.print(f"  Published:         {stats['published']}")
 
+    draft_graph_filter = [
+        "-path:raw",
+        "-path:wiki/sources",
+        "-path:_resources",
+        "-file:Welcome",
+    ]
+    published_graph_filter = [
+        "-path:raw",
+        "-path:wiki/sources",
+        "-path:wiki/.drafts",
+        "-path:_resources",
+        "-file:Welcome",
+    ]
+    graph_notes: list[str] = []
+    if (config.vault / "Welcome.md").exists():
+        graph_notes.append("Welcome.md is present and can create starter graph noise")
+    if config.raw_dir.exists() and any(config.raw_dir.rglob("*.md")):
+        graph_notes.append("raw/ notes are visible unless filtered")
+    if config.sources_dir.exists() and any(config.sources_dir.glob("*.md")):
+        graph_notes.append("wiki/sources/ pages can dominate graph when citations are enabled")
+    if config.drafts_dir.exists() and any(config.drafts_dir.rglob("*.md")):
+        graph_notes.append("wiki/.drafts/ pages are review artifacts, not published wiki")
+
+    console.print("\n[bold]Graph view[/bold]")
+    if graph_notes:
+        for note in graph_notes:
+            console.print(f"  [yellow]![/yellow] {note}")
+    else:
+        console.print("  [green]✓[/green] No obvious graph-noise layers detected")
+    console.print("  Draft review graph filter:")
+    console.print(f"  [dim]{' '.join(draft_graph_filter)}[/dim]")
+    console.print("  Published-only graph filter:")
+    console.print(f"  [dim]{' '.join(published_graph_filter)}[/dim]")
+
     console.print()
     if ok:
         console.print("[green][bold]All checks passed.[/bold][/green]")

@@ -604,3 +604,17 @@ def test_config_inline_source_citations_creates_pipeline_section(
     assert result.exit_code == 0
     assert "[pipeline]" in toml.read_text()
     assert "inline_source_citations = true" in toml.read_text()
+
+
+def test_doctor_prints_graph_guidance(runner: CliRunner, cfg_dir: Path, tmp_path: Path):
+    vault = tmp_path / "vault"
+    runner.invoke(cli, ["init", str(vault)])
+    (vault / "Welcome.md").write_text("Welcome. [[create a link]]")
+
+    result = runner.invoke(cli, ["doctor", "--vault", str(vault)])
+
+    assert "Graph view" in result.output
+    assert "Draft review graph filter" in result.output
+    assert "Published-only graph filter" in result.output
+    assert "-path:raw" in result.output
+    assert "-file:Welcome" in result.output

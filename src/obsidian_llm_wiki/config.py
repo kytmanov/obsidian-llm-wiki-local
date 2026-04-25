@@ -75,6 +75,9 @@ def default_wiki_toml(
         f"max_concepts_per_source = 8\n"
         f"ingest_parallel = false   # true = parallel chunks\n"
         f"{citation_line}"
+        f'# source_citation_style = "legend-only"  # legend-only | inline-wikilink\n'
+        f'# draft_media = "reference"  # reference | embed | omit\n'
+        f"graph_quality_checks = true\n"
         f'# language = "en"  # ISO 639-1 output language; autodetects from notes if unset\n'
     )
 
@@ -111,7 +114,26 @@ class PipelineConfig(BaseModel):
     auto_maintain: bool = False
     ingest_parallel: bool = False  # parallel chunk analysis (needs OLLAMA_NUM_PARALLEL≥4)
     inline_source_citations: bool = False
+    source_citation_style: str = "legend-only"
+    draft_media: str = "reference"
+    graph_quality_checks: bool = True
     language: str | None = None  # ISO 639-1 output language; autodetects from notes if unset
+
+    @field_validator("source_citation_style")
+    @classmethod
+    def validate_source_citation_style(cls, value: str) -> str:
+        allowed = {"legend-only", "inline-wikilink"}
+        if value not in allowed:
+            raise ValueError(f"source_citation_style must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("draft_media")
+    @classmethod
+    def validate_draft_media(cls, value: str) -> str:
+        allowed = {"reference", "embed", "omit"}
+        if value not in allowed:
+            raise ValueError(f"draft_media must be one of {sorted(allowed)}")
+        return value
 
 
 class RagConfig(BaseModel):
