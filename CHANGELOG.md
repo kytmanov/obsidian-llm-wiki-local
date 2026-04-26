@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.7.0] - 2026-04-26
+
+### Highlights
+
+**v0.7.0 improves draft hygiene, graph behavior, and language-agnostic knowledge preservation.** Source citations can stay graph-quiet, generated drafts are less likely to leak malformed media/link syntax, and ambiguous named references are preserved only when explicitly evidenced in the source note rather than inferred from Latin-script regexes.
+
+### New Features
+
+- **Knowledge item audit** — `olw items audit` and `olw items show NAME` expose ambiguous named references and prominent quoted titles without compiling them into concept articles by default.
+- **Evidence-gated named references** — ingest now asks the fast model for exact named references copied from the note and stores them only when the text appears in the title, filename, or body. These references use the generic `named_reference` subtype instead of language-specific person/product/org regex classification.
+- **Graph-quiet citation controls** — inline source citations can use local `[S1](#Sources)` markers while the canonical source page links remain in the `## Sources` legend.
+
+### Changes
+
+- **More conservative concept handling** — concept extraction no longer uses test-vault-specific weak-concept denylists or LLM aliases as automatic merge authority.
+- **Better generated draft cleanup** — compile post-processing repairs malformed media references, removes dangling markdown-link fragments, and trims quote/citation debris from wikilinks before lint runs.
+- **Improved lint coverage** — lint ignores wikilinks inside inline code, catches dangling markdown brackets, and reports draft/published graph filters more clearly.
+- **README refresh** — documentation now describes the language-agnostic evidence rules, item audit workflow, source citation styles, draft media behavior, and current LM Studio smoke-test guidance.
+
+### Bug Fixes
+
+- **Structured output resilience** — `AnalysisResult` tolerates `summary: null` from small local models and synthesizes a fallback summary instead of failing ingest.
+- **Language-agnostic item extraction** — removed Latin-script-only person, product, and CamelCase organization regexes from the knowledge-item path.
+- **Draft media hygiene** — malformed escaped media references such as `!\[...jpeg\]` are normalized before drafts are reviewed or published.
+
+### Known Limitations
+
+- Concept extraction may still overproduce drafts for ambiguous or single-source notes. v0.7.1 is expected to focus on semantic concept filtering, concept-name cleanup, and better item-audit ranking.
+- Source-supported named references are intentionally preserved as low-confidence candidates and may include noisy one-off handles or names. Review `olw items audit` before promoting them.
+
 ## [0.6.0] - 2026-04-21
 
 ### Highlights
