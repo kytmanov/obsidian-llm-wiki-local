@@ -49,9 +49,9 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Safe switch advisor** — `olw compare` previews your current vault against one challenger model/provider config in isolated vaults and recommends whether to switch
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
 - **Concept aliases** — aliases (e.g. `PC` for "Program Counter") are extracted at ingest, written to each article's frontmatter, and used to resolve queries and repair broken wikilinks (`olw maintain --fix` rewrites `[[PC]]` to `[[Program Counter|PC]]`)
-- **Knowledge item audit** — title-supported people, products, events, organizations, and prominent quoted titles are preserved as candidates without forcing them into concept articles
+- **Knowledge item audit** — explicitly evidenced named references and prominent quoted titles are preserved as candidates without forcing them into concept articles
 - **Multi-language** — automatically detects the language of each note at ingest time; articles are written in the detected language; override globally with `language = "en"` in `wiki.toml`
-- **Language-agnostic extraction rules** — deterministic cleanup avoids English-only word lists; weak title evidence is kept as auditable candidates instead of promoted by language-specific heuristics
+- **Language-agnostic evidence rules** — concept normalization and item preservation avoid topic-specific deny lists and language-specific word lists; named references are accepted only when explicitly evidenced in the note
 - **Multi-provider** — swap Ollama for Groq, Together AI, LM Studio, vLLM, Azure OpenAI, or any OpenAI-compatible endpoint via `olw setup`
 - **Offline test suite** — 600+ tests run without Ollama or any provider
 
@@ -290,7 +290,7 @@ raw/note.md
     Fast LLM (3B–8B)
     • Reads note
     • Extracts concept names
-    • Preserves ambiguous title entities as knowledge item candidates
+    • Preserves explicitly evidenced named references as knowledge item candidates
     • Writes quality score + summary to state.db
     • Creates wiki/sources/Note.md (source summary page)
     │
@@ -312,7 +312,7 @@ raw/note.md
 
 **No vector databases, no embeddings.** `wiki/index.md` acts as the routing layer for `olw query`. This keeps the setup simple and works well up to ~100 source notes.
 
-The pipeline is intentionally conservative. Strong concepts become draft articles; weak title-only references become auditable knowledge item candidates. This keeps names like a speaker, product model, or conference visible without generating low-evidence articles from them.
+The pipeline is intentionally conservative. Strong concepts become draft articles; explicitly evidenced named references become auditable knowledge item candidates. This keeps source-specific names visible without generating low-evidence articles from them.
 
 ---
 
@@ -343,21 +343,20 @@ This language setting controls generated article language only. It does not enab
 
 ## Knowledge item candidates
 
-Not every useful reference deserves a wiki article. During ingest, `olw` keeps a separate knowledge item ledger for ambiguous, low-evidence references found in titles:
+Not every useful reference deserves a wiki article. During ingest, `olw` keeps a separate knowledge item ledger for ambiguous, low-evidence references found explicitly in notes:
 
-- person-like names, such as `Ada Lovelace`
-- products or models, such as `ExampleCam X200`
-- event or organization-like names, such as `LocalTechConf`
+- LLM-proposed named references accepted only when the exact text appears in the title, filename, or body
 - structurally prominent quoted titles, such as `"A Practical Guide To Notes"`
+- confirmed concepts mirrored into the ledger as confirmed knowledge items
 
 These items are not compiled into articles by default. They are preserved for later review, classification, or future evidence accumulation.
 
 ```bash
 olw items audit
-olw items show "Ada Lovelace"
+olw items show "Example Reference"
 ```
 
-This is deliberately conservative: a title-only mention should not become a concept article unless the source content supports it. The item ledger keeps the reference from disappearing while avoiding hallucinated articles.
+This is deliberately conservative: a named reference should not become a concept article unless the source content supports it. The item ledger keeps the reference from disappearing while avoiding hallucinated articles.
 
 ---
 

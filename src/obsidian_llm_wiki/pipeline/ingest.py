@@ -26,7 +26,7 @@ from ..vault import (
     sanitize_wikilink_target,
     write_note,
 )
-from .items import extract_title_items, store_extracted_items
+from .items import extract_named_reference_items, extract_quoted_title_items, store_extracted_items
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +56,10 @@ def _build_analysis_prompt(
         f"For each concept, provide 3-5 short surface forms used in running text "
         f"(abbreviations, short names). Example: name='Program Counter (PC)', "
         f"aliases=['PC', 'program counter']. Use empty list if no natural aliases exist.\n\n"
+        f"Also return named_references: exact named references copied from the note that "
+        f"may be useful later but may not deserve concept articles: people, organizations, "
+        f"products, events, works, named projects. Do not translate. Do not infer. "
+        f"Do not include broad topics or concepts. Max 8.\n\n"
         f"NOTE CONTENT:\n{body}"
     )
 
@@ -100,6 +104,15 @@ def _merge_chunk_results(results: list[AnalysisResult]) -> AnalysisResult:
                 seen_topics.add(t.lower())
                 all_topics.append(t)
 
+    seen_refs: set[str] = set()
+    all_named_references: list[str] = []
+    for r in results:
+        for ref in r.named_references:
+            key = ref.casefold().strip()
+            if key and key not in seen_refs:
+                seen_refs.add(key)
+                all_named_references.append(ref)
+
     quality_rank = {"high": 2, "medium": 1, "low": 0}
     min_result = min(results, key=lambda r: quality_rank.get(r.quality, 1))
 
@@ -109,6 +122,7 @@ def _merge_chunk_results(results: list[AnalysisResult]) -> AnalysisResult:
         summary=results[0].summary,
         concepts=all_concepts,
         suggested_topics=all_topics[:5],
+        named_references=all_named_references[:8],
         quality=min_result.quality,
         language=merged_language,
     )
@@ -632,7 +646,17 @@ def ingest_note(
             db.upsert_aliases(canonical, aliases)
 
     title_for_items = str(meta.get("title") or path.stem.replace("-", " ").strip())
-    store_extracted_items(db, rel_path, extract_title_items(title_for_items, rel_path))
+    item_candidates = [
+        *extract_quoted_title_items(title_for_items, rel_path),
+        *extract_named_reference_items(
+            result.named_references,
+            title_for_items,
+            body,
+            rel_path,
+            canonical_names,
+        ),
+    ]
+    store_extracted_items(db, rel_path, item_candidates)
 
     # Create source summary page in wiki/sources/ (no extra LLM call)
     try:

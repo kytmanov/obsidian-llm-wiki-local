@@ -1,34 +1,20 @@
-"""Deterministic knowledge item extraction and audit helpers.
+"""Knowledge item extraction and audit helpers.
 
-This intentionally avoids LLM calls. The goal is to preserve high-signal
-non-concept references for later audit without promoting them to articles.
+Named references are proposed by the ingest LLM and accepted only when exact
+source evidence exists. Quoted-title extraction remains deterministic because it
+uses structure rather than language-specific word lists.
 """
 
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..models import ItemMentionRecord, KnowledgeItemRecord
 from ..state import StateDB
 
-_CONNECTOR_WORDS = {
-    "a",
-    "an",
-    "and",
-    "at",
-    "for",
-    "in",
-    "of",
-    "on",
-    "the",
-    "to",
-    "with",
-}
-_PERSON_PAIR_RE = re.compile(r"\b([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\b")
-_CAMEL_ORG_RE = re.compile(r"\b[A-Z][A-Za-z]*[a-z][A-Z][A-Za-z]+\b")
-_PRODUCT_MODEL_RE = re.compile(r"\b[A-Z][A-Za-z]+\s+[A-Z]{1,4}\d{1,4}\b")
 _QUOTED_TITLE_RE = re.compile(
     r'"(.{4,80}?)"'
     r"|“(.{4,80}?)”"
@@ -41,6 +27,9 @@ _QUOTED_TITLE_RE = re.compile(
 )
 _WORD_RE = re.compile(r"[^\W\d_]+")
 _QUOTED_SEGMENT_SEPARATOR_RE = re.compile(r"\s*(?:[:|/]|-{1,2}|[–—])\s*")
+_URL_RE = re.compile(r"^(?:https?://|www\.)", re.I)
+_MEDIA_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".svg", ".webp"}
+_MIN_SOURCE_SUPPORTED_CHARS = 5
 
 
 @dataclass(frozen=True)
@@ -54,18 +43,27 @@ class ExtractedItem:
 
 
 def _clean_item_name(name: str) -> str:
+    name = unicodedata.normalize("NFKC", name)
     return re.sub(r"\s+", " ", name.strip(" -_:;,.\t\n")).strip()
+
+
+def _evidence_text(*parts: str) -> str:
+    return unicodedata.normalize("NFKC", " ".join(part for part in parts if part))
 
 
 def _is_noisy_item(name: str) -> bool:
     lowered = name.casefold()
     if len(name) < 3:
         return True
-    if "unknown_filename" in lowered or lowered.startswith("unknown"):
+    if "unknown_filename" in lowered:
         return True
-    if Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".pdf"}:
+    if _URL_RE.match(name):
         return True
-    if lowered in _CONNECTOR_WORDS:
+    if Path(name).suffix.lower() in _MEDIA_SUFFIXES:
+        return True
+    if not any(char.isalnum() for char in name):
+        return True
+    if len(name) > 120:
         return True
     return False
 
@@ -115,40 +113,46 @@ def _is_prominent_quoted_item(name: str, title: str, match: re.Match[str]) -> bo
     return False
 
 
-def extract_title_items(title: str, source_path: str) -> list[ExtractedItem]:
-    """Extract high-signal entity/ambiguous candidates from a title or filename."""
+def _has_exact_evidence(name: str, title: str, body: str, source_path: str) -> bool:
+    needle = unicodedata.normalize("NFKC", name).strip()
+    haystack = _evidence_text(title, body, Path(source_path).stem)
+    if not needle or not haystack:
+        return False
+    if needle in haystack:
+        return True
+    return needle.casefold() in haystack.casefold()
+
+
+def _matches_concept(name: str, concept_names: list[str]) -> bool:
+    key = name.casefold().strip()
+    return any(key == concept.casefold().strip() for concept in concept_names)
+
+
+def _has_case_distinction(name: str) -> bool:
+    return name.lower() != name.upper()
+
+
+def _is_substantive_source_reference(name: str) -> bool:
+    """Filter typo-like source references without relying on language word lists."""
+    compact = re.sub(r"\s+", "", name)
+    if len(compact) < _MIN_SOURCE_SUPPORTED_CHARS:
+        return False
+    if len(_WORD_RE.findall(name)) >= 2:
+        return True
+    if _has_case_distinction(name) and name != name.lower():
+        return True
+    if not _has_case_distinction(name):
+        return True
+    return any(char.isdigit() for char in name) or len(compact) >= 8
+
+
+def extract_quoted_title_items(title: str, source_path: str) -> list[ExtractedItem]:
+    """Extract structurally prominent quoted titles from a title or filename."""
     title = _clean_item_name(title)
     if not title:
         return []
 
     items: list[ExtractedItem] = []
-
-    for match in _PRODUCT_MODEL_RE.finditer(title):
-        name = _clean_item_name(match.group(0))
-        items.append(
-            ExtractedItem(
-                name=name,
-                subtype="product",
-                mention_text=name,
-                evidence_level="title_supported",
-                confidence=0.75,
-                context=title,
-            )
-        )
-
-    for match in _CAMEL_ORG_RE.finditer(title):
-        name = _clean_item_name(match.group(0))
-        items.append(
-            ExtractedItem(
-                name=name,
-                subtype="event_or_org",
-                mention_text=name,
-                evidence_level="title_supported",
-                confidence=0.65,
-                context=title,
-            )
-        )
-
     for match in _QUOTED_TITLE_RE.finditer(title):
         name = _clean_item_name(_quoted_match_text(match))
         if not _is_prominent_quoted_item(name, title, match):
@@ -164,19 +168,40 @@ def extract_title_items(title: str, source_path: str) -> list[ExtractedItem]:
             )
         )
 
-    for match in _PERSON_PAIR_RE.finditer(title):
-        name = _clean_item_name(match.group(0))
+    return _dedupe_items(items)
+
+
+def extract_named_reference_items(
+    references: list[str],
+    title: str,
+    body: str,
+    source_path: str,
+    concept_names: list[str],
+) -> list[ExtractedItem]:
+    """Accept LLM-proposed named references only when exact source evidence exists."""
+    title = _clean_item_name(title)
+    items: list[ExtractedItem] = []
+    for raw_name in references:
+        name = _clean_item_name(raw_name)
+        if _is_noisy_item(name):
+            continue
+        if _matches_concept(name, concept_names):
+            continue
+        if not _has_exact_evidence(name, title, body, source_path):
+            continue
+        title_supported = _has_exact_evidence(name, title, "", source_path)
+        if not title_supported and not _is_substantive_source_reference(name):
+            continue
         items.append(
             ExtractedItem(
                 name=name,
-                subtype="person",
+                subtype="named_reference",
                 mention_text=name,
-                evidence_level="title_supported",
-                confidence=0.65,
-                context=title,
+                evidence_level="title_supported" if title_supported else "source_supported",
+                confidence=0.50,
+                context=title or source_path,
             )
         )
-
     return _dedupe_items(items)
 
 

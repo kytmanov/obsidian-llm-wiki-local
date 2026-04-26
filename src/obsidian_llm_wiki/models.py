@@ -12,7 +12,7 @@ import logging
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .sanitize import sanitize_tags
 
@@ -37,10 +37,17 @@ class Concept(BaseModel):
 class AnalysisResult(BaseModel):
     """Returned by fast model when analyzing a raw note."""
 
-    summary: str = Field(description="2-3 sentence plain-English summary")
+    summary: str = Field(description="2-3 sentence summary in the note's language")
     concepts: list[Concept] = Field(description="Main topics/concepts found (max 8)")
     suggested_topics: list[str] = Field(
         description="Titles of wiki articles this note should feed into (max 5)"
+    )
+    named_references: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact named references copied from the note (people, organizations, products, "
+            "events, works, named projects), max 8. No translations or inferred names."
+        ),
     )
     quality: Literal["high", "medium", "low"] = Field(
         description="Source quality: high=well-structured, medium=usable, low=noise"
@@ -59,6 +66,28 @@ class AnalysisResult(BaseModel):
         if n_coerced:
             log.debug("coerced %d/%d bare-string concepts to Concept objects", n_coerced, len(v))
         return [{"name": item, "aliases": []} if isinstance(item, str) else item for item in v]
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_missing_summary(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("summary") is None:
+            refs = (
+                data.get("named_references")
+                if isinstance(data.get("named_references"), list)
+                else []
+            )
+            concepts = data.get("concepts") if isinstance(data.get("concepts"), list) else []
+            names: list[str] = []
+            for item in [*concepts, *refs]:
+                if isinstance(item, str):
+                    names.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("name"), str):
+                    names.append(item["name"])
+            fallback = "Source contains limited extractable text."
+            if names:
+                fallback = f"Source references: {', '.join(names[:5])}."
+            data = {**data, "summary": fallback}
+        return data
 
 
 class ArticlePlan(BaseModel):

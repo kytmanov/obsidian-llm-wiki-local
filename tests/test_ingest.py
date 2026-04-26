@@ -324,7 +324,13 @@ def test_normalize_strips_empty(vault, config, db):
 # ── ingest_note ───────────────────────────────────────────────────────────────
 
 
-def _analysis_json(concepts=None, quality="high", summary="A summary.", suggested_topics=None):
+def _analysis_json(
+    concepts=None,
+    quality="high",
+    summary="A summary.",
+    suggested_topics=None,
+    named_references=None,
+):
     names = ["Quantum Computing", "Qubit"] if concepts is None else concepts
     topics = ["Quantum Computing"] if suggested_topics is None else suggested_topics
     return json.dumps(
@@ -332,6 +338,7 @@ def _analysis_json(concepts=None, quality="high", summary="A summary.", suggeste
             "summary": summary,
             "concepts": [{"name": c, "aliases": []} for c in names],
             "suggested_topics": topics,
+            "named_references": named_references or [],
             "quality": quality,
         }
     )
@@ -436,21 +443,62 @@ def test_ingest_note_filters_low_quality_short_note_concept_without_evidence(vau
     assert db.list_all_concept_names() == []
 
 
-def test_ingest_note_preserves_title_entity_as_item(vault, config, db):
+def test_ingest_note_preserves_evidenced_named_reference_as_item(vault, config, db):
     path = _write_raw(
         vault,
-        "Field report by Ada Lovelace at LocalTechConf.md",
-        "https://youtube.com/watch?v=example",
+        "reference.md",
+        "This note mentions 設計の思想 as a named reference.",
     )
-    client = _make_client(_analysis_json(concepts=[], quality="low", suggested_topics=[]))
+    client = _make_client(
+        _analysis_json(
+            concepts=[],
+            quality="low",
+            suggested_topics=[],
+            named_references=["設計の思想"],
+        )
+    )
 
     ingest_note(path, config, client, db)
 
     assert db.list_all_concept_names() == []
-    item = db.get_item("Ada Lovelace")
+    item = db.get_item("設計の思想")
     assert item is not None
     assert item.kind == "ambiguous"
-    assert item.subtype == "person"
+    assert item.subtype == "named_reference"
+
+
+def test_ingest_note_rejects_unevidenced_named_reference(vault, config, db):
+    path = _write_raw(vault, "reference.md", "This note has no matching named reference.")
+    client = _make_client(
+        _analysis_json(
+            concepts=[],
+            quality="medium",
+            suggested_topics=[],
+            named_references=["Missing Reference"],
+        )
+    )
+
+    ingest_note(path, config, client, db)
+
+    assert db.get_item("Missing Reference") is None
+
+
+def test_ingest_note_rejects_named_reference_matching_concept(vault, config, db):
+    path = _write_raw(vault, "concept.md", "Example Concept is the main topic.")
+    client = _make_client(
+        _analysis_json(
+            concepts=["Example Concept"],
+            quality="high",
+            suggested_topics=[],
+            named_references=["Example Concept"],
+        )
+    )
+
+    ingest_note(path, config, client, db)
+
+    item = db.get_item("Example Concept")
+    assert item is not None
+    assert item.kind == "concept"
 
 
 def test_ingest_note_failure_marks_db_status(vault, config, db):
@@ -598,13 +646,14 @@ def test_ingest_all_updates_existing_topics_within_run(vault, config, db):
 # ── _merge_chunk_results ──────────────────────────────────────────────────────
 
 
-def _make_result(concepts, summary="Summary.", quality="high", topics=None):
+def _make_result(concepts, summary="Summary.", quality="high", topics=None, named_references=None):
     from obsidian_llm_wiki.models import Concept
 
     return AnalysisResult(
         summary=summary,
         concepts=[Concept(name=c, aliases=[]) for c in concepts],
         suggested_topics=topics or ["Topic"],
+        named_references=named_references or [],
         quality=quality,
     )
 
@@ -650,6 +699,14 @@ def test_merge_unions_topics():
     r2 = _make_result(["B"], topics=["Topic B", "Topic A"])
     merged = _merge_chunk_results([r1, r2])
     assert len(merged.suggested_topics) == 2
+
+
+def test_merge_unions_named_references():
+    r1 = _make_result(["A"], named_references=["Ref A", "Ref B"])
+    r2 = _make_result(["B"], named_references=["ref a", "Ref C"])
+    merged = _merge_chunk_results([r1, r2])
+
+    assert merged.named_references == ["Ref A", "Ref B", "Ref C"]
 
 
 # ── _analyze_body ──────────────────────────────────────────────────────────────
@@ -760,6 +817,19 @@ def test_analysis_result_coerces_string_concepts():
         language=None,
     )
     assert r.concepts == [Concept(name="Foo", aliases=[]), Concept(name="Bar", aliases=[])]
+
+
+def test_analysis_result_accepts_null_summary():
+    r = AnalysisResult(
+        summary=None,
+        concepts=["Example Concept"],
+        named_references=["Example Reference"],
+        suggested_topics=[],
+        quality="low",
+        language=None,
+    )
+
+    assert r.summary == "Source references: Example Concept, Example Reference."
 
 
 def test_analysis_result_accepts_mixed_concepts():

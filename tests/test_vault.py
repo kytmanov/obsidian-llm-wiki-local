@@ -76,6 +76,10 @@ def test_extract_wikilinks_keeps_note_transclusion():
     assert extract_wikilinks("![[other-note]]") == ["other-note"]
 
 
+def test_extract_wikilinks_ignores_inline_code():
+    assert extract_wikilinks("Use `[[Not A Link]]` and [[Real Link]].") == ["Real Link"]
+
+
 def test_extract_wikilinks_excludes_jpg():
     assert extract_wikilinks("![[image.jpg]]") == []
 

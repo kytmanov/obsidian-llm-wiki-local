@@ -79,6 +79,7 @@ def extract_wikilinks(content: str) -> list[str]:
     Note: filters by extension regardless of embed syntax (![[...]]) vs normal link ([[...]]).
     This prevents media filenames from appearing as broken wikilinks in lint checks.
     """
+    content = re.sub(r"```[\s\S]*?```|`[^`]+`", " ", content)
     raw = _WIKILINK_RE.findall(content)
     return [t for t in raw if not any(t.lower().endswith(ext) for ext in _MEDIA_EXTENSIONS)]
 
