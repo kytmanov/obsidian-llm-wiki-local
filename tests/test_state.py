@@ -191,32 +191,32 @@ def test_concepts_needing_compile_empty_when_all_compiled(db):
 def test_knowledge_item_crud(db):
     db.upsert_item(
         KnowledgeItemRecord(
-            name="Mark Power",
+            name="Ada Lovelace",
             kind="ambiguous",
             subtype="person",
             status="candidate",
             confidence=0.6,
         )
     )
-    item = db.get_item("mark power")
+    item = db.get_item("ada lovelace")
     assert item is not None
-    assert item.name == "Mark Power"
+    assert item.name == "Ada Lovelace"
     assert item.subtype == "person"
-    assert db.list_items(kind="ambiguous")[0].name == "Mark Power"
+    assert db.list_items(kind="ambiguous")[0].name == "Ada Lovelace"
 
 
 def test_item_mentions_idempotent(db):
     mention = ItemMentionRecord(
-        item_name="Mark Power",
+        item_name="Ada Lovelace",
         source_path="raw/talk.md",
-        mention_text="Mark Power",
-        context="A talk by Mark Power",
+        mention_text="Ada Lovelace",
+        context="A talk by Ada Lovelace",
         evidence_level="title_supported",
         confidence=0.7,
     )
     db.add_item_mention(mention)
     db.add_item_mention(mention)
-    mentions = db.get_item_mentions("Mark Power")
+    mentions = db.get_item_mentions("Ada Lovelace")
     assert len(mentions) == 1
     assert mentions[0].source_path == "raw/talk.md"
 

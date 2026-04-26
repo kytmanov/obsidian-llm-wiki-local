@@ -117,6 +117,23 @@ def _check_malformed_links(rel_path: str, body: str, issues: list[LintIssue]) ->
             )
         )
 
+    for line in body.splitlines():
+        stripped = line.rstrip()
+        if not stripped.endswith("[") or stripped.endswith(("[[", "![", "![[")):
+            continue
+        if "dangling_open_bracket" in seen:
+            continue
+        seen.add("dangling_open_bracket")
+        issues.append(
+            LintIssue(
+                path=rel_path,
+                issue_type="malformed_link",
+                description="Dangling '[' at end of line is not a valid Markdown or Obsidian link",
+                suggestion="Complete the link target or remove the trailing bracket.",
+                auto_fixable=False,
+            )
+        )
+
 
 def _check_broken_wikilinks(
     rel_path: str,

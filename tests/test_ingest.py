@@ -222,29 +222,29 @@ def test_suggested_topic_candidates_allow_meaningful_text():
 
 def test_filter_concept_candidates_drops_weak_abstract_without_evidence():
     result = AnalysisResult(
-        summary="Astrology article.",
+        summary="Article about planning rituals.",
         concepts=[Concept(name="Personality Profile", aliases=[])],
         suggested_topics=[],
         quality="medium",
     )
-    body = "This article discusses zodiac signs, astronomy, astrology, and precession." * 2
+    body = "This article discusses team rituals, meeting notes, and project planning." * 2
 
     assert _filter_concept_candidates(result.concepts, result, body) == []
 
 
 def test_filter_concept_candidates_keeps_low_quality_title_evidence():
     result = AnalysisResult(
-        summary="Warhol documentary.",
-        concepts=[Concept(name="Andy Warhol documentary", aliases=[])],
+        summary="Documentary notes.",
+        concepts=[Concept(name="Example Artist documentary", aliases=[])],
         suggested_topics=[],
         quality="low",
     )
 
     kept = _filter_concept_candidates(
-        result.concepts, result, "![[image.png]]", "Andy Warhol documentary.md"
+        result.concepts, result, "![[image.png]]", "Example Artist documentary.md"
     )
 
-    assert [c.name for c in kept] == ["Andy Warhol documentary"]
+    assert [c.name for c in kept] == ["Example Artist documentary"]
 
 
 def _make_concepts(names):
@@ -422,8 +422,8 @@ def test_ingest_note_does_not_use_suggested_topics_for_media_only_note(vault, co
 def test_ingest_note_filters_weak_llm_concept_without_evidence(vault, config, db):
     path = _write_raw(
         vault,
-        "zodiac.md",
-        "This article discusses zodiac signs, astronomy, astrology, and precession. " * 2,
+        "planning.md",
+        "This article discusses team rituals, meeting notes, and project planning. " * 2,
     )
     client = _make_client(
         _analysis_json(concepts=["Personality Profile"], quality="medium", suggested_topics=[])
@@ -437,7 +437,7 @@ def test_ingest_note_filters_weak_llm_concept_without_evidence(vault, config, db
 def test_ingest_note_preserves_title_entity_as_item(vault, config, db):
     path = _write_raw(
         vault,
-        "A new look at an old country Mark Power at TEDxKrakow.md",
+        "Field report by Ada Lovelace at LocalTechConf.md",
         "https://youtube.com/watch?v=example",
     )
     client = _make_client(_analysis_json(concepts=[], quality="low", suggested_topics=[]))
@@ -445,7 +445,7 @@ def test_ingest_note_preserves_title_entity_as_item(vault, config, db):
     ingest_note(path, config, client, db)
 
     assert db.list_all_concept_names() == []
-    item = db.get_item("Mark Power")
+    item = db.get_item("Ada Lovelace")
     assert item is not None
     assert item.kind == "ambiguous"
     assert item.subtype == "person"

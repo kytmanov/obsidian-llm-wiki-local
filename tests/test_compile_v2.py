@@ -16,9 +16,11 @@ from obsidian_llm_wiki.pipeline.compile import (
     _build_source_refs,
     _gather_sources,
     _inject_body_sections,
+    _remove_dangling_open_brackets,
     _repair_bare_bracket_links,
     _repair_literal_newlines,
     _repair_malformed_embeds,
+    _repair_malformed_wikilinks,
     _rewrite_citation_markers,
     _strip_olw_annotations,
     _strip_self_wikilinks,
@@ -250,6 +252,32 @@ def test_repair_malformed_embeds_converts_bare_media_embed():
     body = _repair_malformed_embeds("Diagram !./_resources/file.pdf and ![[already.pdf]].")
 
     assert body == "Diagram ![[./_resources/file.pdf]] and ![[already.pdf]]."
+
+
+def test_repair_malformed_embeds_converts_escaped_markdown_media_refs():
+    body = _repair_malformed_embeds(
+        "Images !\\[./_resources/a.jpeg\\]!\\[./_resources/b.jpeg\\!\\[./_resources/c.jpeg\\]"
+    )
+
+    assert "![[./_resources/a.jpeg]]" in body
+    assert "![[./_resources/b.jpeg]]" in body
+    assert "![[./_resources/c.jpeg]]" in body
+    assert "!\\[" not in body
+
+
+def test_remove_dangling_open_brackets():
+    body = _remove_dangling_open_brackets("Check these aspects [\n\nNext paragraph.")
+
+    assert body == "Check these aspects\n\nNext paragraph."
+
+
+def test_repair_malformed_wikilinks_strips_quote_and_citation_debris():
+    body = _repair_malformed_wikilinks(
+        "See [[Independent publishing culture”]] and [[Documentary notes”, S2]].",
+        ["Independent publishing culture", "Documentary notes"],
+    )
+
+    assert body == "See [[Independent publishing culture]] and [[Documentary notes]]."
 
 
 def test_apply_draft_media_mode_reference_replaces_embeds():

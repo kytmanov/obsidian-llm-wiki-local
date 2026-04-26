@@ -10,7 +10,7 @@ def test_items_audit_cli_shows_candidates(vault, config, db):
     from obsidian_llm_wiki.cli import cli
 
     items = extract_title_items(
-        "A new look at an old country Mark Power at TEDxKrakow",
+        "Field report by Ada Lovelace at LocalTechConf",
         "raw/talk.md",
     )
     store_extracted_items(db, "raw/talk.md", items)
@@ -18,20 +18,20 @@ def test_items_audit_cli_shows_candidates(vault, config, db):
     result = CliRunner().invoke(cli, ["items", "audit", "--vault", str(vault)])
 
     assert result.exit_code == 0
-    assert "Mark Power" in result.output
-    assert "TEDxKrakow" in result.output
+    assert "Ada Lovelace" in result.output
+    assert "LocalTechConf" in result.output
 
 
 def test_items_show_cli_shows_mentions(vault, config, db):
     from obsidian_llm_wiki.cli import cli
 
     items = extract_title_items(
-        "A new look at an old country Mark Power at TEDxKrakow",
+        "Field report by Ada Lovelace at LocalTechConf",
         "raw/talk.md",
     )
     store_extracted_items(db, "raw/talk.md", items)
 
-    result = CliRunner().invoke(cli, ["items", "show", "--vault", str(vault), "Mark Power"])
+    result = CliRunner().invoke(cli, ["items", "show", "--vault", str(vault), "Ada Lovelace"])
 
     assert result.exit_code == 0
     assert "title_supported" in result.output
@@ -40,19 +40,19 @@ def test_items_show_cli_shows_mentions(vault, config, db):
 
 def test_extract_title_items_person_and_event():
     items = extract_title_items(
-        "A new look at an old country Mark Power at TEDxKrakow",
-        "raw/A new look at an old country Mark Power at TEDxKrakow.md",
+        "Field report by Ada Lovelace at LocalTechConf",
+        "raw/Field report by Ada Lovelace at LocalTechConf.md",
     )
 
     by_name = {item.name: item for item in items}
-    assert by_name["Mark Power"].subtype == "person"
-    assert by_name["TEDxKrakow"].subtype == "event_or_org"
+    assert by_name["Ada Lovelace"].subtype == "person"
+    assert by_name["LocalTechConf"].subtype == "event_or_org"
 
 
 def test_extract_title_items_product_model():
-    items = extract_title_items("Mazda CX90 Fuse diagram", "raw/Mazda CX90 Fuse diagram.md")
+    items = extract_title_items("ExampleCam X200 wiring notes", "raw/ExampleCam X200.md")
 
-    assert any(item.name == "Mazda CX90" and item.subtype == "product" for item in items)
+    assert any(item.name == "ExampleCam X200" and item.subtype == "product" for item in items)
 
 
 def test_extract_title_items_ignores_unknown_filename():
@@ -61,19 +61,60 @@ def test_extract_title_items_ignores_unknown_filename():
     assert items == []
 
 
+def test_extract_title_items_ignores_lowercase_quoted_fragments():
+    items = extract_title_items(
+        "The article says that the phrase «draft notes» was misquoted",
+        "raw/quoted-fragment.md",
+    )
+
+    assert not any(item.name == "draft notes" for item in items)
+
+
+def test_extract_title_items_keeps_separator_delimited_quoted_titles():
+    items = extract_title_items(
+        "Notes - «thinking in systems»",
+        "raw/book.md",
+    )
+
+    assert any(
+        item.name == "thinking in systems" and item.subtype == "quoted_title" for item in items
+    )
+
+
+def test_extract_title_items_keeps_whole_quoted_title():
+    items = extract_title_items("«thinking in systems»", "raw/book.md")
+
+    assert any(item.name == "thinking in systems" and item.confidence == 0.55 for item in items)
+
+
+def test_extract_title_items_keeps_non_latin_quoted_titles():
+    items = extract_title_items("Notes - 「設計の思想」", "raw/design.md")
+
+    assert any(item.name == "設計の思想" and item.subtype == "quoted_title" for item in items)
+
+
+def test_extract_title_items_rejects_context_only_quoted_phrases():
+    items = extract_title_items(
+        "Review of the book «thinking in systems»",
+        "raw/book.md",
+    )
+
+    assert not any(item.name == "thinking in systems" for item in items)
+
+
 def test_store_extracted_items_records_item_and_mention(tmp_path):
     db = StateDB(tmp_path / ".olw" / "state.db")
     items = extract_title_items(
-        "A new look at an old country Mark Power at TEDxKrakow",
+        "Field report by Ada Lovelace at LocalTechConf",
         "raw/talk.md",
     )
 
     store_extracted_items(db, "raw/talk.md", items)
 
-    mark = db.get_item("Mark Power")
-    assert mark is not None
-    assert mark.kind == "ambiguous"
-    assert mark.subtype == "person"
-    mentions = db.get_item_mentions("Mark Power")
+    person = db.get_item("Ada Lovelace")
+    assert person is not None
+    assert person.kind == "ambiguous"
+    assert person.subtype == "person"
+    mentions = db.get_item_mentions("Ada Lovelace")
     assert len(mentions) == 1
     assert mentions[0].evidence_level == "title_supported"

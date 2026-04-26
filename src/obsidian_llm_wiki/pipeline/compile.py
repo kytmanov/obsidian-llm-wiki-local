@@ -338,8 +338,15 @@ def _repair_literal_newlines(content: str) -> str:
     return content.replace("\\n", "\n")
 
 
-_MALFORMED_MEDIA_EMBED_RE = re.compile(r"(?<!\S)!([^\s\[]+\.(?:pdf|png|jpe?g|gif|svg|webp))", re.I)
-_OBSIDIAN_MEDIA_EMBED_RE = re.compile(r"!\[\[([^\]]+\.(?:pdf|png|jpe?g|gif|svg|webp))\]\]", re.I)
+_MEDIA_EXT_RE = r"(?:pdf|png|jpe?g|gif|svg|webp)"
+_MALFORMED_MEDIA_EMBED_RE = re.compile(rf"(?<!\S)!([^\s\[]+\.{_MEDIA_EXT_RE})", re.I)
+_MALFORMED_MARKDOWN_MEDIA_RE = re.compile(
+    rf"\\?!\\?\[([^\[\]\n]*?\.{_MEDIA_EXT_RE})(?:\\?\])?(?!\()", re.I
+)
+_OBSIDIAN_MEDIA_EMBED_RE = re.compile(rf"!\[\[([^\]]+\.{_MEDIA_EXT_RE})\]\]", re.I)
+_DANGLING_OPEN_BRACKET_RE = re.compile(r"(?m)(?<!\[)[ \t]+\[[ \t]*$")
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(#[^\]|]*)?(?:\|([^\]]*))?\]\]")
+_WIKILINK_EDGE_QUOTES = "\"'“”‘’«»‹›„「」『』《》"
 
 
 def _repair_malformed_embeds(content: str) -> str:
@@ -349,7 +356,43 @@ def _repair_malformed_embeds(content: str) -> str:
     def replace(match: re.Match[str]) -> str:
         return f"![[{match.group(1).strip()}]]"
 
-    return _restore_code_blocks(_MALFORMED_MEDIA_EMBED_RE.sub(replace, masked), replacements)
+    repaired = _MALFORMED_MARKDOWN_MEDIA_RE.sub(replace, masked)
+    repaired = _MALFORMED_MEDIA_EMBED_RE.sub(replace, repaired)
+    repaired = re.sub(r"\]\]!\[\[", "]]\n![[", repaired)
+    return _restore_code_blocks(repaired, replacements)
+
+
+def _remove_dangling_open_brackets(content: str) -> str:
+    """Remove truncated markdown-link starts that otherwise survive into drafts."""
+    return _DANGLING_OPEN_BRACKET_RE.sub("", content)
+
+
+def _clean_wikilink_target(target: str) -> str:
+    cleaned = target.strip()
+    cleaned = re.sub(r"\s*[,;]\s*S\d+(?:\s*,\s*S\d+)*\s*$", "", cleaned)
+    return cleaned.strip().strip(_WIKILINK_EDGE_QUOTES).strip()
+
+
+def _repair_malformed_wikilinks(content: str, known_titles: list[str]) -> str:
+    """Trim quote/citation debris from wikilink targets before broken-link checks."""
+    masked, replacements = _mask_code_blocks(content)
+    known = {title.casefold() for title in known_titles}
+
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(1).strip()
+        fragment = match.group(2) or ""
+        display = match.group(3)
+        cleaned = _clean_wikilink_target(target)
+        if not cleaned or cleaned == target:
+            return match.group(0)
+        if cleaned.casefold() in known or cleaned.casefold().startswith("sources/"):
+            if display:
+                clean_display = display.strip().strip(_WIKILINK_EDGE_QUOTES).strip()
+                return f"[[{cleaned}{fragment}|{clean_display}]]"
+            return f"[[{cleaned}{fragment}]]"
+        return (display or cleaned).strip().strip(_WIKILINK_EDGE_QUOTES).strip()
+
+    return _restore_code_blocks(_WIKILINK_RE.sub(replace, masked), replacements)
 
 
 def _apply_draft_media_mode(content: str, mode: str) -> str:
@@ -481,6 +524,7 @@ def _write_draft(
 
     # Inject wikilinks for known article titles mentioned in body
     body = _repair_literal_newlines(content_result.content)
+    body = _repair_malformed_embeds(body)
     body = _repair_bare_bracket_links(body)
     body = ensure_wikilinks(body, existing_titles or [])
     # Normalize alias-based links to canonical targets
@@ -495,9 +539,11 @@ def _write_draft(
             link_inline=config.pipeline.source_citation_style == "inline-wikilink",
         )
     source_targets = [ref.wiki_target for ref in source_refs]
+    body = _repair_malformed_wikilinks(body, (existing_titles or []) + source_targets)
     body = _strip_unknown_wikilinks(body, (existing_titles or []) + source_targets)
     body = _strip_self_wikilinks(body, article_title)
     body = _repair_malformed_embeds(body)
+    body = _remove_dangling_open_brackets(body)
     body = _apply_draft_media_mode(body, config.pipeline.draft_media)
     body = _inject_body_sections(
         body,

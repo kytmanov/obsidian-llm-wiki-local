@@ -42,16 +42,18 @@ The wiki lives in Obsidian, so you get the graph view, backlinks, and Dataview q
 - **Selective recompile** — after a file save, only concepts linked to that source are recompiled (not the entire wiki)
 - **Self-maintenance** — `olw maintain --fix` repairs broken wikilinks via the alias map, creates stub articles for genuinely missing targets, and normalizes `[[Alias]]` links across published pages to `[[Canonical|Alias]]`
 - **Manual edit protection** — edited an article by hand? The compiler detects the change and skips it
-- **Source traceability** — every article links back to the raw notes it was built from; optional inline citations can link individual claims to source pages
+- **Source traceability** — every article links back to the raw notes it was built from; optional inline citations can attach claim-level `[S1](#Sources)` markers
 - **File watcher** — `olw watch` auto-processes anything dropped into `raw/`
 - **Wiki health checks** — `olw lint` detects orphans, broken links, stale articles (no LLM needed)
 - **Query your wiki** — `olw query "what is X?"` answers from your published articles
 - **Safe switch advisor** — `olw compare` previews your current vault against one challenger model/provider config in isolated vaults and recommends whether to switch
 - **Git safety net** — every auto-action is committed; `olw undo` reverts safely
 - **Concept aliases** — aliases (e.g. `PC` for "Program Counter") are extracted at ingest, written to each article's frontmatter, and used to resolve queries and repair broken wikilinks (`olw maintain --fix` rewrites `[[PC]]` to `[[Program Counter|PC]]`)
+- **Knowledge item audit** — title-supported people, products, events, organizations, and prominent quoted titles are preserved as candidates without forcing them into concept articles
 - **Multi-language** — automatically detects the language of each note at ingest time; articles are written in the detected language; override globally with `language = "en"` in `wiki.toml`
+- **Language-agnostic extraction rules** — deterministic cleanup avoids English-only word lists; weak title evidence is kept as auditable candidates instead of promoted by language-specific heuristics
 - **Multi-provider** — swap Ollama for Groq, Together AI, LM Studio, vLLM, Azure OpenAI, or any OpenAI-compatible endpoint via `olw setup`
-- **Offline test suite** — 500+ tests run without Ollama or any provider
+- **Offline test suite** — 600+ tests run without Ollama or any provider
 
 ---
 
@@ -288,6 +290,7 @@ raw/note.md
     Fast LLM (3B–8B)
     • Reads note
     • Extracts concept names
+    • Preserves ambiguous title entities as knowledge item candidates
     • Writes quality score + summary to state.db
     • Creates wiki/sources/Note.md (source summary page)
     │
@@ -309,11 +312,15 @@ raw/note.md
 
 **No vector databases, no embeddings.** `wiki/index.md` acts as the routing layer for `olw query`. This keeps the setup simple and works well up to ~100 source notes.
 
+The pipeline is intentionally conservative. Strong concepts become draft articles; weak title-only references become auditable knowledge item candidates. This keeps names like a speaker, product model, or conference visible without generating low-evidence articles from them.
+
 ---
 
 ## Multi-language support
 
 `olw` detects the language of each raw note during ingest and stores it. At compile time, the article is written in that language — no configuration needed.
+
+Extraction and cleanup are designed to be language-agnostic. The pipeline avoids hard-coded natural-language word lists for title/entity promotion. Instead, it uses structural evidence, explicit source evidence, and conservative confidence levels so notes in any language follow the same rules.
 
 **How it works:**
 
@@ -330,11 +337,33 @@ Leave `language` unset (the default) to let auto-detection drive it per concept.
 
 **Example:** a French note ingested alongside English notes produces a French article for French-only concepts and an English article for concepts sourced from English notes. Setting `language = "en"` forces everything to English.
 
+This language setting controls generated article language only. It does not enable language-specific concept merging or ontology decisions.
+
+---
+
+## Knowledge item candidates
+
+Not every useful reference deserves a wiki article. During ingest, `olw` keeps a separate knowledge item ledger for ambiguous, low-evidence references found in titles:
+
+- person-like names, such as `Ada Lovelace`
+- products or models, such as `ExampleCam X200`
+- event or organization-like names, such as `LocalTechConf`
+- structurally prominent quoted titles, such as `"A Practical Guide To Notes"`
+
+These items are not compiled into articles by default. They are preserved for later review, classification, or future evidence accumulation.
+
+```bash
+olw items audit
+olw items show "Ada Lovelace"
+```
+
+This is deliberately conservative: a title-only mention should not become a concept article unless the source content supports it. The item ledger keeps the reference from disappearing while avoiding hallucinated articles.
+
 ---
 
 ## Rejection feedback loop
 
-The core v0.2 feature. When you reject a draft:
+When you reject a draft:
 
 ```bash
 olw review
@@ -393,7 +422,7 @@ my-wiki/
 ├── wiki.toml                   ← configuration
 └── .olw/
     ├── compare/                ← compare reports + optional preview vault artifacts
-    ├── state.db                ← SQLite: notes, concepts, articles, rejections, stubs
+    ├── state.db                ← SQLite: notes, concepts, articles, items, rejections, stubs
     └── pipeline.lock           ← advisory lock (auto-released when the holding process exits)
 ```
 
@@ -435,6 +464,9 @@ max_concepts_per_source = 8      # limit concepts extracted per note
 watch_debounce = 3.0             # seconds after last file event before processing
 ingest_parallel = false          # true = parallel chunk analysis (needs OLLAMA_NUM_PARALLEL>=4)
 # language = "en"               # ISO 639-1 output language; autodetects from notes if unset
+# inline_source_citations = false
+# source_citation_style = "legend-only"  # legend-only | inline-wikilink
+# draft_media = "reference"              # reference | embed | omit
 ```
 
 > **API keys** are never stored in `wiki.toml`. They are read at runtime from the provider-specific env var (e.g. `GROQ_API_KEY`), the generic `OLW_API_KEY` env var, or the `api_key` field in `~/.config/olw/config.toml` (written by `olw setup`).
@@ -506,6 +538,8 @@ After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to 
 | `olw maintain` | Health check + stubs + orphan and merge suggestions |
 | `olw maintain --fix` | Repair broken alias links, create stubs, normalize alias wikilinks |
 | `olw maintain --dry-run` | Report issues without making changes |
+| `olw items audit` | Show preserved non-concept knowledge item candidates |
+| `olw items show NAME` | Show one knowledge item and its source mentions |
 | `olw status` | Show pipeline state and pending drafts |
 | `olw status --failed` | List failed notes with error messages |
 | `olw query "question"` | Answer from your wiki |
@@ -568,11 +602,22 @@ Any model with JSON format / `response_format: json_object` support works. The t
 ## Obsidian tips
 
 - **Graph view** — concept pages link to source pages and each other via `[[wikilinks]]`; before approval use `-path:raw -path:wiki/sources -path:_resources -file:Welcome`, after approval add `-path:wiki/.drafts`
-- **Source citations** — by default inline citations stay graph-quiet as `[S1](#Sources)` links and source pages link once in `## Sources`; set `source_citation_style = "inline-wikilink"` if you want every citation to create a source edge
+- **Source citations** — when inline citations are enabled, the default style stays graph-quiet as `[S1](#Sources)` links while source pages link once in `## Sources`; set `source_citation_style = "inline-wikilink"` if you want every citation to create a source edge
 - **Media** — source pages preserve `![[media]]` embeds; generated drafts default to plain media references to avoid attachment nodes dominating the graph (`draft_media = "reference"`)
+- **Draft review** — drafts live in `wiki/.drafts/` and may not appear in Obsidian's default graph filters; use `olw doctor` for the recommended draft-review and published-only filters
 - **Dataview** — query by `status: published`, `confidence: > 0.7`, `tags: [physics]`, etc.
 - **Backlinks** — every concept page shows which source pages mention it
 - **Web Clipper** — save web articles directly to `raw/` (see [docs/web-clipper-setup.md](docs/web-clipper-setup.md))
+
+## Quality principles for contributors and AI agents
+
+- Prefer deterministic, auditable cleanup over broad LLM-driven merging.
+- Do not use LLM aliases as automatic merge authority; aliases are weak evidence.
+- Keep concept extraction language-agnostic. Avoid hard-coded English or other language-specific word lists unless the feature is explicitly scoped to that language.
+- Preserve weak entity references as knowledge item candidates rather than generating unsupported concept articles.
+- Source pages and `[S1](#Sources)` citations should remain graph-quiet by default; source-page edges belong in `## Sources`.
+- Generated drafts should avoid media embeds by default. Source pages can preserve embeds; draft articles should usually contain plain media references.
+- Raw notes are immutable. All generated state belongs under `wiki/` and `.olw/`.
 
 ---
 
@@ -596,12 +641,16 @@ bash scripts/smoke_test.sh
 # LM Studio or any other OpenAI-compatible endpoint
 PROVIDER=lm_studio bash scripts/smoke_test.sh
 
+# LM Studio with the validated local baseline model
+PROVIDER=lm_studio FAST_MODEL=gemma4:e4b HEAVY_MODEL=gemma4:e4b \
+bash scripts/smoke_test.sh
+
 # Compare smoke test
-PROVIDER=lm_studio FAST_MODEL=google/gemma-4-e4b \
-HEAVY_MODEL=google/gemma-4-e4b \
-CHALLENGER_HEAVY_MODEL=nvidia/nemotron-3-nano-4b \
+PROVIDER=lm_studio FAST_MODEL=gemma4:e4b HEAVY_MODEL=gemma4:e4b \
 bash scripts/compare_smoke.sh
 ```
+
+If LM Studio rejects the short alias, use the exact loaded model id it reports, for example `google/gemma-4-e4b`.
 
 ---
 

@@ -147,12 +147,12 @@ def test_valid_wikilink_not_broken(vault, config, db):
 
 
 def test_parenthesized_title_base_resolves(vault, config, db):
-    _write_page(config, "Alpha", "See [[Scrum]].")
+    _write_page(config, "Alpha", "See [[Workflow]].")
     _write_page(
         config,
-        "Scrum (Фреймворк гибкой разработки)",
+        "Workflow (Process Pattern)",
         "Linked from Alpha.",
-        meta_override={"title": "Scrum (Фреймворк гибкой разработки)"},
+        meta_override={"title": "Workflow (Process Pattern)"},
     )
 
     result = run_lint(config, db)
@@ -252,6 +252,20 @@ def test_malformed_bracket_link_detected_in_draft(vault, config, db):
     malformed = [i for i in result.issues if i.issue_type == "malformed_link"]
     assert malformed
     assert malformed[0].path == "wiki/.drafts/Draft.md"
+
+
+def test_dangling_bracket_detected_in_draft(vault, config, db):
+    write_note(
+        config.drafts_dir / "Draft.md",
+        {"title": "Draft", "tags": [], "status": "draft"},
+        "The article ends with a broken link fragment [",
+    )
+
+    result = run_lint(config, db)
+
+    malformed = [i for i in result.issues if i.issue_type == "malformed_link"]
+    assert malformed
+    assert "Dangling '['" in malformed[0].description
 
 
 def test_broken_wikilink_detected_in_draft(vault, config, db):
