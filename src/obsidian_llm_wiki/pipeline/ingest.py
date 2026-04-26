@@ -223,17 +223,6 @@ _NOISE_CONCEPT_KEYS = frozenset(
     }
 )
 
-_WEAK_ABSTRACT_CONCEPT_KEYS = frozenset(
-    {
-        "astrological system mechanics",
-        "cognitive biases",
-        "diy publishing process",
-        "financial resources",
-        "image content unknown",
-        "personality profile",
-    }
-)
-
 _PAREN_ABBR_RE = re.compile(r"^(?P<base>.+?)\s*\((?P<abbr>[A-ZА-Я0-9][A-ZА-Я0-9.+-]{1,8})\)$")
 _SURROUNDING_QUOTES_RE = re.compile(r"^[`'\"“”‘’«»]+|[`'\"“”‘’«»]+$")
 
@@ -324,10 +313,7 @@ def _filter_concept_candidates(
         name = _clean_concept_text(concept.name)
         if not name or _is_noise_concept(name):
             continue
-        key = _concept_key(name)
         has_evidence = _has_title_or_body_evidence(name, body, path_name)
-        if key in _WEAK_ABSTRACT_CONCEPT_KEYS and not has_evidence:
-            continue
         if result.quality == "low" and not meaningful_text and not has_evidence:
             continue
         filtered.append(concept)

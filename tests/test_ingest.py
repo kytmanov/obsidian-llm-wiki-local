@@ -220,7 +220,7 @@ def test_suggested_topic_candidates_allow_meaningful_text():
     assert [c.name for c in candidates] == ["API Response Testing"]
 
 
-def test_filter_concept_candidates_drops_weak_abstract_without_evidence():
+def test_filter_concept_candidates_keeps_meaningful_note_concepts_even_without_exact_phrase():
     result = AnalysisResult(
         summary="Article about planning rituals.",
         concepts=[Concept(name="Personality Profile", aliases=[])],
@@ -229,7 +229,9 @@ def test_filter_concept_candidates_drops_weak_abstract_without_evidence():
     )
     body = "This article discusses team rituals, meeting notes, and project planning." * 2
 
-    assert _filter_concept_candidates(result.concepts, result, body) == []
+    assert [c.name for c in _filter_concept_candidates(result.concepts, result, body)] == [
+        "Personality Profile"
+    ]
 
 
 def test_filter_concept_candidates_keeps_low_quality_title_evidence():
@@ -419,14 +421,14 @@ def test_ingest_note_does_not_use_suggested_topics_for_media_only_note(vault, co
     assert db.list_all_concept_names() == []
 
 
-def test_ingest_note_filters_weak_llm_concept_without_evidence(vault, config, db):
+def test_ingest_note_filters_low_quality_short_note_concept_without_evidence(vault, config, db):
     path = _write_raw(
         vault,
-        "planning.md",
-        "This article discusses team rituals, meeting notes, and project planning. " * 2,
+        "short.md",
+        "A clipped note.",
     )
     client = _make_client(
-        _analysis_json(concepts=["Personality Profile"], quality="medium", suggested_topics=[])
+        _analysis_json(concepts=["Planning Framework"], quality="low", suggested_topics=[])
     )
 
     ingest_note(path, config, client, db)
