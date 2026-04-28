@@ -13,9 +13,11 @@ from obsidian_llm_wiki.models import AnalysisResult, Concept
 from obsidian_llm_wiki.pipeline.ingest import (
     _SYSTEM,
     _analyze_body,
+    _analyze_body_with_checkpoints,
     _base_concept_name,
     _build_analysis_prompt,
     _concept_key,
+    _content_hash,
     _filter_concept_candidates,
     _is_noise_concept,
     _meaningful_text_stats,
@@ -755,6 +757,85 @@ def test_analyze_body_parallel_mode(vault):
     result = _analyze_body(body, [], "long.md", client, config2)
     assert client.generate.call_count == -(-200 // 50)  # same chunk count
     assert isinstance(result, AnalysisResult)
+
+
+def test_analyze_body_with_checkpoints_resumes_after_failure(vault, config, db):
+    config2 = Config(vault=vault, ollama={"fast_ctx": 100})
+    path = _write_raw(vault, "long.md", "x" * 200)
+    body = path.read_text()
+    content_hash = _content_hash(body)
+
+    client = MagicMock()
+    calls = {"count": 0}
+
+    def side_effect(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 3:
+            raise RuntimeError("chunk timeout")
+        return _analysis_json(concepts=[f"Chunk {calls['count']}"])
+
+    client.generate.side_effect = side_effect
+
+    with pytest.raises(RuntimeError, match="chunk timeout"):
+        _analyze_body_with_checkpoints(body, [], path, content_hash, client, config2, db)
+
+    rows = db.list_ingest_chunks("raw/long.md", content_hash, 4, 50)
+    assert [row["chunk_index"] for row in rows] == [0, 1]
+
+    client2 = _make_client(_analysis_json(concepts=["Recovered"]))
+    result = _analyze_body_with_checkpoints(body, [], path, content_hash, client2, config2, db)
+    assert isinstance(result, AnalysisResult)
+    assert client2.generate.call_count == 2
+    assert db.list_ingest_chunks("raw/long.md", content_hash, 4, 50) == []
+
+
+def test_analyze_body_with_checkpoints_loads_existing_partial_resume(vault, config, db):
+    config2 = Config(vault=vault, ollama={"fast_ctx": 100})
+    path = _write_raw(vault, "resume.md", "x" * 200)
+    body = path.read_text()
+    content_hash = _content_hash(body)
+
+    db.upsert_ingest_chunk(
+        "raw/resume.md",
+        content_hash,
+        0,
+        4,
+        50,
+        _analysis_json(concepts=["Stored Alpha"]),
+    )
+    db.upsert_ingest_chunk(
+        "raw/resume.md",
+        content_hash,
+        1,
+        4,
+        50,
+        _analysis_json(concepts=["Stored Beta"]),
+    )
+
+    client = _make_client(_analysis_json(concepts=["Fresh Gamma"]))
+    result = _analyze_body_with_checkpoints(body, [], path, content_hash, client, config2, db)
+
+    assert client.generate.call_count == 2
+    assert [concept.name for concept in result.concepts] == [
+        "Stored Alpha",
+        "Stored Beta",
+        "Fresh Gamma",
+    ]
+    assert db.list_ingest_chunks("raw/resume.md", content_hash, 4, 50) == []
+
+
+def test_ingest_note_replaces_stale_source_concepts(vault, config, db):
+    path = _write_raw(vault, "note.md", "Initial body")
+    first = _make_client(_analysis_json(concepts=["Alpha", "Beta"]))
+    ingest_note(path, config, first, db)
+    assert set(db.get_concepts_for_sources(["raw/note.md"])) == {"Alpha", "Beta"}
+
+    path.write_text("Updated body", encoding="utf-8")
+    second = _make_client(_analysis_json(concepts=["Beta", "Gamma"]))
+    ingest_note(path, config, second, db, force=True)
+
+    assert set(db.get_concepts_for_sources(["raw/note.md"])) == {"Beta", "Gamma"}
+    assert db.get_compile_state("Alpha", "raw/note.md") is None
 
 
 # ── Language tests ─────────────────────────────────────────────────────────────

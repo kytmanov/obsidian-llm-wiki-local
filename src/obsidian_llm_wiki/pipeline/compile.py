@@ -117,12 +117,19 @@ _QUALITY_BONUS = {"high": 0.25, "medium": 0.1, "low": 0.0}
 # Keeping these well below typical model context windows avoids LM Studio's
 # "tokens to keep from initial prompt > context length" error (triggered when
 # max_tokens >= model's loaded n_ctx).
-_MAX_ARTICLE_PREDICT = 4096  # covers ~2700 word articles
+_MAX_ARTICLE_PREDICT = 4096  # default soft cap; config may reduce or raise it
 _MAX_STUB_PREDICT = 512  # stubs capped at 150 words ≈ 200 tokens
 
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _article_num_predict(config: Config, prompt: str, system: str) -> int:
+    estimated_prompt_tokens = max(1, len(system + prompt) // 4)
+    available_output = config.effective_provider.heavy_ctx - estimated_prompt_tokens - 256
+    safe_output = max(512, available_output)
+    return min(config.pipeline.article_max_tokens, safe_output)
 
 
 def _build_olw_annotations(confidence: float, source_paths: list[str], db: StateDB) -> list[str]:
@@ -327,6 +334,20 @@ def _strip_self_wikilinks(content: str, article_title: str) -> str:
         return display or target
 
     return wikilink_re.sub(replace, content)
+
+
+def _strip_empty_wikilinks(content: str) -> str:
+    """Remove malformed empty wikilinks like [[]] or [[|display]]."""
+    masked, replacements = _mask_code_blocks(content)
+    empty_wikilink_re = re.compile(r"\[\[(?:\s*\|\s*([^\]]*))?\s*\]\]")
+
+    def replace(match: re.Match[str]) -> str:
+        display = match.group(1)
+        if display is None:
+            return ""
+        return display.strip()
+
+    return _restore_code_blocks(empty_wikilink_re.sub(replace, masked), replacements)
 
 
 def _repair_literal_newlines(content: str) -> str:
@@ -542,6 +563,7 @@ def _write_draft(
     body = _repair_malformed_wikilinks(body, (existing_titles or []) + source_targets)
     body = _strip_unknown_wikilinks(body, (existing_titles or []) + source_targets)
     body = _strip_self_wikilinks(body, article_title)
+    body = _strip_empty_wikilinks(body)
     body = _repair_malformed_embeds(body)
     body = _remove_dangling_open_brackets(body)
     body = _apply_draft_media_mode(body, config.pipeline.draft_media)
@@ -663,8 +685,15 @@ def compile_concepts(
     """
     all_needing = db.concepts_needing_compile()
     if concepts is not None:
-        concept_set = set(concepts)
-        concept_names = [c for c in all_needing if c in concept_set]
+        requested: list[str] = []
+        seen: set[str] = set()
+        for name in concepts:
+            canonical = db.resolve_alias(name) or name
+            key = canonical.casefold()
+            if key not in seen:
+                seen.add(key)
+                requested.append(canonical)
+        concept_names = requested
     else:
         concept_names = all_needing
 
@@ -711,6 +740,7 @@ def compile_concepts(
             log.info(
                 "Skipping '%s' — draft already pending review (use --force to overwrite)", name
             )
+            db.mark_concept_compile_state(name, source_paths, "deferred_draft")
             continue
 
         if wiki_path.exists():
@@ -723,9 +753,13 @@ def compile_concepts(
                             print(f"  [skip] {name} — published article manually edited")
                             continue
                         log.info("Skipping '%s' — manually edited (use --force to override)", name)
+                        db.mark_concept_compile_state(name, source_paths, "deferred_manual_edit")
                         continue
             except Exception:
                 pass
+
+        if force:
+            db.clear_deferred_state(name, source_paths)
 
         if dry_run:
             stub_tag = " [stub]" if is_stub else ""
@@ -756,6 +790,7 @@ def compile_concepts(
             except (StructuredOutputError, LLMBadRequestError) as e:
                 log.error("Failed to write stub '%s': %s", name, e)
                 failed.append(name)
+                db.mark_concept_compile_state(name, source_paths, "failed", error=str(e))
                 continue
             draft_path = _write_draft(
                 content_result=result,
@@ -771,6 +806,7 @@ def compile_concepts(
             )
             draft_paths.append(draft_path)
             db.delete_stub(name)
+            db.mark_concept_compile_state(name, source_paths, "compiled")
             elapsed = time.monotonic() - _t_concept
             concept_timings[name] = elapsed
             log.info("Stub draft written: %s (%.1fs)", draft_path.name, elapsed)
@@ -791,6 +827,7 @@ def compile_concepts(
         if not resolved_paths:
             log.warning("No readable sources for concept '%s', skipping", name)
             failed.append(name)
+            db.mark_concept_compile_state(name, source_paths, "failed", error="No readable sources")
             continue
 
         confidence = _compute_confidence(resolved_paths, db)
@@ -823,6 +860,15 @@ def compile_concepts(
         )
 
         try:
+            num_predict = _article_num_predict(
+                config,
+                write_prompt,
+                (
+                    _WRITE_SYSTEM_WITH_CITATIONS
+                    if config.pipeline.inline_source_citations
+                    else _WRITE_SYSTEM
+                ),
+            )
             result = request_structured(
                 client=client,
                 prompt=write_prompt,
@@ -834,12 +880,15 @@ def compile_concepts(
                     else _WRITE_SYSTEM
                 ),
                 num_ctx=config.effective_provider.heavy_ctx,
-                num_predict=min(_MAX_ARTICLE_PREDICT, config.effective_provider.heavy_ctx),
+                num_predict=num_predict,
                 stage="compile_article",
             )
         except (StructuredOutputError, LLMBadRequestError) as e:
             log.error("Failed to write '%s': %s", name, e)
             failed.append(name)
+            db.mark_concept_compile_state(
+                name, resolved_paths or source_paths, "failed", error=str(e)
+            )
             continue
 
         draft_path = _write_draft(
@@ -855,8 +904,7 @@ def compile_concepts(
             alias_map=alias_map,
         )
         draft_paths.append(draft_path)
-        for sp in resolved_paths:
-            db.mark_raw_status(sp, "compiled")
+        db.mark_concept_compile_state(name, resolved_paths, "compiled")
         elapsed = time.monotonic() - _t_concept
         concept_timings[name] = elapsed
         log.info("Draft written: %s (%.1fs)", draft_path.name, elapsed)
@@ -1118,6 +1166,7 @@ def approve_drafts(
             except Exception:
                 pass
             db.approve_article(target_rel, notes=notes)
+            db.mark_concept_compile_state(art.title, art.sources, "compiled")
 
         published.append(target)
         log.info("Published: %s", target.name)
@@ -1150,9 +1199,14 @@ def reject_draft(
     except ValueError:
         log.warning("Draft is outside vault: %s", draft_path)
         return
+    article_record = db.get_article(draft_rel)
     db.delete_article(draft_rel)
     if draft_path.exists():
         draft_path.unlink()
+
+    source_paths = article_record.sources if article_record is not None else []
+    if source_paths:
+        db.mark_concept_compile_state(title, source_paths, "pending")
 
     if feedback:
         db.add_rejection(title, feedback, body=draft_body)

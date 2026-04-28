@@ -10,6 +10,7 @@ Schema versioning: schema_version table tracks migration level.
   v3 — language column on raw_notes
   v4 — concept_aliases table; backfill from existing concept titles
   v5 — knowledge_items + item_mentions tables; backfill existing concepts
+  v6 — ingest_chunks + concept_compile_state tables; backfill compile state from articles
 """
 
 from __future__ import annotations
@@ -22,7 +23,8 @@ from pathlib import Path
 
 from .models import ItemMentionRecord, KnowledgeItemRecord, RawNoteRecord, WikiArticleRecord
 
-_CURRENT_SCHEMA_VERSION = 5
+_CURRENT_SCHEMA_VERSION = 6
+_CHECKPOINT_SCHEMA_VERSION = 1
 
 # Full current schema — idempotent (CREATE IF NOT EXISTS).
 # Fresh DBs get all tables + columns from here. Existing DBs use _VERSIONED_MIGRATIONS.
@@ -108,9 +110,36 @@ CREATE TABLE IF NOT EXISTS item_mentions (
     UNIQUE(item_name, source_path, mention_text, evidence_level)
 );
 
+CREATE TABLE IF NOT EXISTS ingest_chunks (
+    source_path        TEXT NOT NULL,
+    content_hash       TEXT NOT NULL,
+    chunk_index        INTEGER NOT NULL,
+    chunk_count        INTEGER NOT NULL,
+    chunk_size         INTEGER NOT NULL,
+    checkpoint_schema  INTEGER NOT NULL,
+    result_json        TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    PRIMARY KEY (source_path, content_hash, chunk_index, chunk_count, chunk_size, checkpoint_schema)
+);
+
+CREATE TABLE IF NOT EXISTS concept_compile_state (
+    concept_name TEXT NOT NULL,
+    source_path  TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    error        TEXT,
+    compiled_at  TEXT,
+    updated_at   TEXT NOT NULL,
+    PRIMARY KEY (concept_name, source_path),
+    CHECK (status IN ('pending', 'failed', 'compiled', 'deferred_draft', 'deferred_manual_edit'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_raw_hash ON raw_notes(content_hash);
 CREATE INDEX IF NOT EXISTS idx_raw_status ON raw_notes(status);
 CREATE INDEX IF NOT EXISTS idx_concept_name ON concepts(name);
+CREATE INDEX IF NOT EXISTS idx_ingest_chunks_source ON ingest_chunks(source_path, content_hash);
+CREATE INDEX IF NOT EXISTS idx_concept_compile_status ON concept_compile_state(status, source_path);
+CREATE INDEX IF NOT EXISTS idx_concept_compile_name ON concept_compile_state(lower(concept_name));
 CREATE INDEX IF NOT EXISTS idx_rejections_concept ON rejections(concept);
 CREATE INDEX IF NOT EXISTS idx_alias_lookup ON concept_aliases(lower(alias));
 CREATE INDEX IF NOT EXISTS idx_items_kind ON knowledge_items(kind);
@@ -183,6 +212,57 @@ _VERSIONED_MIGRATIONS: dict[int, list[str]] = {
         "CREATE INDEX IF NOT EXISTS idx_items_status ON knowledge_items(status)",
         "CREATE INDEX IF NOT EXISTS idx_mentions_item ON item_mentions(item_name)",
         "CREATE INDEX IF NOT EXISTS idx_mentions_source ON item_mentions(source_path)",
+    ],
+    6: [
+        """CREATE TABLE IF NOT EXISTS ingest_chunks (
+               source_path        TEXT NOT NULL,
+               content_hash       TEXT NOT NULL,
+               chunk_index        INTEGER NOT NULL,
+               chunk_count        INTEGER NOT NULL,
+               chunk_size         INTEGER NOT NULL,
+               checkpoint_schema  INTEGER NOT NULL,
+               result_json        TEXT NOT NULL,
+               created_at         TEXT NOT NULL,
+               updated_at         TEXT NOT NULL,
+               PRIMARY KEY (
+                   source_path,
+                   content_hash,
+                   chunk_index,
+                   chunk_count,
+                   chunk_size,
+                   checkpoint_schema
+               )
+           )""",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_ingest_chunks_source "
+            "ON ingest_chunks(source_path, content_hash)"
+        ),
+        """CREATE TABLE IF NOT EXISTS concept_compile_state (
+               concept_name TEXT NOT NULL,
+               source_path  TEXT NOT NULL,
+               status       TEXT NOT NULL DEFAULT 'pending',
+               error        TEXT,
+               compiled_at  TEXT,
+               updated_at   TEXT NOT NULL,
+               PRIMARY KEY (concept_name, source_path),
+               CHECK (
+                   status IN (
+                       'pending',
+                       'failed',
+                       'compiled',
+                       'deferred_draft',
+                       'deferred_manual_edit'
+                   )
+               )
+           )""",
+        (
+            "CREATE INDEX IF NOT EXISTS idx_concept_compile_status "
+            "ON concept_compile_state(status, source_path)"
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS idx_concept_compile_name "
+            "ON concept_compile_state(lower(concept_name))"
+        ),
     ],
 }
 
@@ -269,12 +349,138 @@ class StateDB:
                 self._backfill_aliases_v4()
             if version == 5:
                 self._backfill_items_v5()
+            if version == 6:
+                self._validate_v6_tables()
+                self._backfill_compile_state_v6()
             with self._tx():
                 self._conn.execute(
                     "INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)",
                     (version,),
                 )
             current_version = version
+
+    def _validate_v6_tables(self) -> None:
+        expected_ingest = {
+            "source_path",
+            "content_hash",
+            "chunk_index",
+            "chunk_count",
+            "chunk_size",
+            "checkpoint_schema",
+            "result_json",
+            "created_at",
+            "updated_at",
+        }
+        expected_compile = {
+            "concept_name",
+            "source_path",
+            "status",
+            "error",
+            "compiled_at",
+            "updated_at",
+        }
+        self._validate_or_recreate_table("ingest_chunks", expected_ingest)
+        self._validate_or_recreate_table("concept_compile_state", expected_compile)
+
+    def _validate_or_recreate_table(self, table: str, expected_cols: set[str]) -> None:
+        rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        cols = {row["name"] for row in rows}
+        if cols == expected_cols:
+            return
+        row = self._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+        count = row[0] if row else 0
+        if count != 0:
+            raise sqlite3.OperationalError(
+                f"Existing table '{table}' has incompatible schema. Back up .olw/state.db and "
+                "migrate manually."
+            )
+        with self._tx():
+            self._conn.execute(f"DROP TABLE IF EXISTS {table}")
+            if table == "ingest_chunks":
+                self._conn.execute(_VERSIONED_MIGRATIONS[6][0])
+                self._conn.execute(_VERSIONED_MIGRATIONS[6][1])
+            elif table == "concept_compile_state":
+                self._conn.execute(_VERSIONED_MIGRATIONS[6][2])
+                self._conn.execute(_VERSIONED_MIGRATIONS[6][3])
+                self._conn.execute(_VERSIONED_MIGRATIONS[6][4])
+
+    def _backfill_compile_state_v6(self) -> None:
+        self._ensure_compile_state_rows()
+        alias_rows = self._conn.execute(
+            "SELECT concept_name, alias FROM concept_aliases ORDER BY concept_name, alias"
+        ).fetchall()
+        alias_map: dict[str, set[str]] = {}
+        for row in alias_rows:
+            alias_map.setdefault(row["concept_name"], set()).add(row["alias"])
+
+        articles = self.list_articles()
+        for row in self._conn.execute("SELECT name, source_path FROM concepts").fetchall():
+            concept_name = row["name"]
+            source_path = row["source_path"]
+            article = self._match_article_for_concept_v6(
+                concept_name, source_path, articles, alias_map
+            )
+            if article is None:
+                continue
+            self.mark_concept_compile_state(concept_name, [source_path], "compiled")
+
+        self._refresh_all_raw_compile_statuses()
+
+    def _match_article_for_concept_v6(
+        self,
+        concept_name: str,
+        source_path: str,
+        articles: list[WikiArticleRecord],
+        alias_map: dict[str, set[str]],
+    ) -> WikiArticleRecord | None:
+        concept_lower = concept_name.casefold()
+        alias_lowers = {alias.casefold() for alias in alias_map.get(concept_name, set())}
+        candidates: list[WikiArticleRecord] = []
+
+        for article in articles:
+            title_lower = article.title.casefold()
+            path_stem = Path(article.path).stem.casefold()
+            if title_lower == concept_lower or path_stem == concept_lower:
+                candidates.append(article)
+                continue
+            if title_lower in alias_lowers or path_stem in alias_lowers:
+                candidates.append(article)
+
+        if not candidates:
+            return None
+
+        with_source_overlap = [a for a in candidates if source_path in a.sources]
+        if len(with_source_overlap) == 1:
+            return with_source_overlap[0]
+        if len(with_source_overlap) > 1:
+            return None
+
+        without_sources = [a for a in candidates if not a.sources]
+        if len(without_sources) == 1:
+            return without_sources[0]
+        return None
+
+    def _ensure_compile_state_rows(self, source_path: str | None = None) -> None:
+        query = "SELECT name, source_path FROM concepts"
+        params: tuple[str, ...] = ()
+        if source_path is not None:
+            query += " WHERE source_path = ?"
+            params = (source_path,)
+        rows = self._conn.execute(query, params).fetchall()
+        now = datetime.now().isoformat()
+        with self._tx():
+            for row in rows:
+                self._conn.execute(
+                    """INSERT OR IGNORE INTO concept_compile_state
+                           (concept_name, source_path, status, error, compiled_at, updated_at)
+                       VALUES (?, ?, 'pending', NULL, NULL, ?)""",
+                    (row["name"], row["source_path"], now),
+                )
+
+    def _refresh_all_raw_compile_statuses(self) -> None:
+        rows = self._conn.execute("SELECT path FROM raw_notes").fetchall()
+        for row in rows:
+            self.refresh_raw_compile_status(row["path"])
 
     def _backfill_aliases_v4(self) -> None:
         """Populate concept_aliases with deterministic aliases for all existing concepts.
@@ -427,6 +633,65 @@ class StateDB:
                        VALUES (?, 'concept', NULL, 'confirmed', 1.0, ?, ?)""",
                     (name, now, now),
                 )
+        self._ensure_compile_state_rows(source_path)
+
+    def replace_concepts_for_source(self, source_path: str, concept_names: list[str]) -> None:
+        """Replace concept links for a source and reset compile state for current concepts."""
+        normalized = []
+        seen: set[str] = set()
+        for name in concept_names:
+            cleaned = name.strip()
+            if not cleaned or cleaned.casefold() in seen:
+                continue
+            seen.add(cleaned.casefold())
+            normalized.append(cleaned)
+
+        existing_rows = self._conn.execute(
+            "SELECT name FROM concepts WHERE source_path = ?", (source_path,)
+        ).fetchall()
+        existing_names = {row["name"] for row in existing_rows}
+        new_names = set(normalized)
+        removed = existing_names - new_names
+
+        now = datetime.now().isoformat()
+        with self._tx():
+            if removed:
+                placeholders = ",".join("?" * len(removed))
+                params = [source_path, *removed]
+                self._conn.execute(
+                    f"DELETE FROM concepts WHERE source_path = ? AND name IN ({placeholders})",
+                    params,
+                )
+                self._conn.execute(
+                    (
+                        "DELETE FROM concept_compile_state "
+                        f"WHERE source_path = ? AND concept_name IN ({placeholders})"
+                    ),
+                    params,
+                )
+            for name in normalized:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO concepts (name, source_path) VALUES (?, ?)",
+                    (name, source_path),
+                )
+                self._conn.execute(
+                    """INSERT OR IGNORE INTO knowledge_items
+                           (name, kind, subtype, status, confidence, created_at, updated_at)
+                       VALUES (?, 'concept', NULL, 'confirmed', 1.0, ?, ?)""",
+                    (name, now, now),
+                )
+                self._conn.execute(
+                    """INSERT INTO concept_compile_state
+                           (concept_name, source_path, status, error, compiled_at, updated_at)
+                       VALUES (?, ?, 'pending', NULL, NULL, ?)
+                       ON CONFLICT(concept_name, source_path) DO UPDATE SET
+                           status='pending',
+                           error=NULL,
+                           compiled_at=NULL,
+                           updated_at=excluded.updated_at""",
+                    (name, source_path, now),
+                )
+        self.refresh_raw_compile_status(source_path)
 
     def list_all_concept_names(self) -> list[str]:
         """All unique canonical concept names, sorted."""
@@ -506,6 +771,102 @@ class StateDB:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def list_failed_concepts(self) -> list[str]:
+        rows = self._conn.execute(
+            """
+            SELECT DISTINCT concept_name
+            FROM concept_compile_state
+            WHERE status = 'failed'
+              AND lower(concept_name) NOT IN (SELECT lower(concept) FROM blocked_concepts)
+            ORDER BY lower(concept_name)
+            """
+        ).fetchall()
+        return [row["concept_name"] for row in rows]
+
+    def get_compile_state(self, concept_name: str, source_path: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            """
+            SELECT * FROM concept_compile_state
+            WHERE lower(concept_name) = lower(?) AND source_path = ?
+            """,
+            (concept_name, source_path),
+        ).fetchone()
+
+    def mark_concept_compile_state(
+        self,
+        concept_name: str,
+        source_paths: list[str],
+        status: str,
+        *,
+        error: str | None = None,
+    ) -> None:
+        now = datetime.now().isoformat()
+        with self._tx():
+            for source_path in source_paths:
+                self._conn.execute(
+                    """INSERT INTO concept_compile_state
+                           (concept_name, source_path, status, error, compiled_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?)
+                       ON CONFLICT(concept_name, source_path) DO UPDATE SET
+                           status=excluded.status,
+                           error=excluded.error,
+                           compiled_at=excluded.compiled_at,
+                           updated_at=excluded.updated_at""",
+                    (
+                        concept_name,
+                        source_path,
+                        status,
+                        error,
+                        now if status == "compiled" else None,
+                        now,
+                    ),
+                )
+        for source_path in source_paths:
+            self.refresh_raw_compile_status(source_path)
+
+    def clear_deferred_state(
+        self, concept_name: str, source_paths: list[str] | None = None
+    ) -> None:
+        params: list[str] = [concept_name]
+        query = (
+            "UPDATE concept_compile_state SET status='pending', error=NULL, compiled_at=NULL, "
+            "updated_at=? WHERE lower(concept_name)=lower(?) AND "
+            "status IN ('deferred_draft', 'deferred_manual_edit')"
+        )
+        now = datetime.now().isoformat()
+        params.insert(0, now)
+        if source_paths:
+            placeholders = ",".join("?" * len(source_paths))
+            query += f" AND source_path IN ({placeholders})"
+            params.extend(source_paths)
+        with self._tx():
+            self._conn.execute(query, params)
+        if source_paths:
+            for source_path in source_paths:
+                self.refresh_raw_compile_status(source_path)
+
+    def refresh_raw_compile_status(self, source_path: str) -> None:
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS cnt FROM concepts WHERE source_path = ?", (source_path,)
+        ).fetchone()
+        concept_count = row["cnt"] if row else 0
+        if concept_count == 0:
+            return
+
+        compiled_count = self._conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM concept_compile_state
+            WHERE source_path = ? AND status = 'compiled'
+            """,
+            (source_path,),
+        ).fetchone()["cnt"]
+
+        if compiled_count == concept_count:
+            self.mark_raw_status(source_path, "compiled")
+        else:
+            self.mark_raw_status(source_path, "ingested")
+
     # ── Knowledge Items ───────────────────────────────────────────────────────
 
     def upsert_item(self, record: KnowledgeItemRecord) -> None:
@@ -579,25 +940,23 @@ class StateDB:
         return [_row_to_item_mention(row) for row in rows]
 
     def concepts_needing_compile(self) -> list[str]:
-        """Concepts where any linked source has status='ingested', plus stub concepts.
+        """Concepts with pending/failed compile state, plus stub concepts.
 
-        Excludes blocked concepts from both sets.
+        Excludes blocked and deferred concepts from normal scheduling.
         """
         rows = self._conn.execute(
             """
-            SELECT DISTINCT c.name
-            FROM concepts c
-            JOIN raw_notes r ON c.source_path = r.path
-            WHERE r.status = 'ingested'
-              AND lower(c.name) NOT IN (SELECT lower(concept) FROM blocked_concepts)
+            SELECT DISTINCT ccs.concept_name AS name
+            FROM concept_compile_state ccs
+            JOIN concepts c ON c.name = ccs.concept_name AND c.source_path = ccs.source_path
+            WHERE ccs.status IN ('pending', 'failed')
+              AND lower(ccs.concept_name) NOT IN (SELECT lower(concept) FROM blocked_concepts)
 
             UNION
 
             SELECT s.concept FROM stubs s
             WHERE s.concept NOT IN (
                 SELECT DISTINCT c2.name FROM concepts c2
-                JOIN raw_notes r2 ON c2.source_path = r2.path
-                WHERE r2.status IN ('ingested', 'compiled')
             )
             AND lower(s.concept) NOT IN (SELECT lower(concept) FROM blocked_concepts)
 
@@ -607,6 +966,25 @@ class StateDB:
         return [r[0] for r in rows]
 
     # ── Wiki Articles ─────────────────────────────────────────────────────────
+
+    def find_article_candidates(self, concept_name: str) -> list[WikiArticleRecord]:
+        concept_lower = concept_name.casefold()
+        alias_rows = self._conn.execute(
+            "SELECT alias FROM concept_aliases WHERE lower(concept_name) = lower(?)",
+            (concept_name,),
+        ).fetchall()
+        aliases = {row[0].casefold() for row in alias_rows}
+
+        matches: list[WikiArticleRecord] = []
+        for article in self.list_articles():
+            title_lower = article.title.casefold()
+            stem_lower = Path(article.path).stem.casefold()
+            if title_lower == concept_lower or stem_lower == concept_lower:
+                matches.append(article)
+                continue
+            if title_lower in aliases or stem_lower in aliases:
+                matches.append(article)
+        return matches
 
     def upsert_article(self, record: WikiArticleRecord) -> None:
         with self._tx():
@@ -667,6 +1045,9 @@ class StateDB:
                 "UPDATE wiki_articles SET approved_at=?, approval_notes=? WHERE path=?",
                 (datetime.now().isoformat(), notes or None, path),
             )
+        art = self.get_article(path)
+        if art:
+            self.mark_concept_compile_state(art.title, art.sources, "compiled")
 
     def delete_article(self, path: str) -> None:
         with self._tx():
@@ -738,6 +1119,103 @@ class StateDB:
             self._conn.execute(
                 "INSERT OR IGNORE INTO stubs (concept, created_at, source) VALUES (?, ?, ?)",
                 (concept, datetime.now().isoformat(), source),
+            )
+
+    # ── Ingest Checkpoints ────────────────────────────────────────────────────
+
+    def list_ingest_chunks(
+        self,
+        source_path: str,
+        content_hash: str,
+        chunk_count: int,
+        chunk_size: int,
+        checkpoint_schema: int = _CHECKPOINT_SCHEMA_VERSION,
+    ) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            """
+            SELECT * FROM ingest_chunks
+            WHERE source_path = ?
+              AND content_hash = ?
+              AND chunk_count = ?
+              AND chunk_size = ?
+              AND checkpoint_schema = ?
+            ORDER BY chunk_index
+            """,
+            (source_path, content_hash, chunk_count, chunk_size, checkpoint_schema),
+        ).fetchall()
+
+    def upsert_ingest_chunk(
+        self,
+        source_path: str,
+        content_hash: str,
+        chunk_index: int,
+        chunk_count: int,
+        chunk_size: int,
+        result_json: str,
+        checkpoint_schema: int = _CHECKPOINT_SCHEMA_VERSION,
+    ) -> None:
+        now = datetime.now().isoformat()
+        with self._tx():
+            self._conn.execute(
+                """INSERT INTO ingest_chunks
+                       (source_path, content_hash, chunk_index, chunk_count, chunk_size,
+                        checkpoint_schema, result_json, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(
+                       source_path,
+                       content_hash,
+                       chunk_index,
+                       chunk_count,
+                       chunk_size,
+                       checkpoint_schema
+                   )
+                   DO UPDATE SET
+                       result_json=excluded.result_json,
+                       updated_at=excluded.updated_at""",
+                (
+                    source_path,
+                    content_hash,
+                    chunk_index,
+                    chunk_count,
+                    chunk_size,
+                    checkpoint_schema,
+                    result_json,
+                    now,
+                    now,
+                ),
+            )
+
+    def purge_ingest_chunks(self, source_path: str, *, keep_hash: str | None = None) -> None:
+        with self._tx():
+            if keep_hash is None:
+                self._conn.execute(
+                    "DELETE FROM ingest_chunks WHERE source_path = ?", (source_path,)
+                )
+            else:
+                self._conn.execute(
+                    "DELETE FROM ingest_chunks WHERE source_path = ? AND content_hash <> ?",
+                    (source_path, keep_hash),
+                )
+
+    def delete_ingest_chunks(
+        self,
+        source_path: str,
+        content_hash: str,
+        chunk_count: int,
+        chunk_size: int,
+        checkpoint_schema: int = _CHECKPOINT_SCHEMA_VERSION,
+    ) -> None:
+        with self._tx():
+            self._conn.execute(
+                """
+                DELETE FROM ingest_chunks
+                WHERE source_path = ?
+                  AND content_hash = ?
+                  AND chunk_count = ?
+                  AND chunk_size = ?
+                  AND checkpoint_schema = ?
+                """,
+                (source_path, content_hash, chunk_count, chunk_size, checkpoint_schema),
             )
 
     def delete_stub(self, concept: str) -> None:

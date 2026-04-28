@@ -22,6 +22,7 @@ from obsidian_llm_wiki.pipeline.compile import (
     _repair_malformed_embeds,
     _repair_malformed_wikilinks,
     _rewrite_citation_markers,
+    _strip_empty_wikilinks,
     _strip_olw_annotations,
     _strip_self_wikilinks,
     _strip_unknown_wikilinks,
@@ -246,6 +247,12 @@ def test_strip_self_wikilinks_unwraps_self_links():
     body = _strip_self_wikilinks("[[Scrum]] and [[Scrum|this page]] link to [[Kanban]].", "Scrum")
 
     assert body == "Scrum and this page link to [[Kanban]]."
+
+
+def test_strip_empty_wikilinks_removes_empty_targets():
+    body = _strip_empty_wikilinks("Bad [[]]. Display [[|shown]]. Keep [[Kanban]].")
+
+    assert body == "Bad . Display shown. Keep [[Kanban]]."
 
 
 def test_repair_malformed_embeds_converts_bare_media_embed():
@@ -629,6 +636,9 @@ def test_compile_concepts_skips_pending_draft(config, db):
     assert failed == []
     assert client.generate.call_count == 0
     assert "User-reviewed draft body." in draft_path.read_text()
+    state = db.get_compile_state("Alpha", "raw/a.md")
+    assert state is not None
+    assert state["status"] == "deferred_draft"
 
 
 def test_compile_concepts_marks_sources_after_each_success(config, db):
@@ -655,6 +665,76 @@ def test_compile_concepts_marks_sources_after_each_success(config, db):
     assert failed == ["Beta"]
     assert db.get_raw("raw/a.md").status == "compiled"
     assert db.get_raw("raw/b.md").status == "ingested"
+
+
+def test_compile_concepts_force_clears_manual_edit_defer(config, db):
+    import json
+
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha"])
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: A\n---\nContent.")
+    wiki_path = config.wiki_dir / "Alpha.md"
+    wiki_path.write_text("---\ntitle: Alpha\n---\nEdited.")
+    db.upsert_article(
+        WikiArticleRecord(
+            path=str(wiki_path.relative_to(config.vault)),
+            title="Alpha",
+            sources=["raw/a.md"],
+            content_hash="old-hash",
+            is_draft=False,
+        )
+    )
+
+    client = make_mock_client(json.dumps({"title": "Alpha", "content": "New.", "tags": []}))
+
+    drafts, failed, _ = compile_concepts(config, client, db)
+    assert drafts == []
+    assert failed == []
+    assert db.get_compile_state("Alpha", "raw/a.md")["status"] == "deferred_manual_edit"
+
+    drafts, failed, _ = compile_concepts(config, client, db, force=True, concepts=["Alpha"])
+    assert len(drafts) == 1
+    assert failed == []
+    assert db.get_compile_state("Alpha", "raw/a.md")["status"] == "compiled"
+
+
+def test_approve_and_reject_update_compile_state(config, db):
+    import frontmatter as fm_lib
+
+    from obsidian_llm_wiki.vault import atomic_write
+
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha"])
+    draft_path = config.drafts_dir / "Alpha.md"
+    meta = {"title": "Alpha", "status": "draft", "tags": [], "sources": ["raw/a.md"]}
+    atomic_write(draft_path, fm_lib.dumps(fm_lib.Post("Body.", **meta)))
+    db.upsert_article(
+        WikiArticleRecord(
+            path=str(draft_path.relative_to(config.vault)),
+            title="Alpha",
+            sources=["raw/a.md"],
+            content_hash="h",
+            is_draft=True,
+        )
+    )
+    db.mark_concept_compile_state("Alpha", ["raw/a.md"], "deferred_draft")
+
+    approve_drafts(config, db, [draft_path])
+    assert db.get_compile_state("Alpha", "raw/a.md")["status"] == "compiled"
+
+    draft_path = config.drafts_dir / "Alpha.md"
+    atomic_write(draft_path, fm_lib.dumps(fm_lib.Post("Body.", **meta)))
+    db.upsert_article(
+        WikiArticleRecord(
+            path=str(draft_path.relative_to(config.vault)),
+            title="Alpha",
+            sources=["raw/a.md"],
+            content_hash="h2",
+            is_draft=True,
+        )
+    )
+    reject_draft(draft_path, config, db, feedback="Nope")
+    assert db.get_compile_state("Alpha", "raw/a.md")["status"] == "pending"
 
 
 # ── Approval records approved_at ─────────────────────────────────────────────

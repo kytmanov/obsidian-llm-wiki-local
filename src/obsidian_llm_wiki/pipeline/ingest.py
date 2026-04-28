@@ -10,6 +10,7 @@ import hashlib
 import logging
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -134,6 +135,9 @@ def _analyze_body(
     path_name: str,
     client: LLMClientProtocol,
     config: Config,
+    *,
+    on_chunk_result=None,
+    skip_completed: set[int] | None = None,
 ) -> AnalysisResult:
     """Analyze note body, splitting into chunks if body exceeds fast_ctx // 2 chars."""
     chunk_size = config.effective_provider.fast_ctx // 2
@@ -179,21 +183,110 @@ def _analyze_body(
         log.info("Analyzed %s %s (%.1fs)", path_name or "note", label, time.monotonic() - t0)
         return result
 
-    if config.pipeline.ingest_parallel:
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+    completed = skip_completed or set()
 
+    if config.pipeline.ingest_parallel:
         chunk_results: list[AnalysisResult | None] = [None] * len(chunks)
-        with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
-            futures = {
-                executor.submit(_analyze_chunk, chunk, i): i for i, chunk in enumerate(chunks)
-            }
-            for future in as_completed(futures):
-                chunk_results[futures[future]] = future.result()
+        errors: list[Exception] = []
+        pending = [(i, chunk) for i, chunk in enumerate(chunks) if i not in completed]
+        if pending:
+            with ThreadPoolExecutor(max_workers=len(pending)) as executor:
+                futures = {executor.submit(_analyze_chunk, chunk, i): i for i, chunk in pending}
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(exc)
+                        continue
+                    chunk_results[idx] = result
+                    if on_chunk_result is not None:
+                        on_chunk_result(idx, result)
+            if errors:
+                raise errors[0]
         results = [r for r in chunk_results if r is not None]
     else:
-        results = [_analyze_chunk(chunk, i) for i, chunk in enumerate(chunks)]
+        results = []
+        for i, chunk in enumerate(chunks):
+            if i in completed:
+                continue
+            result = _analyze_chunk(chunk, i)
+            if on_chunk_result is not None:
+                on_chunk_result(i, result)
+            results.append(result)
 
     return _merge_chunk_results(results)
+
+
+def _analyze_body_with_checkpoints(
+    body: str,
+    existing_concepts: list[str],
+    path: Path,
+    content_hash: str,
+    client: LLMClientProtocol,
+    config: Config,
+    db: StateDB,
+    *,
+    force: bool = False,
+) -> AnalysisResult:
+    chunk_size = config.effective_provider.fast_ctx // 2
+    rel_path = str(path.relative_to(config.vault))
+
+    if len(body) <= chunk_size:
+        return _analyze_body(body, existing_concepts, path.name, client, config)
+
+    chunks = [body[i : i + chunk_size] for i in range(0, len(body), chunk_size)]
+    if force:
+        db.purge_ingest_chunks(rel_path)
+    else:
+        db.purge_ingest_chunks(rel_path, keep_hash=content_hash)
+
+    stored = db.list_ingest_chunks(rel_path, content_hash, len(chunks), chunk_size)
+    chunk_results: list[AnalysisResult | None] = [None] * len(chunks)
+    completed: set[int] = set()
+
+    for row in stored:
+        try:
+            result = AnalysisResult.model_validate_json(row["result_json"])
+        except Exception:  # noqa: BLE001 - corrupt checkpoints are re-analyzed
+            continue
+        chunk_results[row["chunk_index"]] = result
+        completed.add(row["chunk_index"])
+
+    if completed:
+        log.info(
+            "Resume ingest: %s using %d/%d completed chunks",
+            path.name,
+            len(completed),
+            len(chunks),
+        )
+
+    def _save_chunk(idx: int, result: AnalysisResult) -> None:
+        chunk_results[idx] = result
+        db.upsert_ingest_chunk(
+            rel_path,
+            content_hash,
+            idx,
+            len(chunks),
+            chunk_size,
+            result.model_dump_json(),
+        )
+
+    if len(completed) < len(chunks):
+        _analyze_body(
+            body,
+            existing_concepts,
+            path.name,
+            client,
+            config,
+            on_chunk_result=_save_chunk,
+            skip_completed=completed,
+        )
+
+    results = [result for result in chunk_results if result is not None]
+    merged = _merge_chunk_results(results)
+    db.delete_ingest_chunks(rel_path, content_hash, len(chunks), chunk_size)
+    return merged
 
 
 _STOPWORDS = frozenset(
@@ -573,7 +666,7 @@ def ingest_note(
     rel_path = str(path.relative_to(config.vault))
     record = db.get_raw(rel_path)
 
-    if record and record.status == "ingested" and not force:
+    if record and record.status in {"ingested", "compiled"} and not force:
         log.info("Already ingested: %s", path.name)
         return None
 
@@ -599,12 +692,15 @@ def ingest_note(
     if existing_topics is None:
         existing_topics = db.list_all_concept_names()
     try:
-        result: AnalysisResult = _analyze_body(
+        result: AnalysisResult = _analyze_body_with_checkpoints(
             body=body,
             existing_concepts=existing_topics,
-            path_name=path.name,
+            path=path,
+            content_hash=h,
             client=client,
             config=config,
+            db=db,
+            force=force,
         )
     except Exception as e:
         log.error("Analysis failed for %s: %s", path.name, e)
@@ -640,7 +736,7 @@ def ingest_note(
         concept_candidates = _suggested_topic_candidates(result, body, path.name)
     normalized = _normalize_concepts(concept_candidates[:max_concepts], db)
     canonical_names = [name for name, _ in normalized]
-    db.upsert_concepts(rel_path, canonical_names)
+    db.replace_concepts_for_source(rel_path, canonical_names)
     for canonical, aliases in normalized:
         if aliases:
             db.upsert_aliases(canonical, aliases)

@@ -1033,10 +1033,16 @@ def ingest(
 @click.option("--force", is_flag=True, help="Recompile even manually-edited articles")
 @click.option("--legacy", is_flag=True, help="Use legacy LLM-planning compile (CompilePlan)")
 @click.option(
+    "--concept",
+    "concepts",
+    multiple=True,
+    help="Compile specific concept(s), even if not currently pending",
+)
+@click.option(
     "--retry-failed",
     "retry_failed",
     is_flag=True,
-    help="Re-ingest raw notes that previously failed, then compile",
+    help="Re-ingest failed raw notes and retry failed concept compiles",
 )
 @_model_override_options
 def compile(
@@ -1045,6 +1051,7 @@ def compile(
     auto_approve,
     force,
     legacy,
+    concepts,
     retry_failed,
     fast_model,
     heavy_model,
@@ -1058,6 +1065,31 @@ def compile(
     overrides = _model_override_kwargs(fast_model, heavy_model, provider_name, provider_url)
     config = _load_config(vault_str, **overrides)
     client, db = _load_deps(config)
+
+    explicit_concepts: list[str] | None = None
+    if concepts:
+        known_concepts = {name.casefold(): name for name in db.list_all_concept_names()}
+        known_stubs = {name.casefold(): name for name in db.get_stubs()}
+        resolved = []
+        unresolved = []
+        seen = set()
+        for concept in concepts:
+            canonical = db.resolve_alias(concept) or concept
+            canonical_lookup = known_concepts.get(canonical.casefold()) or known_stubs.get(
+                canonical.casefold()
+            )
+            if canonical_lookup is None:
+                unresolved.append(concept)
+                continue
+            if canonical_lookup.casefold() not in seen:
+                seen.add(canonical_lookup.casefold())
+                resolved.append(canonical_lookup)
+        for concept in unresolved:
+            console.print(f"[yellow]Unknown concept, skipping:[/yellow] {concept}")
+        if not resolved:
+            console.print("[red]No valid concepts to compile.[/red]")
+            sys.exit(1)
+        explicit_concepts = resolved
 
     # Re-ingest previously failed notes before compiling
     if retry_failed:
@@ -1079,6 +1111,18 @@ def compile(
                 if result is not None:
                     retried += 1
             console.print(f"[green]Re-ingested {retried}/{len(failed_recs)} note(s).[/green]")
+
+        failed_concepts = db.list_failed_concepts()
+        if failed_concepts:
+            console.print(f"[yellow]Retrying {len(failed_concepts)} failed concept(s)...[/yellow]")
+            if explicit_concepts is None:
+                explicit_concepts = failed_concepts
+            else:
+                for concept in failed_concepts:
+                    if concept.casefold() not in {name.casefold() for name in explicit_concepts}:
+                        explicit_concepts.append(concept)
+        else:
+            console.print("[dim]No failed concepts to retry.[/dim]")
 
     if dry_run:
         console.print("[dim]Dry run — no files will be written.[/dim]")
@@ -1117,6 +1161,7 @@ def compile(
                 force=force,
                 dry_run=dry_run,
                 on_progress=_on_progress,
+                concepts=explicit_concepts,
             )
             progress.update(task, completed=progress.tasks[task].total or 1)
 

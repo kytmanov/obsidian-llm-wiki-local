@@ -30,6 +30,16 @@ def test_pipeline_config_inline_source_citations_from_dict():
     assert cfg.inline_source_citations is True
 
 
+def test_pipeline_config_article_max_tokens_default():
+    cfg = PipelineConfig()
+    assert cfg.article_max_tokens == 4096
+
+
+def test_pipeline_config_article_max_tokens_from_dict():
+    cfg = PipelineConfig(**{"article_max_tokens": 2048})
+    assert cfg.article_max_tokens == 2048
+
+
 def test_pipeline_config_language_from_dict():
     cfg = PipelineConfig(**{"language": "fr"})
     assert cfg.language == "fr"
@@ -58,6 +68,7 @@ def test_default_wiki_toml_contains_inline_source_citations_comment():
 
 def test_default_wiki_toml_contains_graph_quality_defaults():
     toml = default_wiki_toml()
+    assert "article_max_tokens = 4096" in toml
     assert "source_citation_style" in toml
     assert "draft_media" in toml
     assert "graph_quality_checks = true" in toml

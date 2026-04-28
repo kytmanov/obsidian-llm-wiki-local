@@ -199,6 +199,7 @@ def test_compile_concepts_skips_when_no_concepts_needing_compile(vault, config, 
         )
     )
     db.upsert_concepts("raw/note.md", ["Some Concept"])
+    db.mark_concept_compile_state("Some Concept", ["raw/note.md"], "compiled")
 
     client = MagicMock()
     drafts, failed, _ = compile_concepts(config=config, client=client, db=db)
@@ -333,6 +334,30 @@ def test_compile_concepts_marks_sources_compiled(vault, config, db, fixtures_dir
 
     record = db.get_raw("raw/note.md")
     assert record.status == "compiled"
+
+
+def test_compile_concepts_failed_same_source_stays_queued(vault, config, db):
+    import json
+
+    db.upsert_raw(RawNoteRecord(path="raw/note.md", content_hash="abc", status="ingested"))
+    db.upsert_concepts("raw/note.md", ["Alpha", "Beta"])
+    (vault / "raw" / "note.md").write_text("Body.")
+
+    client = MagicMock()
+    client.generate.side_effect = [
+        json.dumps({"title": "Alpha", "content": "Alpha content.", "tags": []}),
+        "not valid json",
+        "not valid json",
+        "not valid json",
+    ]
+
+    drafts, failed, _ = compile_concepts(config=config, client=client, db=db)
+
+    assert len(drafts) == 1
+    assert failed == ["Beta"]
+    assert db.get_raw("raw/note.md").status == "ingested"
+    assert "Beta" in db.concepts_needing_compile()
+    assert "Alpha" not in db.concepts_needing_compile()
 
 
 # ── Language tests ─────────────────────────────────────────────────────────────
