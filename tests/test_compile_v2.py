@@ -12,6 +12,7 @@ from obsidian_llm_wiki.models import RawNoteRecord, WikiArticleRecord
 from obsidian_llm_wiki.ollama_client import OllamaClient
 from obsidian_llm_wiki.pipeline.compile import (
     _apply_draft_media_mode,
+    _article_num_predict,
     _build_olw_annotations,
     _build_source_refs,
     _gather_sources,
@@ -57,6 +58,19 @@ def make_mock_client(response: str = "{}") -> OllamaClient:
     client = MagicMock(spec=OllamaClient)
     client.generate.return_value = response
     return client
+
+
+def test_article_num_predict_respects_config_cap(config):
+    config.pipeline.article_max_tokens = 2048
+
+    assert _article_num_predict(config, prompt="short", system="system") == 2048
+
+
+def test_article_num_predict_clamps_to_remaining_context(config):
+    config.provider = config.effective_provider.model_copy(update={"heavy_ctx": 1024})
+    prompt = "x" * 3200  # estimated 800 prompt tokens, leaving 0 after safety margin.
+
+    assert _article_num_predict(config, prompt=prompt, system="") == 0
 
 
 # ── Annotations ───────────────────────────────────────────────────────────────

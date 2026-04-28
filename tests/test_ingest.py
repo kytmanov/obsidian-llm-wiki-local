@@ -824,6 +824,29 @@ def test_analyze_body_with_checkpoints_loads_existing_partial_resume(vault, conf
     assert db.list_ingest_chunks("raw/resume.md", content_hash, 4, 50) == []
 
 
+def test_analyze_body_with_checkpoints_purges_stale_chunks_for_short_note(vault, config, db):
+    config2 = Config(vault=vault, ollama={"fast_ctx": 100})
+    path = _write_raw(vault, "shortened.md", "short body")
+    old_hash = _content_hash("x" * 200)
+    new_hash = _content_hash(path.read_text())
+    db.upsert_ingest_chunk(
+        "raw/shortened.md",
+        old_hash,
+        0,
+        4,
+        50,
+        _analysis_json(concepts=["Old Chunk"]),
+    )
+
+    client = _make_client(_analysis_json(concepts=["Fresh Short"], quality="high"))
+    result = _analyze_body_with_checkpoints(
+        path.read_text(), [], path, new_hash, client, config2, db
+    )
+
+    assert [concept.name for concept in result.concepts] == ["Fresh Short"]
+    assert db.list_ingest_chunks("raw/shortened.md", old_hash, 4, 50) == []
+
+
 def test_ingest_note_replaces_stale_source_concepts(vault, config, db):
     path = _write_raw(vault, "note.md", "Initial body")
     first = _make_client(_analysis_json(concepts=["Alpha", "Beta"]))
@@ -836,6 +859,23 @@ def test_ingest_note_replaces_stale_source_concepts(vault, config, db):
 
     assert set(db.get_concepts_for_sources(["raw/note.md"])) == {"Beta", "Gamma"}
     assert db.get_compile_state("Alpha", "raw/note.md") is None
+
+
+def test_ingest_note_reanalyzes_changed_compiled_note_without_force(vault, config, db):
+    path = _write_raw(vault, "compiled.md", "Initial body")
+    first = _make_client(_analysis_json(concepts=["Alpha"]))
+    ingest_note(path, config, first, db)
+    db.mark_concept_compile_state("Alpha", ["raw/compiled.md"], "compiled")
+    assert db.get_raw("raw/compiled.md").status == "compiled"
+
+    path.write_text("Updated body", encoding="utf-8")
+    second = _make_client(_analysis_json(concepts=["Beta"]))
+    ingest_note(path, config, second, db)
+
+    assert second.generate.call_count == 1
+    assert set(db.get_concepts_for_sources(["raw/compiled.md"])) == {"Beta"}
+    assert db.get_compile_state("Alpha", "raw/compiled.md") is None
+    assert db.get_raw("raw/compiled.md").content_hash == _content_hash("Updated body")
 
 
 # ── Language tests ─────────────────────────────────────────────────────────────

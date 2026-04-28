@@ -128,8 +128,8 @@ def _content_hash(text: str) -> str:
 def _article_num_predict(config: Config, prompt: str, system: str) -> int:
     estimated_prompt_tokens = max(1, len(system + prompt) // 4)
     available_output = config.effective_provider.heavy_ctx - estimated_prompt_tokens - 256
-    safe_output = max(512, available_output)
-    return min(config.pipeline.article_max_tokens, safe_output)
+    max_remaining = max(0, available_output)
+    return min(config.pipeline.article_max_tokens, max_remaining)
 
 
 def _build_olw_annotations(confidence: float, source_paths: list[str], db: StateDB) -> list[str]:
@@ -1166,7 +1166,6 @@ def approve_drafts(
             except Exception:
                 pass
             db.approve_article(target_rel, notes=notes)
-            db.mark_concept_compile_state(art.title, art.sources, "compiled")
 
         published.append(target)
         log.info("Published: %s", target.name)

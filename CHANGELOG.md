@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.7.1] - 2026-04-28
+
+### Highlights
+
+**v0.7.1 hardens long-note recovery and concept compile retries.** Interrupted chunked ingest can now resume from saved progress, and failed concept articles remain retryable instead of disappearing behind source-level completion state.
+
+### Bug Fixes
+
+- **Resumable chunked ingest (#44)** — long notes persist successful chunk analyses as checkpoints and reruns skip completed chunks instead of starting over after an intermittent LLM failure.
+- **Failed concept compile recovery (#42)** — compile scheduling now tracks status per concept/source pair, so partial success no longer marks an entire raw note done while some concepts are still failed.
+- **Changed compiled notes re-ingest correctly** — `olw ingest` now skips previously ingested/compiled notes only when the stored content hash still matches the file on disk.
+- **Checkpoint cleanup for shortened notes** — stale chunk checkpoints are purged when a note no longer needs chunking.
+- **Safer compile token budget** — article generation now clamps `num_predict` to the true remaining context budget instead of forcing a minimum that can exceed provider limits.
+- **Published article link hygiene** — generated output cleanup removes malformed empty wikilinks before publication.
+
+### Changes
+
+- **Targeted concept compile** — `olw compile --concept NAME` can compile a specific concept even when it is not currently pending.
+- **Failed concept retry CLI** — `olw compile --retry-failed` now retries failed concept compiles in addition to failed raw-note ingest records.
+- **Article output budget config** — `pipeline.article_max_tokens` can tune the soft article-generation output cap while still respecting provider context limits.
+
 ## [0.7.0] - 2026-04-26
 
 ### Highlights

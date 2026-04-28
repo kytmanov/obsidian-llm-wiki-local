@@ -233,6 +233,10 @@ def _analyze_body_with_checkpoints(
     rel_path = str(path.relative_to(config.vault))
 
     if len(body) <= chunk_size:
+        if force:
+            db.purge_ingest_chunks(rel_path)
+        else:
+            db.purge_ingest_chunks(rel_path, keep_hash=content_hash)
         return _analyze_body(body, existing_concepts, path.name, client, config)
 
     chunks = [body[i : i + chunk_size] for i in range(0, len(body), chunk_size)]
@@ -666,7 +670,12 @@ def ingest_note(
     rel_path = str(path.relative_to(config.vault))
     record = db.get_raw(rel_path)
 
-    if record and record.status in {"ingested", "compiled"} and not force:
+    if (
+        record
+        and record.status in {"ingested", "compiled"}
+        and record.content_hash == h
+        and not force
+    ):
         log.info("Already ingested: %s", path.name)
         return None
 
