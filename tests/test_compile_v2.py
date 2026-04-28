@@ -667,6 +667,36 @@ def test_compile_concepts_marks_sources_after_each_success(config, db):
     assert db.get_raw("raw/b.md").status == "ingested"
 
 
+def test_compile_concepts_mixed_source_failure_keeps_only_failed_concept_queued(config, db):
+    import json
+
+    db.upsert_raw(RawNoteRecord(path="raw/a.md", content_hash="h1", status="ingested"))
+    db.upsert_raw(RawNoteRecord(path="raw/b.md", content_hash="h2", status="ingested"))
+    db.upsert_concepts("raw/a.md", ["Alpha", "Beta"])
+    db.upsert_concepts("raw/b.md", ["Beta"])
+    (config.vault / "raw" / "a.md").write_text("---\ntitle: A\n---\nContent A.")
+    (config.vault / "raw" / "b.md").write_text("---\ntitle: B\n---\nContent B.")
+
+    client = make_mock_client()
+    client.generate.side_effect = [
+        json.dumps({"title": "Alpha", "content": "Alpha content.", "tags": []}),
+        "not valid json",
+        "not valid json",
+        "not valid json",
+    ]
+
+    drafts, failed, _ = compile_concepts(config, client, db, concepts=["Alpha", "Beta"])
+
+    assert len(drafts) == 1
+    assert failed == ["Beta"]
+    assert db.get_compile_state("Alpha", "raw/a.md")["status"] == "compiled"
+    assert db.get_compile_state("Beta", "raw/a.md")["status"] == "failed"
+    assert db.get_compile_state("Beta", "raw/b.md")["status"] == "failed"
+    assert db.get_raw("raw/a.md").status == "ingested"
+    assert db.get_raw("raw/b.md").status == "ingested"
+    assert db.concepts_needing_compile() == ["Beta"]
+
+
 def test_compile_concepts_force_clears_manual_edit_defer(config, db):
     import json
 
