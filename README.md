@@ -1,11 +1,6 @@
 # obsidian-llm-wiki
 
-[![CI status](https://img.shields.io/github/actions/workflow/status/kytmanov/obsidian-llm-wiki-local/ci.yml?style=flat&label=CI)](https://github.com/kytmanov/obsidian-llm-wiki-local/actions/workflows/ci.yml)
-[![PyPI version](https://img.shields.io/pypi/v/obsidian-llm-wiki?style=flat)](https://pypi.org/project/obsidian-llm-wiki/)
-[![PyPI downloads](https://img.shields.io/pypi/dm/obsidian-llm-wiki?style=flat)](https://pypistats.org/packages/obsidian-llm-wiki)
-[![GitHub stars](https://img.shields.io/github/stars/kytmanov/obsidian-llm-wiki-local?style=flat)](https://github.com/kytmanov/obsidian-llm-wiki-local/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/kytmanov/obsidian-llm-wiki-local?style=flat)](https://github.com/kytmanov/obsidian-llm-wiki-local/network/members)
-[![GitHub last commit](https://img.shields.io/github/last-commit/kytmanov/obsidian-llm-wiki-local?style=flat)](https://github.com/kytmanov/obsidian-llm-wiki-local/commits/master)
+<p align="center"><a href="https://pypistats.org/packages/obsidian-llm-wiki"><img alt="PyPI downloads" src="https://img.shields.io/pypi/dm/obsidian-llm-wiki?style=flat"></a> <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/kytmanov/obsidian-llm-wiki-local?style=flat"></a> <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/kytmanov/obsidian-llm-wiki-local?style=flat"></a> <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/commits/master"><img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/kytmanov/obsidian-llm-wiki-local?style=flat"></a> <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/kytmanov/obsidian-llm-wiki-local/ci.yml?style=flat&amp;label=CI"></a> <a href="https://pypi.org/project/obsidian-llm-wiki/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/obsidian-llm-wiki?style=flat"></a></p>
 
 **Turn your raw notes into a self-improving, interlinked wiki — powered by a local LLM.**
 
