@@ -1,5 +1,12 @@
 # obsidian-llm-wiki
 
+[![CI status](https://img.shields.io/github/actions/workflow/status/kytmanov/obsidian-llm-wiki-local/ci.yml?style=flat&label=CI)](https://github.com/kytmanov/obsidian-llm-wiki-local/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/obsidian-llm-wiki?style=flat)](https://pypi.org/project/obsidian-llm-wiki/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/obsidian-llm-wiki?style=flat)](https://pypistats.org/packages/obsidian-llm-wiki)
+[![GitHub stars](https://img.shields.io/github/stars/kytmanov/obsidian-llm-wiki-local?style=flat)](https://github.com/kytmanov/obsidian-llm-wiki-local/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/kytmanov/obsidian-llm-wiki-local?style=flat)](https://github.com/kytmanov/obsidian-llm-wiki-local/network/members)
+[![GitHub last commit](https://img.shields.io/github/last-commit/kytmanov/obsidian-llm-wiki-local?style=flat)](https://github.com/kytmanov/obsidian-llm-wiki-local/commits/master)
+
 **Turn your raw notes into a self-improving, interlinked wiki — powered by a local LLM.**
 
 Drop a markdown file into a folder. The pipeline reads it, extracts concepts, and creates or updates wiki articles with the new knowledge. Reject a draft and explain why — the next compile addresses your feedback. Over time your wiki compounds: every note you add (and every draft you review) makes the whole smarter.
