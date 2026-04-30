@@ -1,7 +1,7 @@
 # obsidian-llm-wiki
 
 <p align="center">
-     <a href="https://pepy.tech/projects/obsidian-llm-wiki"><img src="https://static.pepy.tech/personalized-badge/obsidian-llm-wiki?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads" alt="PyPI Downloads"></a>
+     <a href="https://pepy.tech/projects/obsidian-llm-wiki"><img src="https://static.pepy.tech/personalized-badge/obsidian-llm-wiki?period=total&units=NONE&left_color=BLACK&right_color=GREEN&left_text=downloads" alt="PyPI Downloads"></a>
      <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/kytmanov/obsidian-llm-wiki-local?style=flat"></a> 
      <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/kytmanov/obsidian-llm-wiki-local?style=flat"></a> 
      <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/commits/master"><img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/kytmanov/obsidian-llm-wiki-local?style=flat"></a> 
