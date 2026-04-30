@@ -1,6 +1,13 @@
 # obsidian-llm-wiki
 
-<p align="center"><a href="https://pypistats.org/packages/obsidian-llm-wiki"><img alt="PyPI downloads" src="https://img.shields.io/pypi/dm/obsidian-llm-wiki?style=flat"></a> <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/kytmanov/obsidian-llm-wiki-local?style=flat"></a> <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/kytmanov/obsidian-llm-wiki-local?style=flat"></a> <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/commits/master"><img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/kytmanov/obsidian-llm-wiki-local?style=flat"></a> <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/kytmanov/obsidian-llm-wiki-local/ci.yml?style=flat&amp;label=CI"></a> <a href="https://pypi.org/project/obsidian-llm-wiki/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/obsidian-llm-wiki?style=flat"></a></p>
+<p align="center">
+     <a href="https://pepy.tech/projects/obsidian-llm-wiki"><img src="https://static.pepy.tech/personalized-badge/obsidian-llm-wiki?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads" alt="PyPI Downloads"></a>
+     <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/kytmanov/obsidian-llm-wiki-local?style=flat"></a> 
+     <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/network/members"><img alt="GitHub forks" src="https://img.shields.io/github/forks/kytmanov/obsidian-llm-wiki-local?style=flat"></a> 
+     <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/commits/master"><img alt="GitHub last commit" src="https://img.shields.io/github/last-commit/kytmanov/obsidian-llm-wiki-local?style=flat"></a> 
+     <a href="https://github.com/kytmanov/obsidian-llm-wiki-local/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/kytmanov/obsidian-llm-wiki-local/ci.yml?style=flat&amp;label=CI"></a> 
+     <a href="https://pypi.org/project/obsidian-llm-wiki/"><img alt="PyPI version" src="https://img.shields.io/pypi/v/obsidian-llm-wiki?style=flat"></a>
+</p>
 
 **Turn your raw notes into a self-improving, interlinked wiki — powered by a local LLM.**
 
