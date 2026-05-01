@@ -586,3 +586,24 @@ def test_summary_mentions_issue_counts(vault, config, db):
 def test_summary_healthy_when_no_issues(vault, config, db):
     result = run_lint(config, db)
     assert "healthy" in result.summary.lower()
+
+
+# ── Config sanity ─────────────────────────────────────────────────────────────
+
+
+def test_lint_warns_on_stale_article_max_tokens(vault, config, db):
+    """Existing wiki.toml files written by older `olw setup` runs pin
+    article_max_tokens=4096 (the old default). Surface a config_outdated issue
+    so users discover the stale value via `olw lint`."""
+    config.pipeline.article_max_tokens = 4096
+    result = run_lint(config, db)
+    config_issues = [i for i in result.issues if i.issue_type == "config_outdated"]
+    assert config_issues, "expected a config_outdated issue when article_max_tokens<=4096"
+    assert "article_max_tokens" in config_issues[0].description
+    assert "16384" in config_issues[0].suggestion
+
+
+def test_lint_silent_when_article_max_tokens_at_new_default(vault, config, db):
+    config.pipeline.article_max_tokens = 16384
+    result = run_lint(config, db)
+    assert not [i for i in result.issues if i.issue_type == "config_outdated"]

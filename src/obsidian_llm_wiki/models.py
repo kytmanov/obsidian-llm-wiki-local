@@ -169,6 +169,7 @@ class LintIssue(BaseModel):
         "inline_tag",
         "graph_noise",
         "graph_connectivity",
+        "config_outdated",
     ]
     description: str
     suggestion: str

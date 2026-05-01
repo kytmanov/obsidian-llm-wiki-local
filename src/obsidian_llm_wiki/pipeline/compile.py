@@ -27,7 +27,7 @@ import frontmatter as fm_lib
 
 from ..config import Config
 from ..models import ArticlePlan, CompilePlan, SingleArticle, WikiArticleRecord
-from ..openai_compat_client import LLMBadRequestError
+from ..openai_compat_client import LLMBadRequestError, LLMTruncatedError
 from ..protocols import LLMClientProtocol
 from ..sanitize import sanitize_tags
 from ..state import StateDB
@@ -112,24 +112,45 @@ _BUDGET_SAFETY = 200  # buffer
 
 _QUALITY_BONUS = {"high": 0.25, "medium": 0.1, "low": 0.0}
 
-# Max tokens to request for article / stub generation.
-# Real-world articles peak at ~2000 words ≈ 3000 tokens; 4096 gives headroom.
-# Keeping these well below typical model context windows avoids LM Studio's
-# "tokens to keep from initial prompt > context length" error (triggered when
-# max_tokens >= model's loaded n_ctx).
-_MAX_ARTICLE_PREDICT = 4096  # default soft cap; config may reduce or raise it
-_MAX_STUB_PREDICT = 512  # stubs capped at 150 words ≈ 200 tokens
+# Stubs are short by design (≤150 words). Hardcoded cap is intentional.
+_MAX_STUB_PREDICT = 512
+
+# Math floor: structured generation needs enough headroom for title + content + tags.
+# Below this, JSON schema can't reliably complete.
+_MIN_ARTICLE_PREDICT = 512
 
 
 def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _categorize_failure(exc: Exception) -> str:
+    """Map an exception type to a stable category string used in compile summaries."""
+    if isinstance(exc, LLMTruncatedError):
+        return "truncated"
+    if isinstance(exc, LLMBadRequestError):
+        return "bad_request"
+    if isinstance(exc, StructuredOutputError):
+        return "structured_output"
+    return "other"
+
+
 def _article_num_predict(config: Config, prompt: str, system: str) -> int:
+    """Return num_predict capped by both user config and remaining context budget.
+
+    Raises ValueError if the available output budget is below the floor needed for
+    reliable structured generation — caller should treat this as a per-article
+    failure (sources too large for context), not a global crash.
+    """
     estimated_prompt_tokens = max(1, len(system + prompt) // 4)
     available_output = config.effective_provider.heavy_ctx - estimated_prompt_tokens - 256
-    max_remaining = max(0, available_output)
-    return min(config.pipeline.article_max_tokens, max_remaining)
+    if available_output < _MIN_ARTICLE_PREDICT:
+        raise ValueError(
+            f"Source content too large for heavy_ctx={config.effective_provider.heavy_ctx}: "
+            f"prompt ~{estimated_prompt_tokens} tokens leaves only {available_output} "
+            f"for output (need >= {_MIN_ARTICLE_PREDICT}). Reduce sources or raise heavy_ctx."
+        )
+    return max(_MIN_ARTICLE_PREDICT, min(config.pipeline.article_max_tokens, available_output))
 
 
 def _build_olw_annotations(confidence: float, source_paths: list[str], db: StateDB) -> list[str]:
@@ -715,7 +736,14 @@ def compile_concepts(
 
     draft_paths: list[Path] = []
     failed: list[str] = []
+    failure_categories: dict[str, list[str]] = {}
     concept_timings: dict[str, float] = {}
+
+    def _record_failure(name: str, category: str) -> None:
+        if name not in failed:
+            failed.append(name)
+        failure_categories.setdefault(category, []).append(name)
+
     for idx, name in enumerate(concept_names, 1):
         if on_progress:
             on_progress(idx, total, name)
@@ -787,9 +815,9 @@ def compile_concepts(
                     num_predict=min(_MAX_STUB_PREDICT, config.effective_provider.fast_ctx),
                     stage="compile_article",
                 )
-            except (StructuredOutputError, LLMBadRequestError) as e:
+            except (StructuredOutputError, LLMBadRequestError, LLMTruncatedError) as e:
                 log.error("Failed to write stub '%s': %s", name, e)
-                failed.append(name)
+                _record_failure(name, _categorize_failure(e))
                 db.mark_concept_compile_state(name, source_paths, "failed", error=str(e))
                 continue
             draft_path = _write_draft(
@@ -826,7 +854,7 @@ def compile_concepts(
         )
         if not resolved_paths:
             log.warning("No readable sources for concept '%s', skipping", name)
-            failed.append(name)
+            _record_failure(name, "no_sources")
             db.mark_concept_compile_state(name, source_paths, "failed", error="No readable sources")
             continue
 
@@ -869,6 +897,15 @@ def compile_concepts(
                     else _WRITE_SYSTEM
                 ),
             )
+        except ValueError as e:
+            log.error("Failed to write '%s': %s", name, e)
+            _record_failure(name, "context_too_large")
+            db.mark_concept_compile_state(
+                name, resolved_paths or source_paths, "failed", error=str(e)
+            )
+            continue
+
+        try:
             result = request_structured(
                 client=client,
                 prompt=write_prompt,
@@ -883,9 +920,9 @@ def compile_concepts(
                 num_predict=num_predict,
                 stage="compile_article",
             )
-        except (StructuredOutputError, LLMBadRequestError) as e:
+        except (StructuredOutputError, LLMBadRequestError, LLMTruncatedError) as e:
             log.error("Failed to write '%s': %s", name, e)
-            failed.append(name)
+            _record_failure(name, _categorize_failure(e))
             db.mark_concept_compile_state(
                 name, resolved_paths or source_paths, "failed", error=str(e)
             )
@@ -908,6 +945,10 @@ def compile_concepts(
         elapsed = time.monotonic() - _t_concept
         concept_timings[name] = elapsed
         log.info("Draft written: %s (%.1fs)", draft_path.name, elapsed)
+
+    if failure_categories:
+        summary = ", ".join(f"{len(v)} {k}" for k, v in sorted(failure_categories.items()))
+        log.warning("Compile failures by category: %s", summary)
 
     return draft_paths, failed, concept_timings
 
@@ -1003,7 +1044,7 @@ def compile_notes(
             num_ctx=config.effective_provider.fast_ctx,
             stage="compile_plan",
         )
-    except (StructuredOutputError, LLMBadRequestError) as e:
+    except (StructuredOutputError, LLMBadRequestError, LLMTruncatedError) as e:
         log.error("Planning failed: %s", e)
         return [], ["__planning_failed__"]
 
@@ -1026,6 +1067,7 @@ def compile_notes(
     # ── Step 2: Write each article ────────────────────────────────────────────
     draft_paths: list[Path] = []
     failed: list[str] = []
+    failure_categories: dict[str, list[str]] = {}
     source_rel_paths = [str(p.relative_to(config.vault)) for p in paths]
 
     for article in plan.articles:
@@ -1042,6 +1084,14 @@ def compile_notes(
         write_prompt = _write_prompt_legacy(article, sources_text, existing_titles, language=lang)
 
         try:
+            num_predict = _article_num_predict(config, write_prompt, _WRITE_SYSTEM)
+        except ValueError as e:
+            log.error("Failed to write '%s': %s", article.title, e)
+            failed.append(article.title)
+            failure_categories.setdefault("context_too_large", []).append(article.title)
+            continue
+
+        try:
             result: SingleArticle = request_structured(
                 client=client,
                 prompt=write_prompt,
@@ -1049,12 +1099,13 @@ def compile_notes(
                 model=config.models.heavy,
                 system=_WRITE_SYSTEM,
                 num_ctx=config.effective_provider.heavy_ctx,
-                num_predict=min(_MAX_ARTICLE_PREDICT, config.effective_provider.heavy_ctx),
+                num_predict=num_predict,
                 stage="compile_article",
             )
-        except (StructuredOutputError, LLMBadRequestError) as e:
+        except (StructuredOutputError, LLMBadRequestError, LLMTruncatedError) as e:
             log.error("Failed to write '%s': %s", article.title, e)
             failed.append(article.title)
+            failure_categories.setdefault(_categorize_failure(e), []).append(article.title)
             continue
 
         # Preserve existing_meta if updating an existing article
@@ -1084,6 +1135,10 @@ def compile_notes(
         for p in paths:
             rel = str(p.relative_to(config.vault))
             db.mark_raw_status(rel, "compiled")
+
+    if failure_categories:
+        summary = ", ".join(f"{len(v)} {k}" for k, v in sorted(failure_categories.items()))
+        log.warning("Compile failures by category: %s", summary)
 
     return draft_paths, failed
 

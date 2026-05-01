@@ -1635,6 +1635,7 @@ def lint(vault_str, fix):
             "missing_frontmatter": "⚙",
             "stale": "✎",
             "low_confidence": "↓",
+            "config_outdated": "⚠",
         }
         from rich.markup import escape
 

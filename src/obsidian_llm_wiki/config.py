@@ -74,7 +74,8 @@ def default_wiki_toml(
         f"watch_debounce = 3.0\n"
         f"max_concepts_per_source = 8\n"
         f"ingest_parallel = false   # true = parallel chunks\n"
-        f"article_max_tokens = 4096 # soft cap; auto-reduced to fit context\n"
+        f"article_max_tokens = 16384 # soft cap on generated tokens per article; "
+        f"auto-reduced to fit context\n"
         f"{citation_line}"
         f'# source_citation_style = "legend-only"  # legend-only | inline-wikilink\n'
         f'# draft_media = "reference"  # reference | embed | omit\n'
@@ -114,12 +115,22 @@ class PipelineConfig(BaseModel):
     max_concepts_per_source: int = 8
     auto_maintain: bool = False
     ingest_parallel: bool = False  # parallel chunk analysis (needs OLLAMA_NUM_PARALLEL≥4)
-    article_max_tokens: int = 4096
+    article_max_tokens: int = 16384
     inline_source_citations: bool = False
     source_citation_style: str = "legend-only"
     draft_media: str = "reference"
     graph_quality_checks: bool = True
     language: str | None = None  # ISO 639-1 output language; autodetects from notes if unset
+
+    @field_validator("article_max_tokens")
+    @classmethod
+    def validate_article_max_tokens(cls, value: int) -> int:
+        if value < 512:
+            raise ValueError(
+                f"article_max_tokens must be >= 512 (got {value}); "
+                "values below this disable structured generation reliability."
+            )
+        return value
 
     @field_validator("source_citation_style")
     @classmethod
