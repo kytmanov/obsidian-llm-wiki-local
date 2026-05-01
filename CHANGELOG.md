@@ -17,7 +17,7 @@
 
 - **`pipeline.article_max_tokens` default raised to 16384** (was 4096). Restores the original `heavy_ctx // 2` design that was lowered defensively to dodge an LM Studio HTTP 400 already covered by an existing auto-downgrade.
 - **`PipelineConfig.article_max_tokens` validator** rejects values below 512 (the floor required for structured generation).
-- **`olw lint`** surfaces a `config_outdated` issue when `article_max_tokens <= 4096`, guiding existing users whose `wiki.toml` still pins the legacy default.
+- **`olw lint`** surfaces a `config_outdated` issue when `article_max_tokens == 4096`, guiding existing users whose `wiki.toml` still pins the legacy default.
 - **Compile failure summary** logs a per-category count (`truncated`, `bad_request`, `structured_output`, `context_too_large`) at the end of each compile run, distinguishing truncation issues from JSON-schema or no-source failures.
 - **`n_keep > n_ctx` auto-downgrade** now logs at WARNING (was DEBUG), surfacing the silent context-mismatch fallback to the user.
 

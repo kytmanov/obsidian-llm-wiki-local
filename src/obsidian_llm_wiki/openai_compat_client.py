@@ -313,15 +313,25 @@ class OpenAICompatClient:
                 if any(s in err_text for s in cloud_cap_signals) and any(
                     s in err_text for s in exceed_signals
                 ):
-                    halved = max(512, int(current_payload["max_tokens"]) // 2)
-                    log.warning(
-                        "%s: HTTP 400 max_tokens exceeds provider limit, halving %d → %d",
-                        self.provider_name,
-                        current_payload["max_tokens"],
-                        halved,
-                    )
-                    current_payload = {**current_payload, "max_tokens": halved}
-                    resp = self._post_chat(current_payload)
+                    current_max_tokens = int(current_payload["max_tokens"])
+                    if current_max_tokens > 512:
+                        halved = max(512, current_max_tokens // 2)
+                        log.warning(
+                            "%s: HTTP 400 max_tokens exceeds provider limit, halving %d → %d",
+                            self.provider_name,
+                            current_max_tokens,
+                            halved,
+                        )
+                        current_payload = {**current_payload, "max_tokens": halved}
+                        resp = self._post_chat(current_payload)
+                    else:
+                        log.warning(
+                            "%s: HTTP 400 max_tokens exceeds provider limit, but skipping "
+                            "auto-downgrade because max_tokens=%d is already at or below "
+                            "the 512 retry floor",
+                            self.provider_name,
+                            current_max_tokens,
+                        )
 
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 from obsidian_llm_wiki.openai_compat_client import (
+    LLMBadRequestError,
     LLMTruncatedError,
     OpenAICompatClient,
 )
@@ -35,9 +37,11 @@ def _ok_response(content: str, finish_reason: str | None = "stop") -> MagicMock:
 def _bad_response(text: str) -> MagicMock:
     resp = MagicMock()
     resp.status_code = 400
-    resp.raise_for_status.return_value = None
     resp.text = text
     resp.json.return_value = {"error": {"message": text}}
+    resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "400", request=MagicMock(), response=resp
+    )
     return resp
 
 
@@ -100,9 +104,23 @@ def test_cloud_auto_downgrade_does_not_fire_on_unrelated_400():
     bad = _bad_response('{"error": {"message": "model not found"}}')
     client._post_chat = MagicMock(return_value=bad)
 
-    with pytest.raises(Exception):
+    with pytest.raises(LLMBadRequestError):
         client.generate(prompt="hi", model="m", num_predict=4096)
     # Only one call — no downgrade attempted
+    assert client._post_chat.call_count == 1
+
+
+def test_cloud_auto_downgrade_skips_when_max_tokens_already_below_floor():
+    """Auto-downgrade must never increase the requested cap on a provider-limit 400."""
+    client = _make_client()
+    bad = _bad_response(
+        '{"error": {"message": "max_tokens exceeds the maximum allowed for this model"}}'
+    )
+    client._post_chat = MagicMock(return_value=bad)
+
+    with pytest.raises(LLMBadRequestError):
+        client.generate(prompt="hi", model="m", num_predict=256)
+
     assert client._post_chat.call_count == 1
 
 

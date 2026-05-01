@@ -459,15 +459,15 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
     # The default article_max_tokens was raised from 4096 to 16384 to avoid
     # silent truncation on long-form articles. Existing wiki.toml files written
     # by older `olw setup` runs still pin 4096 and won't pick up the new default.
-    if config.pipeline.article_max_tokens <= 4096:
+    if config.pipeline.article_max_tokens == 4096:
         issues.append(
             LintIssue(
                 path="wiki.toml",
                 issue_type="config_outdated",
                 description=(
                     f"pipeline.article_max_tokens is {config.pipeline.article_max_tokens} "
-                    "(legacy default). Long articles may truncate silently on local LLM "
-                    "providers."
+                    "(matches the legacy default 4096). Long articles may truncate "
+                    "silently on local LLM providers."
                 ),
                 suggestion=(
                     "Raise to 16384 in wiki.toml [pipeline] section, or delete the line "

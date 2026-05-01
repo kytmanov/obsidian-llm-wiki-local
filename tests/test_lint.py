@@ -598,9 +598,15 @@ def test_lint_warns_on_stale_article_max_tokens(vault, config, db):
     config.pipeline.article_max_tokens = 4096
     result = run_lint(config, db)
     config_issues = [i for i in result.issues if i.issue_type == "config_outdated"]
-    assert config_issues, "expected a config_outdated issue when article_max_tokens<=4096"
+    assert config_issues, "expected a config_outdated issue when article_max_tokens==4096"
     assert "article_max_tokens" in config_issues[0].description
     assert "16384" in config_issues[0].suggestion
+
+
+def test_lint_silent_when_article_max_tokens_below_legacy_default(vault, config, db):
+    config.pipeline.article_max_tokens = 2048
+    result = run_lint(config, db)
+    assert not [i for i in result.issues if i.issue_type == "config_outdated"]
 
 
 def test_lint_silent_when_article_max_tokens_at_new_default(vault, config, db):
