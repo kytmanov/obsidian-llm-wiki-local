@@ -350,6 +350,26 @@ def test_setup_wizard_summary_says_uninitialized_vault_will_use_preference(
     assert "Current vault: not set" not in result.output
 
 
+def test_setup_wizard_summary_mentions_support_and_no_telemetry(runner: CliRunner, cfg_dir: Path):
+    with patch("obsidian_llm_wiki.ollama_client.OllamaClient") as MockClient:
+        instance = MagicMock()
+        instance.healthcheck.return_value = False
+        instance.list_models_detailed.return_value = []
+        MockClient.return_value = instance
+
+        result = runner.invoke(
+            cli,
+            ["setup"],
+            input="\n\ngemma4:e4b\nqwen2.5:14b\n\n\n",
+            catch_exceptions=False,
+        )
+
+    assert result.exit_code == 0
+    assert "Feedback:" in result.output
+    assert "olw support" in result.output
+    assert "olw does not collect telemetry" in result.output
+
+
 def test_setup_wizard_model_number_selection(runner: CliRunner, cfg_dir: Path):
     """Selecting model by number from the list should resolve to model name."""
     with patch("obsidian_llm_wiki.ollama_client.OllamaClient") as MockClient:

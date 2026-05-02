@@ -31,6 +31,10 @@ from rich.table import Table
 console = Console()
 err_console = Console(stderr=True, style="bold red")
 
+PROJECT_REPO_URL = "https://github.com/kytmanov/obsidian-llm-wiki-local"
+PROJECT_ISSUES_URL = f"{PROJECT_REPO_URL}/issues"
+PROJECT_DISCUSSIONS_URL = f"{PROJECT_REPO_URL}/discussions"
+
 _EXPERIMENTAL_CITATIONS_COPY = (
     "Inline source citations link generated claims back to source pages. "
     "Experimental: small models may omit citations or add noisy markers. "
@@ -252,6 +256,7 @@ def cli():
     """obsidian-llm-wiki (olw) — 100% local Obsidian → wiki pipeline.
 
     Run `olw setup` for interactive configuration.
+    Run `olw support` for bug reports, suggestions, and feedback links.
     """
     import logging
 
@@ -869,6 +874,13 @@ def setup(non_interactive: bool, reset: bool, provider_preset: str | None):
             "  Next steps:",
             f"    [bold]olw init {init_target}[/bold]",
             "    [bold]olw run[/bold]  (or: olw ingest --all && olw compile)",
+            "",
+            "  Feedback:",
+            "    [bold]olw support[/bold]",
+            (
+                "    [dim]olw does not collect telemetry - bug reports, suggestions, and "
+                "experience notes are the main way this project improves.[/dim]"
+            ),
         ]
         console.print()
         console.print(
@@ -1461,6 +1473,27 @@ def clean(vault_str, yes):
 
 
 # ── doctor ───────────────────────────────────────────────────────────────────
+
+
+@cli.command()
+def support():
+    """Show bug-report, suggestion, and feedback links."""
+
+    console.print("[bold]olw support[/bold]\n")
+    console.print("olw does not collect telemetry.")
+    console.print("If something was confusing, useful, annoying, or missing, please tell us.\n")
+    console.print("Bug reports:")
+    console.print(f"  {PROJECT_ISSUES_URL}\n")
+    console.print("Suggestions and experience reports:")
+    console.print(f"  {PROJECT_DISCUSSIONS_URL}\n")
+    console.print("Source code:")
+    console.print(f"  {PROJECT_REPO_URL}\n")
+    console.print("When reporting a bug, include:")
+    console.print("  - `olw --version`")
+    console.print("  - your OS")
+    console.print("  - how you installed olw")
+    console.print("  - the command you ran")
+    console.print("  - the error message or unexpected behavior")
 
 
 @cli.command()

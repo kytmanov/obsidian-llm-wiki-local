@@ -101,6 +101,15 @@ olw setup
 
 An interactive wizard selects a provider, configures the URL and optional API key, picks fast and heavy models, sets an optional default vault, and offers experimental features. Takes ~30 seconds.
 
+## Feedback
+
+`olw` does not collect telemetry.
+
+If something was confusing, useful, annoying, or missing, please tell us:
+- Bug reports: https://github.com/kytmanov/obsidian-llm-wiki-local/issues
+- Suggestions and experience reports: https://github.com/kytmanov/obsidian-llm-wiki-local/discussions
+- Source code: https://github.com/kytmanov/obsidian-llm-wiki-local
+
 ```
 ╭──────────────────────────────────────────────────╮
 │      obsidian-llm-wiki  ·  setup                 │
