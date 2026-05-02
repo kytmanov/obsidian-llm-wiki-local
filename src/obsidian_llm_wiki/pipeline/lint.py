@@ -766,16 +766,15 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
             resolved_rel = str(resolved.relative_to(config.vault))
             if resolved_rel in synthesis_db_paths or "synthesis" in resolved.parts:
                 issues.append(
-                        LintIssue(
-                            path=rel_path,
-                            issue_type="synthesis_chain",
-                            description=(
-                                "Synthesis page references another synthesis page "
-                                "in source_pages."
-                            ),
-                            suggestion="Recreate the synthesis using concept or source pages only.",
-                            auto_fixable=False,
-                        )
+                    LintIssue(
+                        path=rel_path,
+                        issue_type="synthesis_chain",
+                        description=(
+                            "Synthesis page references another synthesis page in source_pages."
+                        ),
+                        suggestion="Recreate the synthesis using concept or source pages only.",
+                        auto_fixable=False,
+                    )
                 )
 
             try:

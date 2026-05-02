@@ -1636,12 +1636,16 @@ def query(vault_str, question, save, synthesize):
         and sys.stdout.isatty()
         and find_existing_synthesis(db, question) is not None
     ):
-        raw_choice = click.prompt(
-            "Duplicate synthesis exists - keep / suffix / update?",
-            type=click.Choice(["keep", "suffix", "update"], case_sensitive=False),
-            default="keep",
-            show_choices=False,
-        ).strip().lower()
+        raw_choice = (
+            click.prompt(
+                "Duplicate synthesis exists - keep / suffix / update?",
+                type=click.Choice(["keep", "suffix", "update"], case_sensitive=False),
+                default="keep",
+                show_choices=False,
+            )
+            .strip()
+            .lower()
+        )
         duplicate_strategy = {
             "keep": "keep_existing",
             "suffix": "save_with_suffix",

@@ -244,9 +244,10 @@ def test_next_available_path_honors_reserved_names_case_insensitively(tmp_path):
 def test_next_available_path_skips_reserved_suffixes(tmp_path):
     path = tmp_path / "Topic.md"
 
-    assert next_available_path(
-        path, reserved_names=["Topic.md", "Topic-2.md"]
-    ) == tmp_path / "Topic-3.md"
+    assert (
+        next_available_path(path, reserved_names=["Topic.md", "Topic-2.md"])
+        == tmp_path / "Topic-3.md"
+    )
 
 
 # ── generate_aliases ──────────────────────────────────────────────────────────
