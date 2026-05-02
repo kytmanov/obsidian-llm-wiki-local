@@ -283,7 +283,6 @@ max_concepts_per_source = 8
 ingest_parallel = false
 EOF
 
-HASH_BEFORE="$(dir_hash "$VAULT_DIR")"
 mkdir -p "$VAULT_DIR/wiki/synthesis"
 cat > "$VAULT_DIR/wiki/synthesis/existing-synthesis.md" <<'EOF'
 ---
@@ -296,6 +295,7 @@ status: published
 
 Body
 EOF
+HASH_BEFORE="$(dir_hash "$VAULT_DIR")"
 SYNTHESIS_HASH_BEFORE="$(dir_hash "$VAULT_DIR/wiki/synthesis")"
 
 header "Run olw compare"

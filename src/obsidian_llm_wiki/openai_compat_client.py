@@ -45,6 +45,50 @@ class LLMBadRequestError(LLMError):
     """
 
 
+class LLMTruncatedError(LLMError):
+    """Model stopped at the max_tokens cap (finish_reason="length"/"max_tokens") and
+    either returned no usable content or content known to be truncated.
+
+    Carries enough context for the pipeline to render an actionable error message
+    that points the user at the exact config knob to adjust.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        max_tokens: int,
+        completion_tokens: int | None = None,
+        finish_reason: str | None = None,
+    ) -> None:
+        self.provider = provider
+        self.max_tokens = max_tokens
+        self.completion_tokens = completion_tokens
+        self.finish_reason = finish_reason
+
+        if max_tokens > 0:
+            suggested = max(max_tokens * 2, 32768)
+            detail = (
+                f"output truncated at max_tokens={max_tokens} "
+                f"(finish_reason={finish_reason or 'unknown'}). "
+                f"Raise pipeline.article_max_tokens in your wiki.toml "
+                f"(suggested: {suggested}) or reduce source size."
+            )
+        elif finish_reason in ("length", "max_tokens"):
+            detail = (
+                f"output hit provider/model context limit "
+                f"(finish_reason={finish_reason}; no max_tokens sent). "
+                "Check that your loaded model n_ctx matches heavy_ctx in wiki.toml, "
+                "or reduce source size."
+            )
+        else:
+            detail = (
+                f"model returned empty response (finish_reason={finish_reason or 'unknown'}). "
+                "Likely causes: model context exhausted, response_format rejected silently, "
+                "or model/prompt incompatibility. Check model logs."
+            )
+        super().__init__(f"{provider}: {detail}")
+
+
 class OpenAICompatClient:
     def __init__(
         self,
@@ -244,14 +288,50 @@ class OpenAICompatClient:
             if resp.status_code == 400 and "max_tokens" in current_payload:
                 err_text = resp.text.lower()
                 if "tokens to keep" in err_text or "n_keep" in err_text:
-                    log.debug(
-                        "%s: HTTP 400 n_keep error, retrying without max_tokens",
+                    log.warning(
+                        "%s: HTTP 400 n_keep error, retrying without max_tokens "
+                        "(model n_ctx may be smaller than configured heavy_ctx; "
+                        "output is now uncapped for this request)",
                         self.provider_name,
                     )
                     current_payload = {
                         k: v for k, v in current_payload.items() if k != "max_tokens"
                     }
                     resp = self._post_chat(current_payload)
+
+            # Auto-downgrade 3: cloud provider rejects max_tokens as too large → halve+retry
+            if resp.status_code == 400 and "max_tokens" in current_payload:
+                err_text = resp.text.lower()
+                cloud_cap_signals = (
+                    "max_tokens",
+                    "max tokens",
+                    "completion_tokens",
+                    "completion tokens",
+                    "output tokens",
+                )
+                exceed_signals = ("exceed", "too large", "maximum", "greater than", "is too high")
+                if any(s in err_text for s in cloud_cap_signals) and any(
+                    s in err_text for s in exceed_signals
+                ):
+                    current_max_tokens = int(current_payload["max_tokens"])
+                    if current_max_tokens > 512:
+                        halved = max(512, current_max_tokens // 2)
+                        log.warning(
+                            "%s: HTTP 400 max_tokens exceeds provider limit, halving %d → %d",
+                            self.provider_name,
+                            current_max_tokens,
+                            halved,
+                        )
+                        current_payload = {**current_payload, "max_tokens": halved}
+                        resp = self._post_chat(current_payload)
+                    else:
+                        log.warning(
+                            "%s: HTTP 400 max_tokens exceeds provider limit, but skipping "
+                            "auto-downgrade because max_tokens=%d is already at or below "
+                            "the 512 retry floor",
+                            self.provider_name,
+                            current_max_tokens,
+                        )
 
             resp.raise_for_status()
         except httpx.HTTPStatusError as e:
@@ -266,7 +346,9 @@ class OpenAICompatClient:
 
         try:
             body = resp.json()
-            content = body["choices"][0]["message"]["content"]
+            choice = body["choices"][0]
+            content = choice["message"]["content"]
+            finish_reason = choice.get("finish_reason")
         except (KeyError, IndexError, ValueError) as e:
             self._last_stats = {"latency_ms": int((time.monotonic() - t0) * 1000)}
             raise LLMError(
@@ -279,6 +361,20 @@ class OpenAICompatClient:
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
         }
+
+        # Detect truncation: explicit length signal OR empty content (covers
+        # providers that omit finish_reason but emit empty body when capped).
+        is_length_signal = finish_reason in ("length", "max_tokens")
+        is_empty_content = not (content or "").strip()
+        if is_length_signal or is_empty_content:
+            cap = int(current_payload.get("max_tokens", 0)) if current_payload else 0
+            raise LLMTruncatedError(
+                provider=self.provider_name,
+                max_tokens=cap,
+                completion_tokens=usage.get("completion_tokens"),
+                finish_reason=finish_reason or ("empty_content" if is_empty_content else None),
+            )
+
         return content
 
     # ── Embeddings ────────────────────────────────────────────────────────────

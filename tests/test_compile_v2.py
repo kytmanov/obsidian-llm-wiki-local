@@ -66,11 +66,25 @@ def test_article_num_predict_respects_config_cap(config):
     assert _article_num_predict(config, prompt="short", system="system") == 2048
 
 
-def test_article_num_predict_clamps_to_remaining_context(config):
+def test_article_num_predict_raises_when_context_too_small(config):
+    """When prompt fills heavy_ctx, available output drops below the floor needed for
+    reliable structured generation. Raise so the caller can mark this concept as failed
+    rather than send max_tokens=0 (silent malformed behavior on some providers)."""
     config.provider = config.effective_provider.model_copy(update={"heavy_ctx": 1024})
-    prompt = "x" * 3200  # estimated 800 prompt tokens, leaving 0 after safety margin.
+    prompt = "x" * 3200  # ~800 prompt tokens; leaves <512 for output.
 
-    assert _article_num_predict(config, prompt=prompt, system="") == 0
+    with pytest.raises(ValueError, match="too large"):
+        _article_num_predict(config, prompt=prompt, system="")
+
+
+def test_article_num_predict_floors_at_min_when_math_dominates(config):
+    """When math allows between the floor and user cap, return the math limit."""
+    config.provider = config.effective_provider.model_copy(update={"heavy_ctx": 4096})
+    config.pipeline.article_max_tokens = 16384
+    prompt = "x" * 1000  # ~250 prompt tokens, leaves ~3590 available
+    result = _article_num_predict(config, prompt=prompt, system="")
+    assert 512 <= result <= 4096
+    assert result < 16384  # capped by math, not config
 
 
 # ── Annotations ───────────────────────────────────────────────────────────────

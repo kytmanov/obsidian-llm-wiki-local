@@ -32,12 +32,28 @@ def test_pipeline_config_inline_source_citations_from_dict():
 
 def test_pipeline_config_article_max_tokens_default():
     cfg = PipelineConfig()
-    assert cfg.article_max_tokens == 4096
+    assert cfg.article_max_tokens == 16384
 
 
 def test_pipeline_config_article_max_tokens_from_dict():
     cfg = PipelineConfig(**{"article_max_tokens": 2048})
     assert cfg.article_max_tokens == 2048
+
+
+def test_pipeline_config_article_max_tokens_validator_rejects_below_floor():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="article_max_tokens must be >= 512"):
+        PipelineConfig(article_max_tokens=128)
+
+
+def test_pipeline_config_article_max_tokens_validator_rejects_negative():
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="article_max_tokens must be >= 512"):
+        PipelineConfig(article_max_tokens=-1)
 
 
 def test_pipeline_config_language_from_dict():
@@ -68,7 +84,7 @@ def test_default_wiki_toml_contains_inline_source_citations_comment():
 
 def test_default_wiki_toml_contains_graph_quality_defaults():
     toml = default_wiki_toml()
-    assert "article_max_tokens = 4096" in toml
+    assert "article_max_tokens = 16384" in toml
     assert "source_citation_style" in toml
     assert "draft_media" in toml
     assert "graph_quality_checks = true" in toml

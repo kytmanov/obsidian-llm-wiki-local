@@ -10,7 +10,7 @@ import time
 
 import httpx
 
-from .openai_compat_client import LLMError
+from .openai_compat_client import LLMError, LLMTruncatedError
 
 log = logging.getLogger(__name__)
 
@@ -129,7 +129,23 @@ class OllamaClient:
             "prompt_tokens": body.get("prompt_eval_count"),
             "completion_tokens": body.get("eval_count"),
         }
-        return body["response"]
+        response_text = body.get("response", "")
+        done_reason = body.get("done_reason")
+
+        # Detect truncation: explicit "length" signal OR empty response (covers
+        # cases where Ollama doesn't surface done_reason but returns empty body).
+        is_length_signal = done_reason == "length"
+        is_empty_response = not (response_text or "").strip()
+        if is_length_signal or is_empty_response:
+            cap = num_predict if num_predict and num_predict > 0 else 0
+            raise LLMTruncatedError(
+                provider="ollama",
+                max_tokens=cap,
+                completion_tokens=body.get("eval_count"),
+                finish_reason=done_reason or ("empty_content" if is_empty_response else None),
+            )
+
+        return response_text
 
     # ── Embeddings ────────────────────────────────────────────────────────────
 

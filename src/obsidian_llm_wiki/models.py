@@ -174,6 +174,7 @@ class LintIssue(BaseModel):
         "graph_noise",
         "graph_connectivity",
         "synthesis_chain",
+        "config_outdated",
     ]
     description: str
     suggestion: str
