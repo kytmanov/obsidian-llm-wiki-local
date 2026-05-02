@@ -241,7 +241,7 @@ wheels = [
 
 [[package]]
 name = "obsidian-llm-wiki"
-version = "0.7.2"
+version = "0.8.0"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

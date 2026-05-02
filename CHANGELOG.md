@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0] - 2026-05-02
+
+### Highlights
+
+**v0.8.0 adds query synthesis as a first-class workflow.** You can now save grounded answers as durable synthesis articles in `wiki/synthesis/`, deduplicate them by normalized question hash, and keep compare runs isolated from active query and synthesis content.
+
+### New Features
+
+- **`olw query --synthesize`** — answer a question from the wiki and save the result as a published synthesis article in `wiki/synthesis/`.
+- **Question-hash deduplication** — repeated synthesis requests for the same normalized question reuse the existing article instead of creating duplicates.
+- **Saved query outputs** — query answers can be persisted in `wiki/queries/` alongside synthesis articles for later review.
+
+### Changes
+
+- **Safer synthesis bookkeeping** — synthesis articles are tracked in state with `kind`, `question_hash`, and source hashes so duplicate detection and update-in-place behavior stay deterministic.
+- **Query/link hygiene** — query resolution now understands `sources/...` links and lint flags synthesis-to-synthesis source chains as advisory issues instead of silently allowing them.
+- **Compare safety coverage** — compare runs explicitly avoid mutating active `wiki/queries/` and `wiki/synthesis/`, with smoke coverage for those guarantees.
+- **Docs refresh** — README and smoke guidance now cover query synthesis, LM Studio flows, and the latest support links.
+
 ## [0.7.2] - 2026-05-01
 
 ### Highlights

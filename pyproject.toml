@@ -1,6 +1,6 @@
 [project]
 name = "obsidian-llm-wiki"
-version = "0.7.2"
+version = "0.8.0"
 description = "Convert Obsidian notes into an AI-maintained wiki using local or cloud LLMs"
 readme = "README.md"
 requires-python = ">=3.11"
