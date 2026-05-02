@@ -284,6 +284,19 @@ ingest_parallel = false
 EOF
 
 HASH_BEFORE="$(dir_hash "$VAULT_DIR")"
+mkdir -p "$VAULT_DIR/wiki/synthesis"
+cat > "$VAULT_DIR/wiki/synthesis/existing-synthesis.md" <<'EOF'
+---
+title: Existing synthesis
+tags:
+  - synthesis
+kind: synthesis
+status: published
+---
+
+Body
+EOF
+SYNTHESIS_HASH_BEFORE="$(dir_hash "$VAULT_DIR/wiki/synthesis")"
 
 header "Run olw compare"
 if ! uv run olw compare \
@@ -329,11 +342,15 @@ check "summary.json has verdict" "grep -q '\"verdict\"' '$SUMMARY_JSON'"
 
 header "Safety checks"
 HASH_AFTER="$(dir_hash "$VAULT_DIR")"
+SYNTHESIS_HASH_AFTER="$(dir_hash "$VAULT_DIR/wiki/synthesis")"
 [[ "$HASH_BEFORE" == "$HASH_AFTER" ]] || fail "active vault changed outside .olw/compare"
 pass "active vault unchanged outside .olw/compare"
 PASS_COUNT=$((PASS_COUNT + 1))
 
 check "active wiki/queries not created" "[[ ! -d '$VAULT_DIR/wiki/queries' ]]"
+[[ "$SYNTHESIS_HASH_BEFORE" == "$SYNTHESIS_HASH_AFTER" ]] || fail "active wiki/synthesis changed"
+pass "active wiki/synthesis unchanged"
+PASS_COUNT=$((PASS_COUNT + 1))
 
 header "Summary"
 pass "$PASS_COUNT checks passed"

@@ -139,14 +139,21 @@ def _run_single_vault(
             if queries and not partial:
                 for q in queries:
                     try:
-                        answer, pages = run_query(
+                        query_result = run_query(
                             config=config,
                             client=client,
                             db=db,
                             question=q.question,
                             save=False,
+                            synthesize=False,
                         )
-                        query_results.append(QueryResult(id=q.id, answer=answer, pages=list(pages)))
+                        query_results.append(
+                            QueryResult(
+                                id=q.id,
+                                answer=query_result.answer,
+                                pages=list(query_result.selected_pages),
+                            )
+                        )
                     except Exception as e:  # noqa: BLE001
                         query_results.append(
                             QueryResult(id=q.id, answer="", pages=[], error=str(e))

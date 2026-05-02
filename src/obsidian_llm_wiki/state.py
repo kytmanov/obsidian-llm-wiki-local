@@ -11,6 +11,7 @@ Schema versioning: schema_version table tracks migration level.
   v4 — concept_aliases table; backfill from existing concept titles
   v5 — knowledge_items + item_mentions tables; backfill existing concepts
   v6 — ingest_chunks + concept_compile_state tables; backfill compile state from articles
+  v7 — synthesis article metadata on wiki_articles
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from .models import ItemMentionRecord, KnowledgeItemRecord, RawNoteRecord, WikiArticleRecord
 
-_CURRENT_SCHEMA_VERSION = 6
+_CURRENT_SCHEMA_VERSION = 7
 _CHECKPOINT_SCHEMA_VERSION = 1
 
 # Full current schema — idempotent (CREATE IF NOT EXISTS).
@@ -61,7 +62,11 @@ CREATE TABLE IF NOT EXISTS wiki_articles (
     updated_at     TEXT NOT NULL,
     is_draft       INTEGER NOT NULL DEFAULT 1,
     approved_at    TEXT,
-    approval_notes TEXT
+    approval_notes TEXT,
+    kind           TEXT NOT NULL DEFAULT 'concept',
+    question_hash  TEXT,
+    synthesis_sources TEXT,
+    synthesis_source_hashes TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rejections (
@@ -264,7 +269,30 @@ _VERSIONED_MIGRATIONS: dict[int, list[str]] = {
             "ON concept_compile_state(lower(concept_name))"
         ),
     ],
+    7: [
+        "ALTER TABLE wiki_articles ADD COLUMN kind TEXT NOT NULL DEFAULT 'concept'",
+        "ALTER TABLE wiki_articles ADD COLUMN question_hash TEXT",
+        "ALTER TABLE wiki_articles ADD COLUMN synthesis_sources TEXT",
+        "ALTER TABLE wiki_articles ADD COLUMN synthesis_source_hashes TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_wiki_articles_kind ON wiki_articles(kind)",
+        (
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_articles_question_hash "
+            "ON wiki_articles(question_hash) WHERE question_hash IS NOT NULL"
+        ),
+    ],
 }
+
+
+class SynthesisInsertConflictError(RuntimeError):
+    """Base error for synthesis insert conflicts."""
+
+
+class DuplicateSynthesisQuestionHashError(SynthesisInsertConflictError):
+    """Raised when a synthesis question_hash already exists."""
+
+
+class DuplicateArticlePathError(SynthesisInsertConflictError):
+    """Raised when a synthesis article path already exists."""
 
 
 class StateDB:
@@ -986,29 +1014,84 @@ class StateDB:
                 matches.append(article)
         return matches
 
+    def _upsert_article_row(self, record: WikiArticleRecord) -> None:
+        self._conn.execute(
+            """INSERT INTO wiki_articles
+                   (
+                       path, title, sources, content_hash, created_at, updated_at, is_draft,
+                       approved_at, approval_notes, kind, question_hash,
+                       synthesis_sources, synthesis_source_hashes
+                   )
+               VALUES (:path, :title, :sources, :content_hash,
+                       :created_at, :updated_at, :is_draft,
+                       :approved_at, :approval_notes, :kind, :question_hash,
+                       :synthesis_sources, :synthesis_source_hashes)
+               ON CONFLICT(path) DO UPDATE SET
+                   title=excluded.title,
+                   sources=excluded.sources,
+                   content_hash=excluded.content_hash,
+                   updated_at=excluded.updated_at,
+                   is_draft=excluded.is_draft,
+                   approved_at=excluded.approved_at,
+                   approval_notes=excluded.approval_notes,
+                   kind=excluded.kind,
+                   question_hash=excluded.question_hash,
+                   synthesis_sources=excluded.synthesis_sources,
+                   synthesis_source_hashes=excluded.synthesis_source_hashes""",
+            {
+                "path": record.path,
+                "title": record.title,
+                "sources": json.dumps(record.sources),
+                "content_hash": record.content_hash,
+                "created_at": record.created_at.isoformat(),
+                "updated_at": record.updated_at.isoformat(),
+                "is_draft": int(record.is_draft),
+                "approved_at": record.approved_at.isoformat() if record.approved_at else None,
+                "approval_notes": record.approval_notes,
+                "kind": record.kind,
+                "question_hash": record.question_hash,
+                "synthesis_sources": json.dumps(record.synthesis_sources),
+                "synthesis_source_hashes": json.dumps(record.synthesis_source_hashes),
+            },
+        )
+
     def upsert_article(self, record: WikiArticleRecord) -> None:
         with self._tx():
+            self._upsert_article_row(record)
+
+    def insert_synthesis_atomic(self, record: WikiArticleRecord) -> None:
+        try:
             self._conn.execute(
                 """INSERT INTO wiki_articles
-                       (path, title, sources, content_hash, created_at, updated_at, is_draft)
-                   VALUES (:path, :title, :sources, :content_hash,
-                           :created_at, :updated_at, :is_draft)
-                   ON CONFLICT(path) DO UPDATE SET
-                       title=excluded.title,
-                       sources=excluded.sources,
-                       content_hash=excluded.content_hash,
-                       updated_at=excluded.updated_at,
-                       is_draft=excluded.is_draft""",
-                {
-                    "path": record.path,
-                    "title": record.title,
-                    "sources": json.dumps(record.sources),
-                    "content_hash": record.content_hash,
-                    "created_at": record.created_at.isoformat(),
-                    "updated_at": record.updated_at.isoformat(),
-                    "is_draft": int(record.is_draft),
-                },
+                       (
+                           path, title, sources, content_hash, created_at, updated_at, is_draft,
+                           approved_at, approval_notes, kind, question_hash,
+                           synthesis_sources, synthesis_source_hashes
+                       )
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record.path,
+                    record.title,
+                    json.dumps(record.sources),
+                    record.content_hash,
+                    record.created_at.isoformat(),
+                    record.updated_at.isoformat(),
+                    int(record.is_draft),
+                    record.approved_at.isoformat() if record.approved_at else None,
+                    record.approval_notes,
+                    record.kind,
+                    record.question_hash,
+                    json.dumps(record.synthesis_sources),
+                    json.dumps(record.synthesis_source_hashes),
+                ),
             )
+        except sqlite3.IntegrityError as exc:
+            message = str(exc)
+            if "wiki_articles.question_hash" in message:
+                raise DuplicateSynthesisQuestionHashError(message) from exc
+            if "wiki_articles.path" in message:
+                raise DuplicateArticlePathError(message) from exc
+            raise SynthesisInsertConflictError(message) from exc
 
     def get_article(self, path: str) -> WikiArticleRecord | None:
         row = self._conn.execute("SELECT * FROM wiki_articles WHERE path = ?", (path,)).fetchone()
@@ -1020,6 +1103,13 @@ class StateDB:
         else:
             rows = self._conn.execute("SELECT * FROM wiki_articles").fetchall()
         return [_row_to_article(r) for r in rows]
+
+    def find_synthesis_by_question_hash(self, question_hash: str) -> WikiArticleRecord | None:
+        row = self._conn.execute(
+            "SELECT * FROM wiki_articles WHERE kind = 'synthesis' AND question_hash = ?",
+            (question_hash,),
+        ).fetchone()
+        return _row_to_article(row) if row else None
 
     def publish_article(self, old_path: str, new_path: str) -> None:
         with self._tx():
@@ -1303,6 +1393,18 @@ def _row_to_article(row: sqlite3.Row) -> WikiArticleRecord:
             else None
         ),
         approval_notes=row["approval_notes"] if "approval_notes" in keys else None,
+        kind=row["kind"] if "kind" in keys else "concept",
+        question_hash=row["question_hash"] if "question_hash" in keys else None,
+        synthesis_sources=(
+            json.loads(row["synthesis_sources"])
+            if "synthesis_sources" in keys and row["synthesis_sources"]
+            else []
+        ),
+        synthesis_source_hashes=(
+            json.loads(row["synthesis_source_hashes"])
+            if "synthesis_source_hashes" in keys and row["synthesis_source_hashes"]
+            else []
+        ),
     )
 
 

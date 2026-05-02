@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import obsidian_llm_wiki.vault as vault
 from obsidian_llm_wiki.vault import (
     atomic_write,
     build_wiki_frontmatter,
@@ -9,11 +10,14 @@ from obsidian_llm_wiki.vault import (
     ensure_wikilinks,
     extract_wikilinks,
     generate_aliases,
+    next_available_path,
     parse_note,
     sanitize_filename,
     sanitize_wikilink_target,
     write_note,
 )
+
+__all__ = ["vault"]
 
 # ── parse_note ────────────────────────────────────────────────────────────────
 
@@ -202,6 +206,47 @@ def test_atomic_write_no_tmp_left(tmp_path):
     atomic_write(p, "content")
     tmps = list(tmp_path.glob("*.tmp"))
     assert tmps == []
+
+
+def test_next_available_path_returns_same_path_when_free(tmp_path):
+    path = tmp_path / "Topic.md"
+    assert next_available_path(path) == path
+
+
+def test_next_available_path_suffixes_on_collision(tmp_path):
+    (tmp_path / "Topic.md").write_text("x")
+    assert next_available_path(tmp_path / "Topic.md") == tmp_path / "Topic-2.md"
+
+
+def test_next_available_path_suffixes_case_insensitive_collision(tmp_path):
+    (tmp_path / "Foo.md").write_text("x")
+    assert next_available_path(tmp_path / "foo.md") == tmp_path / "foo-2.md"
+
+
+def test_next_available_path_skips_taken_suffixes(tmp_path):
+    (tmp_path / "Topic.md").write_text("x")
+    (tmp_path / "Topic-2.md").write_text("x")
+    assert next_available_path(tmp_path / "Topic.md") == tmp_path / "Topic-3.md"
+
+
+def test_next_available_path_honors_reserved_names(tmp_path):
+    path = tmp_path / "Topic.md"
+
+    assert next_available_path(path, reserved_names=["Topic.md"]) == tmp_path / "Topic-2.md"
+
+
+def test_next_available_path_honors_reserved_names_case_insensitively(tmp_path):
+    path = tmp_path / "foo.md"
+
+    assert next_available_path(path, reserved_names=["Foo.md"]) == tmp_path / "foo-2.md"
+
+
+def test_next_available_path_skips_reserved_suffixes(tmp_path):
+    path = tmp_path / "Topic.md"
+
+    assert next_available_path(
+        path, reserved_names=["Topic.md", "Topic-2.md"]
+    ) == tmp_path / "Topic-3.md"
 
 
 # ── generate_aliases ──────────────────────────────────────────────────────────

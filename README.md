@@ -212,6 +212,38 @@ olw compare --heavy-model qwen2.5:14b
 
 `olw compare` rebuilds isolated preview vaults from the same `raw/` notes and tells you whether to switch, keep your current config, or review the diffs manually.
 
+## Query synthesis
+
+`olw query` answers from the published wiki without embeddings. Use `--save` to keep a dated Q&A note in `wiki/queries/`, or `--synthesize` to publish a reusable synthesis page in `wiki/synthesis/`.
+
+```bash
+# Just answer in the terminal
+olw query "What is backpropagation?"
+
+# Save a dated Q&A note under wiki/queries/
+olw query "What is backpropagation?" --save
+
+# Save a reusable synthesis article under wiki/synthesis/
+olw query "What is backpropagation?" --synthesize
+```
+
+Synthesis behavior:
+
+- synthesis pages are published notes tagged with `synthesis`
+- they store the source question, selected source pages, and source page body hashes in frontmatter
+- `wiki/index.md` includes a capped `## Synthesis` section sourced from the DB, ordered by newest first and then title
+- compare runs stay side-effect-free: query evaluation never writes to the active vault during `olw compare`
+- query-time synthesis does not create a new `[olw]` git commit
+
+Duplicate handling:
+
+- default behavior is `keep_existing` for the same normalized question
+- interactive terminals only prompt for a strategy when a duplicate already exists
+- `save_with_suffix` keeps the existing page and writes a new suffixed file
+- `update_in_place` rewrites the existing synthesis only when its body still matches the DB-tracked hash
+- if the existing synthesis was manually edited, `update_in_place` refuses to overwrite it
+- synthesis pages cannot cite another synthesis page as a source
+
 ### 7. Keep it running (optional)
 
 ```bash
@@ -414,6 +446,7 @@ my-wiki/
 │   │   ├── Quantum Computing Fundamentals.md
 │   │   └── ML Fundamentals.md
 │   ├── queries/                ← saved Q&A answers (olw query --save)
+│   ├── synthesis/              ← saved synthesis articles (olw query --synthesize)
 │   ├── .drafts/                ← pending human review
 │   ├── index.md                ← auto-generated navigation + routing layer
 │   └── log.md                  ← append-only operation history
@@ -543,6 +576,7 @@ After editing `wiki.toml`, no reinstall is needed. Run `olw compile --force` to 
 | `olw status --failed` | List failed notes with error messages |
 | `olw query "question"` | Answer from your wiki |
 | `olw query "..." --save` | Answer and save to `wiki/queries/` |
+| `olw query "..." --synthesize` | Answer and save a synthesis article to `wiki/synthesis/` |
 | `olw lint` | Health check: orphans, broken links, stale articles |
 | `olw lint --fix` | Auto-fix missing frontmatter fields |
 | `olw watch` | File watcher — auto-pipeline on new notes |

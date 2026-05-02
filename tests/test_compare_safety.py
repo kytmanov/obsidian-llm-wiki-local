@@ -99,6 +99,21 @@ def test_compare_never_creates_active_queries_dir(tmp_path, patched_pipeline):
     assert not (vault / "wiki" / "queries").exists()
 
 
+def test_compare_never_creates_active_synthesis_dir(tmp_path, patched_pipeline):
+    vault = _make_vault(tmp_path)
+    synthesis = vault / "wiki" / "synthesis"
+    synthesis.mkdir()
+    existing = synthesis / "existing.md"
+    existing.write_text("---\ntitle: Existing synthesis\n---\nBody\n")
+    before = _dir_hash(synthesis)
+    queries = tmp_path / "queries.toml"
+    queries.write_text('[query]\nid = "q1"\nquestion = "What?"\n')
+    current = Config.from_vault(vault)
+    challenger = Config.from_vault(vault, models={"heavy": "new-heavy"})
+    run_compare(current, challenger, vault / ".olw" / "compare", queries_path=queries)
+    assert _dir_hash(synthesis) == before
+
+
 def test_compare_rejects_programmatic_out_dir_inside_raw(tmp_path, patched_pipeline):
     vault = _make_vault(tmp_path)
     current = Config.from_vault(vault)

@@ -760,6 +760,27 @@ check "query --save exits 0" "test $_QS_RC -eq 0"
 QUERY_COUNT=$(find "$VAULT_DIR/wiki/queries" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
 check "query --save creates file in wiki/queries/" "test \"$QUERY_COUNT\" -ge 1"
 
+info "Running query with --synthesize..."
+_QSY_RC=0
+QUERY_SYNTH_OUT=$($OLW query --synthesize "What algorithms are used in quantum computing?" 2>&1) || _QSY_RC=$?
+echo "$QUERY_SYNTH_OUT"
+check "query --synthesize exits 0" "test $_QSY_RC -eq 0"
+SYNTH_COUNT=$(find "$VAULT_DIR/wiki/synthesis" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+check "query --synthesize creates file in wiki/synthesis/" "test \"$SYNTH_COUNT\" -ge 1"
+_SYNTH_FILE=$(find "$VAULT_DIR/wiki/synthesis" -name "*.md" | head -1)
+check "synthesis frontmatter records kind" "grep -q '^kind: synthesis' \"$_SYNTH_FILE\""
+check "synthesis frontmatter records question hash" "grep -q '^question_hash:' \"$_SYNTH_FILE\""
+check "synthesis includes sources section" "grep -q '^## Sources' \"$_SYNTH_FILE\""
+check "index lists synthesis section" "grep -q '^## Synthesis' \"$VAULT_DIR/wiki/index.md\""
+
+info "Re-running query with --synthesize to check duplicate handling..."
+_QSY2_RC=0
+QUERY_SYNTH_DUP_OUT=$($OLW query --synthesize "What algorithms are used in quantum computing?" 2>&1) || _QSY2_RC=$?
+echo "$QUERY_SYNTH_DUP_OUT"
+check "duplicate query --synthesize exits 0" "test $_QSY2_RC -eq 0"
+SYNTH_COUNT_AFTER=$(find "$VAULT_DIR/wiki/synthesis" -name "*.md" 2>/dev/null | wc -l | tr -d ' ')
+check "duplicate query --synthesize keeps existing file" "test \"$SYNTH_COUNT_AFTER\" = \"$SYNTH_COUNT\""
+
 # ── Lint (Stage 3) ────────────────────────────────────────────────────────────
 header "olw lint (Stage 3)"
 LINT_OUT=$($OLW lint 2>&1); _LINT_RC=$?

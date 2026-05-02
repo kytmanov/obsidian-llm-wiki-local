@@ -254,6 +254,21 @@ def _normalized_graph_title(title: str) -> str:
     return re.sub(r"\s+", " ", title.replace("-", " ").strip()).casefold()
 
 
+def _source_page_hash_map(meta: dict) -> dict[str, str]:
+    entries = meta.get("source_page_hashes", [])
+    if not isinstance(entries, list):
+        return {}
+    result: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        hash_value = entry.get("hash")
+        if isinstance(path, str) and isinstance(hash_value, str):
+            result[path] = hash_value
+    return result
+
+
 def _add_graph_quality_issues(
     config: Config,
     title_index: dict[str, Path],
@@ -652,12 +667,117 @@ def run_lint(config: Config, db: StateDB, fix: bool = False) -> LintResult:
     if config.pipeline.graph_quality_checks:
         _add_graph_quality_issues(config, title_index, issues)
 
+    concept_titles = {
+        article.title.casefold()
+        for article in db_articles.values()
+        if article.kind == "concept" and not article.is_draft
+    }
+    synthesis_db_paths = {
+        path
+        for path, article in db_articles.items()
+        if article.kind == "synthesis" and not article.is_draft
+    }
+
+    for page in sorted(config.synthesis_dir.glob("*.md")) if config.synthesis_dir.exists() else []:
+        rel_path = str(page.relative_to(config.vault))
+        db_rec = db_articles.get(rel_path)
+        if db_rec is None:
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="orphan",
+                    description="Synthesis file exists without a matching state row.",
+                    suggestion="Re-save the synthesis article or remove the orphan file.",
+                    auto_fixable=False,
+                )
+            )
+            continue
+
+        try:
+            meta, _ = parse_note(page)
+        except Exception as exc:
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="missing_frontmatter",
+                    description=f"Failed to parse frontmatter: {exc}",
+                    suggestion="Fix YAML syntax in frontmatter.",
+                    auto_fixable=False,
+                )
+            )
+            continue
+
+        if db_rec.title.casefold() in concept_titles:
+            issues.append(
+                LintIssue(
+                    path=rel_path,
+                    issue_type="graph_noise",
+                    description="Synthesis title shadows an existing concept title.",
+                    suggestion="Rename the synthesis page or prefer the concept page.",
+                    auto_fixable=False,
+                )
+            )
+
+        source_pages = meta.get("source_pages", [])
+        if isinstance(source_pages, str):
+            source_pages = [source_pages]
+        elif not isinstance(source_pages, list):
+            source_pages = []
+
+        hash_map = _source_page_hash_map(meta)
+        for source_page in source_pages:
+            if not isinstance(source_page, str):
+                continue
+            resolved = title_index.get(source_page.lower())
+            if resolved is None:
+                issues.append(
+                    LintIssue(
+                        path=rel_path,
+                        issue_type="broken_link",
+                        description=f"Source page '{source_page}' no longer resolves.",
+                        suggestion="Remove the stale source or restore the page.",
+                        auto_fixable=False,
+                    )
+                )
+                continue
+
+            resolved_rel = str(resolved.relative_to(config.vault))
+            if resolved_rel in synthesis_db_paths or "synthesis" in resolved.parts:
+                issues.append(
+                        LintIssue(
+                            path=rel_path,
+                            issue_type="synthesis_chain",
+                            description=(
+                                "Synthesis page references another synthesis page "
+                                "in source_pages."
+                            ),
+                            suggestion="Recreate the synthesis using concept or source pages only.",
+                            auto_fixable=False,
+                        )
+                )
+
+            try:
+                _, source_body = parse_note(resolved)
+            except Exception:
+                continue
+            recorded_hash = hash_map.get(resolved_rel)
+            if recorded_hash and recorded_hash != _body_hash(source_body):
+                issues.append(
+                    LintIssue(
+                        path=rel_path,
+                        issue_type="stale",
+                        description=f"Recorded source hash drifted for {resolved_rel}.",
+                        suggestion="Re-run the synthesis to refresh source provenance.",
+                        auto_fixable=False,
+                    )
+                )
+
     # ── Health score ──────────────────────────────────────────────────────────
     # Score based on structural wiki health. Graph-quality findings are advisory:
     # they should be visible in lint output without turning a structurally healthy
     # vault into a failing one or driving the score negative.
     total = max(len(all_pages), 1)
-    advisory_issue_types = {"graph_noise", "graph_connectivity"}
+    advisory_issue_types = {"graph_noise", "graph_connectivity", "synthesis_chain"}
     pages_with_issues = len(
         {iss.path for iss in issues if iss.issue_type not in advisory_issue_types}
     )

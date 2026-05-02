@@ -56,8 +56,10 @@ def patched_pipeline(monkeypatch):
         "obsidian_llm_wiki.pipeline.orchestrator.PipelineOrchestrator.run", fake_run
     )
 
+    from obsidian_llm_wiki.pipeline.query import QueryRunResult
+
     def fake_query(**_kw):
-        return ("Answer.", ["page1"])
+        return QueryRunResult(answer="Answer.", selected_pages=["page1"])
 
     monkeypatch.setattr("obsidian_llm_wiki.pipeline.query.run_query", fake_query)
 

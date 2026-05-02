@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -186,6 +187,24 @@ def sanitize_filename(title: str, max_len: int = 100) -> str:
         # Truncate at word boundary
         name = name[:max_len].rsplit(" ", 1)[0]
     return name or "untitled"
+
+
+def next_available_path(path: Path, reserved_names: Iterable[str] | None = None) -> Path:
+    """Return a non-colliding path, treating existing names case-insensitively."""
+    parent = path.parent
+    stem = path.stem
+    suffix = path.suffix
+    existing_lower = {p.name.casefold() for p in parent.iterdir()} if parent.exists() else set()
+    if reserved_names is not None:
+        existing_lower.update(name.casefold() for name in reserved_names)
+    candidate = path
+    n = 2
+
+    while candidate.name.casefold() in existing_lower:
+        candidate = parent / f"{stem}-{n}{suffix}"
+        n += 1
+
+    return candidate
 
 
 def atomic_write(path: Path, content: str, encoding: str = "utf-8") -> None:

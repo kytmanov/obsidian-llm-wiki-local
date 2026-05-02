@@ -36,7 +36,16 @@ Three-stage local LLM pipeline turning Obsidian raw notes into a synthesized wik
 
 **Data flow:** `raw/*.md` → **ingest** (fast model → AnalysisResult) → **compile** (heavy model → SingleArticle drafts) → **approve** (publish to `wiki/`)
 
-**Vault structure:** `raw/` (immutable user notes), `wiki/` (published articles), `wiki/.drafts/`, `wiki/sources/`, `wiki/queries/`, `.olw/state.db`
+**Vault structure:** `raw/` (immutable user notes), `wiki/` (published articles), `wiki/.drafts/`, `wiki/sources/`, `wiki/queries/`, `wiki/synthesis/`, `.olw/state.db`
+
+### Query synthesis
+
+- `olw query --save` writes dated Q&A notes to `wiki/queries/`
+- `olw query --synthesize` writes published synthesis articles to `wiki/synthesis/`
+- synthesis rows are tracked in `wiki_articles` with `kind="synthesis"`, `question_hash`, `synthesis_sources`, and `synthesis_source_hashes`
+- duplicate syntheses are keyed by normalized question hash
+- `update_in_place` must respect manual-edit protection by comparing the on-disk body hash with the DB `content_hash`
+- compare runs must not create or mutate active `wiki/synthesis/` content
 
 ### Key modules (`src/obsidian_llm_wiki/`)
 

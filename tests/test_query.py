@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from obsidian_llm_wiki.config import Config
+from obsidian_llm_wiki.indexer import generate_index
+from obsidian_llm_wiki.models import WikiArticleRecord
 from obsidian_llm_wiki.pipeline.query import _find_page, _load_pages, run_query
 from obsidian_llm_wiki.state import StateDB
 from obsidian_llm_wiki.vault import write_note
@@ -70,19 +72,19 @@ def test_run_query_returns_answer(vault, config, db):
     answer_json = json.dumps({"answer": "[[Quantum Computing]] uses qubits."})
     client = _make_client(selection_json, answer_json)
 
-    answer, pages = run_query(config, client, db, "What is quantum computing?")
+    result = run_query(config, client, db, "What is quantum computing?")
 
-    assert "qubits" in answer.lower()
-    assert "Quantum Computing" in pages
+    assert "qubits" in result.answer.lower()
+    assert "Quantum Computing" in result.selected_pages
     assert client.generate.call_count == 2
 
 
 def test_run_query_no_index_returns_helpful_message(vault, config, db):
     client = MagicMock()
-    answer, pages = run_query(config, client, db, "Any question")
+    result = run_query(config, client, db, "Any question")
 
-    assert "index" in answer.lower()
-    assert pages == []
+    assert "index" in result.answer.lower()
+    assert result.selected_pages == []
     client.generate.assert_not_called()
 
 
@@ -94,9 +96,9 @@ def test_run_query_missing_page_skipped(vault, config, db):
     answer_json = json.dumps({"answer": "General answer."})
     client = _make_client(selection_json, answer_json)
 
-    answer, pages = run_query(config, client, db, "question?")
+    result = run_query(config, client, db, "question?")
     # Still gets an answer (with fallback context)
-    assert answer == "General answer."
+    assert result.answer == "General answer."
 
 
 def test_run_query_save_creates_file(vault, config, db):
@@ -140,6 +142,90 @@ def test_find_page_by_frontmatter_title(vault, config):
 
 def test_find_page_not_found_returns_none(vault, config):
     assert _find_page(config, "Does Not Exist") is None
+
+
+def test_find_page_prefers_concept_over_synthesis(vault, config, db):
+    concept = config.wiki_dir / "Topic.md"
+    synthesis = config.synthesis_dir / "Topic.md"
+    write_note(concept, {"title": "Topic", "tags": [], "status": "published"}, "Concept body.")
+    write_note(
+        synthesis,
+        {"title": "Topic", "tags": ["synthesis"], "kind": "synthesis", "status": "published"},
+        "Synthesis body.",
+    )
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/synthesis/Topic.md",
+            title="Topic",
+            sources=[],
+            content_hash="hash",
+            is_draft=False,
+            kind="synthesis",
+            question_hash="qh",
+        )
+    )
+
+    found = _find_page(config, "Topic", db=db)
+
+    assert found == concept
+
+
+def test_generate_index_lists_synthesis_from_db_only(vault, config, db):
+    write_note(
+        config.synthesis_dir / "Tracked.md",
+        {"title": "Tracked", "tags": ["synthesis"], "kind": "synthesis", "status": "published"},
+        "Tracked body.",
+    )
+    write_note(
+        config.synthesis_dir / "Orphan.md",
+        {"title": "Orphan", "tags": ["synthesis"], "kind": "synthesis", "status": "published"},
+        "Orphan body.",
+    )
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/synthesis/Tracked.md",
+            title="Tracked",
+            sources=[],
+            content_hash="hash",
+            is_draft=False,
+            kind="synthesis",
+            question_hash="qh",
+        )
+    )
+
+    index_path = generate_index(config, db)
+    index_text = index_path.read_text(encoding="utf-8")
+
+    assert "## Synthesis" in index_text
+    assert "Tracked" in index_text
+    assert "Orphan" not in index_text
+
+
+def test_generate_index_caps_synthesis_section(vault, config, db):
+    for i in range(27):
+        title = f"Topic {i:02d}"
+        path = config.synthesis_dir / f"{title}.md"
+        write_note(
+            path,
+            {"title": title, "tags": ["synthesis"], "kind": "synthesis", "status": "published"},
+            "Body.",
+        )
+        db.upsert_article(
+            WikiArticleRecord(
+                path=str(path.relative_to(config.vault)),
+                title=title,
+                sources=[],
+                content_hash=f"hash-{i}",
+                is_draft=False,
+                kind="synthesis",
+                question_hash=f"qh-{i}",
+            )
+        )
+
+    index_text = generate_index(config, db).read_text(encoding="utf-8")
+
+    assert index_text.count("[[Topic ") == 25
+    assert "_(2 more synthesis pages not shown)_" in index_text
 
 
 def test_load_pages_truncates_to_max_chars(vault, config):

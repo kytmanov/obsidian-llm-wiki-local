@@ -203,6 +203,10 @@ class Config(BaseModel):
         return self.vault / "wiki" / "queries"
 
     @property
+    def synthesis_dir(self) -> Path:
+        return self.vault / "wiki" / "synthesis"
+
+    @property
     def schema_path(self) -> Path:
         return self.vault / "vault-schema.md"
 

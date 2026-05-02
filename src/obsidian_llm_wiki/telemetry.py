@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -34,7 +35,14 @@ class LLMCallEvent:
     extra: dict = field(default_factory=dict)
 
 
+@dataclass
+class AppEvent:
+    name: str
+    payload: dict[str, Any]
+
+
 _sink: ContextVar[list[LLMCallEvent] | None] = ContextVar("olw_llm_telemetry", default=None)
+_app_sink: ContextVar[list[AppEvent] | None] = ContextVar("olw_app_telemetry", default=None)
 
 
 def emit(event: LLMCallEvent) -> None:
@@ -47,6 +55,16 @@ def current_sink() -> list[LLMCallEvent] | None:
     return _sink.get()
 
 
+def emit_app_event(event: AppEvent) -> None:
+    sink = _app_sink.get()
+    if sink is not None:
+        sink.append(event)
+
+
+def current_app_sink() -> list[AppEvent] | None:
+    return _app_sink.get()
+
+
 @contextmanager
 def telemetry_sink() -> Iterator[list[LLMCallEvent]]:
     events: list[LLMCallEvent] = []
@@ -55,3 +73,13 @@ def telemetry_sink() -> Iterator[list[LLMCallEvent]]:
         yield events
     finally:
         _sink.reset(token)
+
+
+@contextmanager
+def app_event_sink() -> Iterator[list[AppEvent]]:
+    events: list[AppEvent] = []
+    token = _app_sink.set(events)
+    try:
+        yield events
+    finally:
+        _app_sink.reset(token)

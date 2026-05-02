@@ -15,7 +15,14 @@ import pytest
 from obsidian_llm_wiki.models import AnalysisResult, SingleArticle
 from obsidian_llm_wiki.ollama_client import OllamaClient
 from obsidian_llm_wiki.structured_output import StructuredOutputError, request_structured
-from obsidian_llm_wiki.telemetry import current_sink, telemetry_sink
+from obsidian_llm_wiki.telemetry import (
+    AppEvent,
+    app_event_sink,
+    current_app_sink,
+    current_sink,
+    emit_app_event,
+    telemetry_sink,
+)
 
 
 def _valid_analysis() -> str:
@@ -267,3 +274,21 @@ def test_stage_is_passthrough():
 
     assert events[0].stage == "query_answer"
     assert events[0].model == "qwen2.5:14b"
+
+
+def test_app_event_sink_collects_events():
+    assert current_app_sink() is None
+
+    with app_event_sink() as events:
+        emit_app_event(AppEvent(name="query_synthesize", payload={"ok": True}))
+
+    assert len(events) == 1
+    assert events[0].name == "query_synthesize"
+    assert events[0].payload == {"ok": True}
+
+
+def test_app_event_sink_is_context_scoped():
+    assert current_app_sink() is None
+    with app_event_sink() as events:
+        assert current_app_sink() is events
+    assert current_app_sink() is None

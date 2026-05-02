@@ -574,6 +574,172 @@ def test_lint_checks_source_pages(vault, config, db):
     assert any("sources" in i.path for i in tag_issues)
 
 
+def test_lint_flags_orphan_synthesis_file(vault, config, db):
+    write_note(
+        config.synthesis_dir / "Orphan.md",
+        {"title": "Orphan", "tags": ["synthesis"], "kind": "synthesis", "status": "published"},
+        "Body.",
+    )
+
+    result = run_lint(config, db)
+
+    orphan = [i for i in result.issues if i.issue_type == "orphan"]
+    assert any(i.path == "wiki/synthesis/Orphan.md" for i in orphan)
+
+
+def test_lint_flags_missing_synthesis_source_page(vault, config, db):
+    path = config.synthesis_dir / "Topic.md"
+    write_note(
+        path,
+        {
+            "title": "Topic",
+            "tags": ["synthesis"],
+            "kind": "synthesis",
+            "status": "published",
+            "source_pages": ["Missing Topic"],
+            "source_page_hashes": [{"path": "wiki/Missing Topic.md", "hash": "abc"}],
+        },
+        "Body.",
+    )
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/synthesis/Topic.md",
+            title="Topic",
+            sources=[],
+            content_hash="hash",
+            is_draft=False,
+            kind="synthesis",
+            question_hash="qh",
+        )
+    )
+
+    result = run_lint(config, db)
+
+    broken = [i for i in result.issues if i.issue_type == "broken_link"]
+    assert any("Missing Topic" in i.description for i in broken)
+
+
+def test_lint_flags_synthesis_source_hash_drift(vault, config, db):
+    _write_page(config, "Alpha", "Original body.")
+    path = config.synthesis_dir / "Topic.md"
+    write_note(
+        path,
+        {
+            "title": "Topic",
+            "tags": ["synthesis"],
+            "kind": "synthesis",
+            "status": "published",
+            "source_pages": ["Alpha"],
+            "source_page_hashes": [{"path": "wiki/Alpha.md", "hash": "wrong"}],
+        },
+        "Body.",
+    )
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/synthesis/Topic.md",
+            title="Topic",
+            sources=[],
+            content_hash="hash",
+            is_draft=False,
+            kind="synthesis",
+            question_hash="qh",
+        )
+    )
+
+    result = run_lint(config, db)
+
+    stale = [i for i in result.issues if i.issue_type == "stale"]
+    assert any("wiki/Alpha.md" in i.description for i in stale)
+
+
+def test_lint_flags_synthesis_chain(vault, config, db):
+    write_note(
+        config.synthesis_dir / "Parent.md",
+        {"title": "Parent", "tags": ["synthesis"], "kind": "synthesis", "status": "published"},
+        "Body.",
+    )
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/synthesis/Parent.md",
+            title="Parent",
+            sources=[],
+            content_hash="hash-parent",
+            is_draft=False,
+            kind="synthesis",
+            question_hash="qh-parent",
+        )
+    )
+    write_note(
+        config.synthesis_dir / "Child.md",
+        {
+            "title": "Child",
+            "tags": ["synthesis"],
+            "kind": "synthesis",
+            "status": "published",
+            "source_pages": ["Parent"],
+            "source_page_hashes": [{"path": "wiki/synthesis/Parent.md", "hash": "hash-parent"}],
+        },
+        "Body.",
+    )
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/synthesis/Child.md",
+            title="Child",
+            sources=[],
+            content_hash="hash-child",
+            is_draft=False,
+            kind="synthesis",
+            question_hash="qh-child",
+        )
+    )
+
+    result = run_lint(config, db)
+
+    chains = [i for i in result.issues if i.issue_type == "synthesis_chain"]
+    assert chains
+
+
+def test_lint_flags_synthesis_title_shadowing_concept(vault, config, db):
+    _write_page(config, "Topic", "Body.")
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/Topic.md",
+            title="Topic",
+            sources=[],
+            content_hash="hash-concept",
+            is_draft=False,
+        )
+    )
+    write_note(
+        config.synthesis_dir / "Topic Summary.md",
+        {
+            "title": "Topic",
+            "tags": ["synthesis"],
+            "kind": "synthesis",
+            "status": "published",
+            "source_pages": ["Topic"],
+            "source_page_hashes": [{"path": "wiki/Topic.md", "hash": "hash-concept"}],
+        },
+        "Body.",
+    )
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/synthesis/Topic Summary.md",
+            title="Topic",
+            sources=[],
+            content_hash="hash-synthesis",
+            is_draft=False,
+            kind="synthesis",
+            question_hash="qh",
+        )
+    )
+
+    result = run_lint(config, db)
+
+    graph = [i for i in result.issues if i.issue_type == "graph_noise"]
+    assert any("shadows an existing concept title" in i.description for i in graph)
+
+
 # ── Summary string ────────────────────────────────────────────────────────────
 
 

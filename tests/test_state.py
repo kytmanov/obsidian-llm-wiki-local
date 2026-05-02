@@ -10,7 +10,11 @@ from obsidian_llm_wiki.models import (
     RawNoteRecord,
     WikiArticleRecord,
 )
-from obsidian_llm_wiki.state import _CURRENT_SCHEMA_VERSION, StateDB
+from obsidian_llm_wiki.state import (
+    _CURRENT_SCHEMA_VERSION,
+    DuplicateSynthesisQuestionHashError,
+    StateDB,
+)
 
 
 @pytest.fixture
@@ -412,6 +416,77 @@ def test_approve_article_sets_timestamp(db):
     assert art is not None
     assert art.approved_at is not None
     assert art.approval_notes == "Looks great"
+
+
+def test_synthesis_article_round_trips_extended_fields(db):
+    article = WikiArticleRecord(
+        path="wiki/synthesis/topic.md",
+        title="Topic",
+        sources=[],
+        content_hash="hash",
+        is_draft=False,
+        kind="synthesis",
+        question_hash="abc123def4567890",
+        synthesis_sources=["wiki/Alpha.md", "wiki/Beta.md"],
+        synthesis_source_hashes=[["wiki/Alpha.md", "ha"], ["wiki/Beta.md", "hb"]],
+    )
+
+    db.upsert_article(article)
+
+    got = db.get_article("wiki/synthesis/topic.md")
+    assert got is not None
+    assert got.kind == "synthesis"
+    assert got.question_hash == "abc123def4567890"
+    assert got.synthesis_sources == ["wiki/Alpha.md", "wiki/Beta.md"]
+    assert got.synthesis_source_hashes == [["wiki/Alpha.md", "ha"], ["wiki/Beta.md", "hb"]]
+
+
+def test_find_synthesis_by_question_hash(db):
+    db.upsert_article(
+        WikiArticleRecord(
+            path="wiki/synthesis/topic.md",
+            title="Topic",
+            sources=[],
+            content_hash="hash",
+            is_draft=False,
+            kind="synthesis",
+            question_hash="dup-hash",
+        )
+    )
+
+    found = db.find_synthesis_by_question_hash("dup-hash")
+    assert found is not None
+    assert found.path == "wiki/synthesis/topic.md"
+
+
+def test_insert_synthesis_atomic_rejects_duplicate_question_hash(db):
+    first = WikiArticleRecord(
+        path="wiki/synthesis/topic.md",
+        title="Topic",
+        sources=[],
+        content_hash="hash1",
+        is_draft=False,
+        kind="synthesis",
+        question_hash="same-hash",
+    )
+    second = WikiArticleRecord(
+        path="wiki/synthesis/topic-2.md",
+        title="Topic 2",
+        sources=[],
+        content_hash="hash2",
+        is_draft=False,
+        kind="synthesis",
+        question_hash="same-hash",
+    )
+
+    with db._tx():
+        db.insert_synthesis_atomic(first)
+    with db._tx(), pytest.raises(DuplicateSynthesisQuestionHashError):
+        db.insert_synthesis_atomic(second)
+
+    articles = [a for a in db.list_articles() if a.kind == "synthesis"]
+    assert len(articles) == 1
+    assert articles[0].path == "wiki/synthesis/topic.md"
 
 
 # ── v0.2: schema versioning ───────────────────────────────────────────────────

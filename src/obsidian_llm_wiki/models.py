@@ -150,6 +150,10 @@ class QueryAnswer(BaseModel):
     """Returned by heavy model: answer to a user query grounded in wiki content."""
 
     answer: str = Field(description="Markdown answer with [[wikilinks]] referencing concepts")
+    title: str | None = Field(
+        default=None,
+        description="Optional short topic title describing the answer subject",
+    )
 
 
 # ── Lint Models ───────────────────────────────────────────────────────────────
@@ -169,6 +173,7 @@ class LintIssue(BaseModel):
         "inline_tag",
         "graph_noise",
         "graph_connectivity",
+        "synthesis_chain",
     ]
     description: str
     suggestion: str
@@ -206,6 +211,10 @@ class WikiArticleRecord(BaseModel):
     is_draft: bool = True
     approved_at: datetime | None = None
     approval_notes: str | None = None
+    kind: Literal["concept", "synthesis"] = "concept"
+    question_hash: str | None = None
+    synthesis_sources: list[str] = Field(default_factory=list)
+    synthesis_source_hashes: list[list[str]] = Field(default_factory=list)
 
 
 class KnowledgeItemRecord(BaseModel):

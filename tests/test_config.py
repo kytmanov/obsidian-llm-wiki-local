@@ -116,6 +116,11 @@ graph_quality_checks = false
     assert cfg.pipeline.graph_quality_checks is False
 
 
+def test_config_synthesis_dir(tmp_path):
+    cfg = Config(vault=tmp_path)
+    assert cfg.synthesis_dir == tmp_path / "wiki" / "synthesis"
+
+
 def test_pipeline_config_accepts_explicit_language():
     cfg = PipelineConfig(language="de")
     assert cfg.language == "de"
