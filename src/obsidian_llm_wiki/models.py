@@ -8,6 +8,8 @@ reliably produce valid JSON for them.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import datetime
 from typing import Any, Literal
@@ -236,3 +238,167 @@ class ItemMentionRecord(BaseModel):
     evidence_level: Literal["title_supported", "filename_supported", "source_supported"]
     confidence: float = Field(ge=0.0, le=1.0, default=0.5)
     id: int | None = None
+
+
+# ────────────────────────────────────────────────────────────────────────
+# V6 abstractions (added in Phase 0; not yet used by any code path).
+# See CLAUDE-4.7-HIGH_ROADMAP_V6.md §§7, 10, 12, 13.
+# ────────────────────────────────────────────────────────────────────────
+
+
+class BibliographicMetadata(BaseModel):
+    """Bibliographic metadata for a source document (paper, book, etc.)."""
+
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    journal: str | None = None
+    venue: str | None = None
+    doi: str | None = None
+    arxiv_id: str | None = None
+    bibtex_key: str | None = None
+    affiliations: list[str] = Field(default_factory=list)
+
+
+class SourceDocument(BaseModel):
+    """One imported source: a PDF, EPUB, URL, OpenAPI spec, etc."""
+
+    id: str = Field(description="Stable source_id per V6 §8.5")
+    source_type: Literal[
+        "notes",
+        "textbook",
+        "paper",
+        "spec",
+        "api_docs",
+        "web_article",
+        "corp_docs",
+        "transcript",
+        "unknown_text",
+    ] = "notes"
+    origin_uri: str | None = None
+    title: str | None = None
+    imported_at: datetime | None = None
+    raw_hash: str | None = None
+    normalized_hash: str | None = None
+    extractor_version: str | None = None
+    license: str | None = None
+    redistribution: Literal["allowed", "personal_use_only", "unknown"] = "unknown"
+    bibliographic_metadata: BibliographicMetadata | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceSegment(BaseModel):
+    """A chunk of a source document with stable identity (V6 §8)."""
+
+    id: str = Field(description="Version identity: <source_id>:<locator>:<content_hash[:8]>")
+    identity: str = Field(
+        description="Identity: <source_id>:<locator> — for matching across versions"
+    )
+    ordinal: int = Field(description="Display order within source; regenerated per recompile")
+    source_id: str
+    structural_locator: str
+    content_hash: str
+    text: str
+    section_path: list[str] = Field(default_factory=list)
+    page_range: tuple[int, int] | None = None
+    char_offset: tuple[int, int] | None = None
+    image_refs: list[str] = Field(default_factory=list)
+    equation_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TermRecord(BaseModel):
+    """A term extracted from a source segment.
+
+    Distinct from the existing `Concept` model: terms have explicit
+    definitions and provenance back to a specific source segment.
+    """
+
+    name: str
+    definition: str
+    aliases: list[str] = Field(default_factory=list)
+    source_segment_id: str
+    provenance: Literal["extracted", "inferred", "ambiguous"]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class RelationCandidate(BaseModel):
+    """Concept-to-concept relation extracted as a separate pass (V6 §13.4)."""
+
+    subject: str
+    predicate: Literal[
+        "depends_on",
+        "part_of",
+        "causes",
+        "prevents",
+        "contrasts_with",
+        "is_example_of",
+        "implemented_by",
+        "requires",
+        "supports",
+        "violates",
+        "tradeoff_with",
+        "related_to",
+        # paper-specific:
+        "extends",
+        "disagrees_with",
+        "replicates",
+        "improves_on",
+        "cites",
+        "cited_by",
+    ]
+    object: str
+    evidence: str
+    source_segment_id: str
+    provenance: Literal["extracted", "inferred", "ambiguous"]
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class Paper(BaseModel):
+    """Paper-specific metadata (V6 §13)."""
+
+    bibliographic: BibliographicMetadata
+    abstract: str
+    keywords: list[str] = Field(default_factory=list)
+    sections: list[str] = Field(default_factory=list)
+
+
+class Theorem(BaseModel):
+    """Named formal result extracted from a paper (V6 §13.6.1)."""
+
+    id: str
+    name: str
+    type: Literal["theorem", "lemma", "corollary", "proposition", "definition", "axiom"]
+    statement: str
+    proof: str | None = None
+    source_segment_id: str
+    label: str | None = None
+    page: int | None = None
+
+
+class PaperCitation(BaseModel):
+    """A citation from one paper to another (V6 §13.6.2)."""
+
+    citing_segment_id: str
+    cited_paper_id: str | None = None
+    cited_title: str
+    cited_authors: list[str] = Field(default_factory=list)
+    cited_year: int | None = None
+    bibtex_key: str | None = None
+    quote: str | None = None
+    in_section: str | None = None
+
+
+class PipelineVersion(BaseModel):
+    """The pipeline configuration that produced an article body (V6 §12.1)."""
+
+    extractor_versions: dict[str, str] = Field(default_factory=dict)
+    prompt_versions: dict[str, str] = Field(default_factory=dict)
+    fast_model: str
+    heavy_model: str
+    schema_version: int = 1
+
+    def fingerprint(self) -> str:
+        """Deterministic hash for fast equality checks."""
+        payload = json.dumps(self.model_dump(), sort_keys=True).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
