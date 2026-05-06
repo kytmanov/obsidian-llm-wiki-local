@@ -1,5 +1,30 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added internal foundation types and reader/engine interfaces for future
+  source-aware and pack-oriented features. These are additive and are not
+  wired into runtime behavior yet.
+
+### Changed
+
+- **Schema migration v7 -> v8** (additive). `raw_notes` gains six new
+  columns: `source_type` (default `'notes'`), `origin_uri`, `imported_at`,
+  `normalized_hash`, `extractor_version`, `prompt_version`. Existing rows
+  get the default for `source_type` and `NULL` elsewhere. No code path
+  reads the new columns yet. v0.8 behavior is unchanged.
+
+### Migration notes
+
+- On first run with this version, `state.db` upgrades from v7 to v8
+  automatically. Recommended: back up `.olw/state.db` first
+  (`cp .olw/state.db .olw/state.db.bak.v7`). The upgrade is one-way:
+  downgrading the package after upgrading the DB leaves a `version=8`
+  row. Older code paths still function but are not regression-tested
+  against future schemas.
+
 ## [0.8.0] - 2026-05-02
 
 ### Highlights

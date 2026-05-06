@@ -109,6 +109,61 @@ cleanup() {
 }
 trap cleanup EXIT
 
+resolve_loaded_model() {
+    local model="$1"
+    uv run python - <<'PY' "$PROVIDER" "$PROVIDER_URL" "$model"
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+from obsidian_llm_wiki.client_factory import build_client
+from obsidian_llm_wiki.config import Config
+
+provider, url, model = sys.argv[1:4]
+
+
+def norm(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+with tempfile.TemporaryDirectory(prefix="smoke-model-resolve-") as tmp:
+    vault = Path(tmp)
+    (vault / "raw").mkdir()
+    (vault / "wiki").mkdir()
+    (vault / ".olw").mkdir()
+    (vault / "wiki.toml").write_text(
+        f"[models]\nfast = \"{model}\"\nheavy = \"{model}\"\n\n"
+        f"[provider]\nname = \"{provider}\"\nurl = \"{url}\"\n",
+        encoding="utf-8",
+    )
+    cfg = Config.from_vault(vault)
+    client = build_client(cfg)
+    try:
+        client.require_healthy()
+        models = client.list_models()
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+if model in models:
+    print(model)
+    raise SystemExit(0)
+
+wanted = norm(model)
+matches = [m for m in models if wanted == norm(m) or wanted in norm(m) or norm(m) in wanted]
+if len(matches) == 1:
+    print(matches[0])
+    raise SystemExit(0)
+
+raise SystemExit(
+    f"Model {model!r} is not loaded in {provider} at {url}. Available: {models}"
+)
+PY
+}
+
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 header "Prerequisites (provider: $PROVIDER)"
 
@@ -132,6 +187,11 @@ else
     # Model presence can't be checked reliably via /v1/models on all backends.
     check "$PROVIDER reachable at $PROVIDER_URL" "curl -sf $PROVIDER_URL/models"
     info "Model pull skipped ($PROVIDER manages its own models — load $FAST_MODEL in $PROVIDER before running)"
+    FAST_MODEL="$(resolve_loaded_model "$FAST_MODEL")"
+    HEAVY_MODEL="$(resolve_loaded_model "$HEAVY_MODEL")"
+    pass "Fast model resolved: $FAST_MODEL"
+    pass "Heavy model resolved: $HEAVY_MODEL"
+    PASS_COUNT=$((PASS_COUNT + 2))
 fi
 
 # ── Install ───────────────────────────────────────────────────────────────────

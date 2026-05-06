@@ -153,7 +153,12 @@ def _article_num_predict(config: Config, prompt: str, system: str) -> int:
     return max(_MIN_ARTICLE_PREDICT, min(config.pipeline.article_max_tokens, available_output))
 
 
-def _build_olw_annotations(confidence: float, source_paths: list[str], db: StateDB) -> list[str]:
+def _build_olw_annotations(
+    confidence: float,
+    source_paths: list[str],
+    db: StateDB,
+    prompt_degraded: bool = False,
+) -> list[str]:
     """Return HTML comment annotations for low-quality drafts. Empty list = no annotations."""
     annotations = []
     if confidence < _ANNOTATION_CONFIDENCE_THRESHOLD:
@@ -170,6 +175,12 @@ def _build_olw_annotations(confidence: float, source_paths: list[str], db: State
                 qualities.append(rec.quality)
         if qualities and all(q == "low" for q in qualities):
             annotations.append("<!-- olw-auto: all sources low-quality — add better sources -->")
+    if prompt_degraded:
+        annotations.append(
+            "<!-- olw-auto: prompt degraded to fit provider context — some source or "
+            "existing article context was trimmed; review carefully and consider increasing "
+            "the loaded model context or lowering heavy_ctx -->"
+        )
     return annotations
 
 
@@ -184,6 +195,19 @@ def _truncate_to_budget(text: str, max_chars: int) -> str:
     if len(text) > limit:
         return text[:limit] + "\n\n[...truncated...]"
     return text
+
+
+def _is_prompt_context_overflow(error: Exception) -> bool:
+    """Detect provider errors where the prompt itself exceeds the loaded context."""
+    if not isinstance(error, LLMBadRequestError):
+        return False
+    message = str(error).lower()
+    return (
+        "tokens to keep" in message
+        or "n_keep" in message
+        or "context length" in message
+        or "context too long" in message
+    )
 
 
 def _resolve_source_path(source_path: str, vault: Path) -> tuple[Path, str] | None:
@@ -556,6 +580,7 @@ def _write_draft(
     concept_aliases: list[str] | None = None,
     alias_map: dict[str, str] | None = None,
     canonical_title: str | None = None,
+    prompt_degraded: bool = False,
 ) -> Path:
     """Write SingleArticle to wiki/.drafts/ and record in state DB."""
     config.drafts_dir.mkdir(parents=True, exist_ok=True)
@@ -597,7 +622,12 @@ def _write_draft(
     )
 
     # Prepend quality annotations (invisible HTML comments, stripped on approve)
-    annotations = _build_olw_annotations(confidence, source_paths, db)
+    annotations = _build_olw_annotations(
+        confidence,
+        source_paths,
+        db,
+        prompt_degraded=prompt_degraded,
+    )
     if annotations:
         annotation_block = "\n".join(annotations) + "\n\n"
         # Insert before first ## heading if present, else prepend
@@ -684,6 +714,42 @@ def _write_concept_prompt(
     return prompt
 
 
+def _build_concept_write_prompt(
+    name: str,
+    source_paths: list[str],
+    config: Config,
+    link_titles: list[str],
+    existing_content: str,
+    vault_schema: str,
+    rejection_history: list[str] | None,
+    db: StateDB,
+) -> tuple[str, list[str], float, str | None]:
+    source_refs = (
+        _build_source_refs(source_paths, config.vault)
+        if config.pipeline.inline_source_citations
+        else None
+    )
+    sources_text, resolved_paths = _gather_sources(
+        source_paths,
+        config.vault,
+        max_chars=config.effective_provider.heavy_ctx // 2,
+        source_refs=source_refs,
+    )
+    confidence = _compute_confidence(resolved_paths, db)
+    lang = _resolve_language([str(p) for p in resolved_paths], db, config)
+    write_prompt = _write_concept_prompt(
+        name,
+        sources_text,
+        link_titles,
+        existing_content,
+        vault_schema,
+        rejection_history,
+        language=lang,
+        inline_source_citations=config.pipeline.inline_source_citations,
+    )
+    return write_prompt, resolved_paths, confidence, lang
+
+
 def compile_concepts(
     config: Config,
     client: LLMClientProtocol,
@@ -751,6 +817,7 @@ def compile_concepts(
 
         source_paths = db.get_sources_for_concept(name)
         is_stub = db.has_stub(name)
+        prompt_degraded = False
 
         if not source_paths and not is_stub:
             continue
@@ -840,26 +907,6 @@ def compile_concepts(
             log.info("Stub draft written: %s (%.1fs)", draft_path.name, elapsed)
             continue
 
-        # Gather source material within context budget
-        source_refs = (
-            _build_source_refs(source_paths, config.vault)
-            if config.pipeline.inline_source_citations
-            else None
-        )
-        sources_text, resolved_paths = _gather_sources(
-            source_paths,
-            config.vault,
-            max_chars=config.effective_provider.heavy_ctx // 2,
-            source_refs=source_refs,
-        )
-        if not resolved_paths:
-            log.warning("No readable sources for concept '%s', skipping", name)
-            _record_failure(name, "no_sources")
-            db.mark_concept_compile_state(name, source_paths, "failed", error="No readable sources")
-            continue
-
-        confidence = _compute_confidence(resolved_paths, db)
-
         # Include snippet of existing article for update prompts
         existing_content = ""
         if existing_meta and wiki_path.exists():
@@ -875,17 +922,22 @@ def compile_concepts(
             [r["feedback"] for r in rejection_records] if rejection_records else None
         )
 
-        lang = _resolve_language([str(p) for p in resolved_paths], db, config)
-        write_prompt = _write_concept_prompt(
+        # Gather source material within context budget
+        write_prompt, resolved_paths, confidence, _ = _build_concept_write_prompt(
             name,
-            sources_text,
+            source_paths,
+            config,
             link_titles,
             existing_content,
             vault_schema,
             rejection_history,
-            language=lang,
-            inline_source_citations=config.pipeline.inline_source_citations,
+            db,
         )
+        if not resolved_paths:
+            log.warning("No readable sources for concept '%s', skipping", name)
+            _record_failure(name, "no_sources")
+            db.mark_concept_compile_state(name, source_paths, "failed", error="No readable sources")
+            continue
 
         try:
             num_predict = _article_num_predict(
@@ -921,12 +973,109 @@ def compile_concepts(
                 stage="compile_article",
             )
         except (StructuredOutputError, LLMBadRequestError, LLMTruncatedError) as e:
-            log.error("Failed to write '%s': %s", name, e)
-            _record_failure(name, _categorize_failure(e))
-            db.mark_concept_compile_state(
-                name, resolved_paths or source_paths, "failed", error=str(e)
-            )
-            continue
+            retry_succeeded = False
+            if _is_prompt_context_overflow(e):
+                retry_plan = [
+                    (max(512, config.effective_provider.heavy_ctx // 4), 1000),
+                    (max(512, config.effective_provider.heavy_ctx // 8), 500),
+                    (max(512, config.effective_provider.heavy_ctx // 16), 0),
+                    (512, 0),
+                ]
+                source_refs = (
+                    _build_source_refs(source_paths, config.vault)
+                    if config.pipeline.inline_source_citations
+                    else None
+                )
+                seen_retry_budgets: set[tuple[int, int]] = set()
+                for source_budget, existing_budget in retry_plan:
+                    retry_key = (source_budget, existing_budget)
+                    if retry_key in seen_retry_budgets:
+                        continue
+                    seen_retry_budgets.add(retry_key)
+                    log.warning(
+                        "Retrying '%s' after provider context overflow "
+                        "(sources=%d, existing=%d)",
+                        name,
+                        source_budget,
+                        existing_budget,
+                    )
+                    fallback_sources_text, fallback_resolved_paths = _gather_sources(
+                        source_paths,
+                        config.vault,
+                        max_chars=source_budget,
+                        source_refs=source_refs,
+                    )
+                    if not fallback_resolved_paths:
+                        continue
+                    fallback_lang = _resolve_language(
+                        [str(p) for p in fallback_resolved_paths], db, config
+                    )
+                    fallback_prompt = _write_concept_prompt(
+                        name,
+                        fallback_sources_text,
+                        link_titles,
+                        existing_content[:existing_budget] if existing_budget else "",
+                        vault_schema,
+                        rejection_history,
+                        language=fallback_lang,
+                        inline_source_citations=config.pipeline.inline_source_citations,
+                    )
+                    try:
+                        fallback_num_predict = _article_num_predict(
+                            config,
+                            fallback_prompt,
+                            (
+                                _WRITE_SYSTEM_WITH_CITATIONS
+                                if config.pipeline.inline_source_citations
+                                else _WRITE_SYSTEM
+                            ),
+                        )
+                    except ValueError as retry_error:
+                        e = retry_error
+                        continue
+                    try:
+                        result = request_structured(
+                            client=client,
+                            prompt=fallback_prompt,
+                            model_class=SingleArticle,
+                            model=config.models.heavy,
+                            system=(
+                                _WRITE_SYSTEM_WITH_CITATIONS
+                                if config.pipeline.inline_source_citations
+                                else _WRITE_SYSTEM
+                            ),
+                            num_ctx=config.effective_provider.heavy_ctx,
+                            num_predict=fallback_num_predict,
+                            stage="compile_article",
+                        )
+                        resolved_paths = fallback_resolved_paths
+                        confidence = _compute_confidence(resolved_paths, db)
+                        prompt_degraded = True
+                        log.warning(
+                            "Compiled '%s' with reduced prompt context; some source or existing "
+                            "article text was trimmed. Review the draft and align the loaded "
+                            "model context with heavy_ctx if this recurs.",
+                            name,
+                        )
+                        retry_succeeded = True
+                        break
+                    except (
+                        StructuredOutputError,
+                        LLMBadRequestError,
+                        LLMTruncatedError,
+                    ) as retry_error:
+                        e = retry_error
+                        if not _is_prompt_context_overflow(retry_error):
+                            break
+            if retry_succeeded:
+                pass
+            else:
+                log.error("Failed to write '%s': %s", name, e)
+                _record_failure(name, _categorize_failure(e))
+                db.mark_concept_compile_state(
+                    name, resolved_paths or source_paths, "failed", error=str(e)
+                )
+                continue
 
         draft_path = _write_draft(
             content_result=result,
@@ -939,6 +1088,7 @@ def compile_concepts(
             canonical_title=name,
             concept_aliases=db.get_aliases(name),
             alias_map=alias_map,
+            prompt_degraded=prompt_degraded,
         )
         draft_paths.append(draft_path)
         db.mark_concept_compile_state(name, resolved_paths, "compiled")
