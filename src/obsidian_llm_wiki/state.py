@@ -12,6 +12,7 @@ Schema versioning: schema_version table tracks migration level.
   v5 — knowledge_items + item_mentions tables; backfill existing concepts
   v6 — ingest_chunks + concept_compile_state tables; backfill compile state from articles
   v7 — synthesis article metadata on wiki_articles
+  v8 — source metadata columns on raw_notes
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 
 from .models import ItemMentionRecord, KnowledgeItemRecord, RawNoteRecord, WikiArticleRecord
 
-_CURRENT_SCHEMA_VERSION = 7
+_CURRENT_SCHEMA_VERSION = 8
 _CHECKPOINT_SCHEMA_VERSION = 1
 
 # Full current schema — idempotent (CREATE IF NOT EXISTS).
@@ -36,15 +37,21 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 CREATE TABLE IF NOT EXISTS raw_notes (
-    path        TEXT PRIMARY KEY,
-    content_hash TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'new',
-    summary     TEXT,
-    quality     TEXT,
-    language    TEXT,
-    ingested_at TEXT,
-    compiled_at TEXT,
-    error       TEXT
+    path              TEXT PRIMARY KEY,
+    content_hash      TEXT NOT NULL,
+    status            TEXT NOT NULL DEFAULT 'new',
+    summary           TEXT,
+    quality           TEXT,
+    language          TEXT,
+    ingested_at       TEXT,
+    compiled_at       TEXT,
+    error             TEXT,
+    source_type       TEXT NOT NULL DEFAULT 'notes',
+    origin_uri        TEXT,
+    imported_at       TEXT,
+    normalized_hash   TEXT,
+    extractor_version TEXT,
+    prompt_version    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS concepts (
@@ -279,6 +286,16 @@ _VERSIONED_MIGRATIONS: dict[int, list[str]] = {
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_wiki_articles_question_hash "
             "ON wiki_articles(question_hash) WHERE question_hash IS NOT NULL"
         ),
+    ],
+    8: [
+        # V6 Phase 0: additive raw_notes columns for source-type metadata.
+        # See CLAUDE-4.7-HIGH_ROADMAP_V6.md §10.7 step 1.
+        "ALTER TABLE raw_notes ADD COLUMN source_type TEXT NOT NULL DEFAULT 'notes'",
+        "ALTER TABLE raw_notes ADD COLUMN origin_uri TEXT",
+        "ALTER TABLE raw_notes ADD COLUMN imported_at TEXT",
+        "ALTER TABLE raw_notes ADD COLUMN normalized_hash TEXT",
+        "ALTER TABLE raw_notes ADD COLUMN extractor_version TEXT",
+        "ALTER TABLE raw_notes ADD COLUMN prompt_version TEXT",
     ],
 }
 
