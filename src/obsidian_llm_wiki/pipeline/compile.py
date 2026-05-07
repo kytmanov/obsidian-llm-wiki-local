@@ -1069,8 +1069,11 @@ def compile_concepts(
             if retry_succeeded:
                 pass
             else:
+                failure_category = (
+                    "context_too_large" if isinstance(e, ValueError) else _categorize_failure(e)
+                )
                 log.error("Failed to write '%s': %s", name, e)
-                _record_failure(name, _categorize_failure(e))
+                _record_failure(name, failure_category)
                 db.mark_concept_compile_state(
                     name, resolved_paths or source_paths, "failed", error=str(e)
                 )

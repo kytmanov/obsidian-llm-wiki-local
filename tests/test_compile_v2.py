@@ -991,6 +991,61 @@ def test_compile_concepts_retries_with_smaller_source_budget_on_context_overflow
     assert "Compiled 'Heavy Concept' with reduced prompt context" in caplog.text
 
 
+def test_compile_concepts_retry_value_error_is_counted_as_context_too_large(
+    config, db, caplog, monkeypatch
+):
+    """Retry budget failures should preserve the context_too_large category."""
+    from obsidian_llm_wiki.openai_compat_client import LLMBadRequestError
+    from obsidian_llm_wiki.pipeline import compile as compile_module
+
+    db.upsert_raw(RawNoteRecord(path="raw/src.md", content_hash="h1", status="ingested"))
+    db.upsert_concepts("raw/src.md", ["Heavy Concept"])
+    (config.vault / "raw" / "src.md").write_text(
+        "---\ntitle: Source\n---\n" + ("Content about Heavy Concept. " * 500),
+        encoding="utf-8",
+    )
+
+    overflow_error = LLMBadRequestError(
+        "HTTP 400: The number of tokens to keep from the initial prompt "
+        "is greater than the context length"
+    )
+    client = make_mock_client()
+    client.generate.side_effect = [overflow_error]
+
+    num_predict_calls = iter(
+        [
+            1024,
+            ValueError(
+                "Source content too large for heavy_ctx=8192: prompt ~9000 tokens leaves only 0"
+            ),
+            ValueError(
+                "Source content too large for heavy_ctx=8192: prompt ~9000 tokens leaves only 0"
+            ),
+            ValueError(
+                "Source content too large for heavy_ctx=8192: prompt ~9000 tokens leaves only 0"
+            ),
+            ValueError(
+                "Source content too large for heavy_ctx=8192: prompt ~9000 tokens leaves only 0"
+            ),
+        ]
+    )
+
+    def fake_article_num_predict(_config, _prompt, _system):
+        result = next(num_predict_calls)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(compile_module, "_article_num_predict", fake_article_num_predict)
+
+    drafts, failed, _ = compile_concepts(config, client, db)
+
+    assert drafts == []
+    assert failed == ["Heavy Concept"]
+    assert "Compile failures by category: 1 context_too_large" in caplog.text
+    assert "Compile failures by category: 1 other" not in caplog.text
+
+
 def test_compile_concepts_normal_success_has_no_prompt_degraded_annotation(config, db):
     db.upsert_raw(RawNoteRecord(path="raw/src.md", content_hash="h1", status="ingested"))
     db.upsert_concepts("raw/src.md", ["Normal Concept"])

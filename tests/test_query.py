@@ -116,6 +116,25 @@ def test_run_query_save_creates_file(vault, config, db):
     assert queries[0].read_text(encoding="utf-8").strip() != ""
 
 
+def test_run_query_strips_unknown_wikilinks_from_saved_answer(vault, config, db):
+    _write_index(config, "# Wiki Index\n\n## Concepts\n- [[Topic]]\n")
+    _write_concept_page(config, "Topic")
+
+    selection_json = json.dumps({"pages": ["Topic"]})
+    answer_json = json.dumps(
+        {"answer": "Use [[Topic]] but not [[Ghost Topic]] in the saved answer."}
+    )
+    client = _make_client(selection_json, answer_json)
+
+    result = run_query(config, client, db, "Tell me about Topic", save=True)
+
+    assert "[[Ghost Topic]]" not in result.answer
+    assert "Ghost Topic" in result.answer
+    saved = result.query_save.path.read_text(encoding="utf-8")
+    assert "[[Topic]]" in saved
+    assert "[[Ghost Topic]]" not in saved
+
+
 def test_find_page_by_filename(vault, config):
     _write_concept_page(config, "Machine Learning")
     found = _find_page(config, "Machine Learning")

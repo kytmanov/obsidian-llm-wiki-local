@@ -48,6 +48,9 @@ MAX_CHARS_PER_PAGE = 8_000
 log = logging.getLogger(__name__)
 
 
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)(#[^\]|]*)?(?:\|([^\]]*))?\]\]")
+
+
 @dataclass
 class QuerySaveResult:
     path: Path
@@ -181,6 +184,27 @@ def _derive_synthesis_title(question: str, model_title: str | None) -> str:
     normalized = re.sub(r"\s+", " ", normalized)
     fallback = " ".join(normalized.split()[:8]).title()
     return fallback or "untitled-synthesis"
+
+
+def _strip_unknown_wikilinks(content: str, known_titles: list[str]) -> str:
+    """Unwrap wikilinks that do not target an existing wiki/source page."""
+    known = {title.casefold() for title in known_titles}
+
+    def replace(match: re.Match[str]) -> str:
+        target = match.group(1).strip()
+        fragment = match.group(2) or ""
+        display = match.group(3)
+        if target.casefold().startswith("sources/") or target.casefold() in known:
+            return match.group(0)
+        return display or f"{target}{fragment}"
+
+    return _WIKILINK_RE.sub(replace, content)
+
+
+def _sanitize_query_answer(answer: str, source_pages: list[str], known_titles: list[str]) -> str:
+    """Strip invented wikilinks from query answers before returning or saving."""
+    allowed_titles = [*known_titles, *source_pages]
+    return _strip_unknown_wikilinks(answer, allowed_titles)
 
 
 def _body_hash(body: str) -> str:
@@ -599,7 +623,8 @@ def run_query(
         context = "(No matching wiki pages found.)"
 
     # Step 3: heavy model answers
-    known_titles = ", ".join(title for title, _ in list_wiki_articles(config.wiki_dir)[:80])
+    known_title_list = [title for title, _ in list_wiki_articles(config.wiki_dir)[:80]]
+    known_titles = ", ".join(known_title_list)
     answer_prompt = (
         "You are answering a question using a personal knowledge wiki.\n\n"
         f"Relevant wiki content:\n{context}\n\n"
@@ -620,11 +645,12 @@ def run_query(
         stage="query_answer",
     )
 
+    sanitized_answer = _sanitize_query_answer(result.answer, selection.pages, known_title_list)
     synthesis_title = _derive_synthesis_title(question, result.title)
 
     query_save = None
     if save:
-        query_path = _save_query(config, db, question, result.answer, selection.pages)
+        query_path = _save_query(config, db, question, sanitized_answer, selection.pages)
         query_save = QuerySaveResult(path=query_path, resolution="saved_new")
 
     synthesis_save = None
@@ -634,7 +660,7 @@ def run_query(
                 config,
                 db,
                 question,
-                result.answer,
+                sanitized_answer,
                 selection.pages,
                 synthesis_title,
                 duplicate_strategy,
@@ -672,7 +698,7 @@ def run_query(
         _emit_synthesis_event(question, selection.pages, synthesis_save)
 
     return QueryRunResult(
-        answer=result.answer,
+        answer=sanitized_answer,
         selected_pages=selection.pages,
         synthesis=synthesis_save,
         query_save=query_save,
