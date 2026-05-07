@@ -993,8 +993,7 @@ def compile_concepts(
                         continue
                     seen_retry_budgets.add(retry_key)
                     log.warning(
-                        "Retrying '%s' after provider context overflow "
-                        "(sources=%d, existing=%d)",
+                        "Retrying '%s' after provider context overflow (sources=%d, existing=%d)",
                         name,
                         source_budget,
                         existing_budget,
