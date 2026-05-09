@@ -681,6 +681,60 @@ def test_merge_concept_dedup_case_insensitive():
     assert "deep learning" in names_lower
 
 
+def test_merge_concept_dedup_whitespace_variants():
+    """Fingerprint dedup catches format variants that .lower() misses."""
+    r1 = _make_result(["machine learning"])
+    r2 = _make_result(["machine-learning", "machine_learning"])
+    merged = _merge_chunk_results([r1, r2])
+    assert len(merged.concepts) == 1
+    assert merged.concepts[0].name.lower() == "machine learning"
+
+
+def test_merge_concept_dedup_bracket_variants():
+    """Fingerprint dedup normalizes bracketed names to base form."""
+    r1 = _make_result(["Kubernetes (k8s)"])
+    r2 = _make_result(["kubernetes"])
+    merged = _merge_chunk_results([r1, r2])
+    assert len(merged.concepts) == 1
+
+
+def test_merge_concept_dedup_separator_variants():
+    """Fingerprint dedup treats hyphens, underscores, slashes as equivalent."""
+    r1 = _make_result(["API-Gateway"])
+    r2 = _make_result(["api_gateway"])
+    r3 = _make_result(["api/gateway"])
+    r4 = _make_result(["api gateway"])
+    merged = _merge_chunk_results([r1, r2, r3, r4])
+    assert len(merged.concepts) == 1
+
+
+def test_merge_concept_dedup_merges_aliases_across_chunks():
+    """Aliases from matching concepts are merged, with fingerprint dedup."""
+    c1 = [Concept(name="Machine Learning", aliases=["ML", "machine learning variant"])]
+    c2 = [Concept(name="machine learning", aliases=["statistical learning", "ML"])]
+    r1 = AnalysisResult(
+        summary="s", concepts=c1, suggested_topics=[], quality="high", language=None
+    )
+    r2 = AnalysisResult(
+        summary="s2", concepts=c2, suggested_topics=[], quality="high", language=None
+    )
+    merged = _merge_chunk_results([r1, r2])
+    assert len(merged.concepts) == 1
+    aliases_lower = {a.lower() for a in merged.concepts[0].aliases}
+    assert "ml" in aliases_lower
+    assert "machine learning variant" in aliases_lower
+    assert "statistical learning" in aliases_lower
+
+
+def test_merge_concepts_capped_at_8():
+    """After dedup, concepts list should be capped at 8."""
+    concepts = [f"Concept {i}" for i in range(15)]
+    r1 = _make_result(concepts[:10])
+    r2 = _make_result(concepts[5:])
+    merged = _merge_chunk_results([r1, r2])
+    assert len(merged.concepts) == 8
+
+
 def test_merge_summary_from_first_chunk():
     r1 = _make_result(["A"], summary="First summary.")
     r2 = _make_result(["B"], summary="Second summary.")

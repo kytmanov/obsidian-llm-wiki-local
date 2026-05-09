@@ -19,6 +19,7 @@ from ..models import AnalysisResult, Concept, RawNoteRecord
 from ..protocols import LLMClientProtocol
 from ..state import StateDB
 from ..structured_output import request_structured
+from ..text_utils import fingerprint_concept
 from ..vault import (
     chunk_text,
     generate_aliases,
@@ -76,26 +77,34 @@ def _merge_chunk_results(results: list[AnalysisResult]) -> AnalysisResult:
     if len(results) == 1:
         return results[0]
 
-    # Dedup concepts by canonical name (case-insensitive), merge aliases
-    seen: dict[str, list[str]] = {}  # lower(name) -> accumulated aliases
-    order: list[str] = []  # canonical names in insertion order
-    canonical_by_lower: dict[str, str] = {}
+    # Dedup concepts within a single note across chunks: normalize by
+    # lowercasing, stripping brackets, separators (_-/:), punctuation,
+    # and all whitespace.
+    # Catches format variants like "machine learning" vs "machine-learning"
+    # vs "machine_learning" that simple .lower() misses.
+    seen: dict[str, list[str]] = {}  # fingerprint(name) -> accumulated aliases
+    order: list[str] = []  # fingerprints in insertion order
+    canonical_by_fingerprint: dict[str, str] = {}
 
     for r in results:
         for c in r.concepts:
-            key = c.name.lower()
+            key = fingerprint_concept(c.name)
             if key not in seen:
                 seen[key] = list(c.aliases)
                 order.append(key)
-                canonical_by_lower[key] = c.name
+                canonical_by_fingerprint[key] = c.name
             else:
-                existing_lower = {a.lower() for a in seen[key]}
+                existing_fingerprints = {fingerprint_concept(a) for a in seen[key]}
                 for a in c.aliases:
-                    if a.lower() not in existing_lower:
+                    fp = fingerprint_concept(a)
+                    if fp not in existing_fingerprints:
                         seen[key].append(a)
-                        existing_lower.add(a.lower())
+                        existing_fingerprints.add(fp)
 
-    all_concepts = [Concept(name=canonical_by_lower[k], aliases=seen[k]) for k in order][:8]
+    all_concepts = [
+        Concept(name=canonical_by_fingerprint[k], aliases=seen[k])
+        for k in order
+    ][:8]
 
     seen_topics: set[str] = set()
     all_topics: list[str] = []
