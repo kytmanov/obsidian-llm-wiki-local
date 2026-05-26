@@ -14,22 +14,24 @@
 Drop a markdown file into a folder. The pipeline reads it, extracts concepts, and creates or updates wiki articles. If a draft is wrong, reject it and explain why; the next compile addresses your feedback. Over time, every note you add and every draft you review makes the wiki smarter.
 
 **Local-first, provider-flexible.** Runs 100% locally with [Ollama](https://ollama.com) by default. Also works with any OpenAI-compatible endpoint — Groq, Together AI, LM Studio, vLLM, Azure OpenAI, and [more](#providers).
-<p align="center">
-<img width="400" height="390" alt="image" src="https://github.com/user-attachments/assets/0b3998bd-af4d-4f3f-a2da-8334a0e81711"/>
-</p>
 
 ---
 
 > [!NOTE]
-> **obsidian-llm-wiki is now in maintenance mode.**
+> **obsidian-llm-wiki is now in maintenance mode. → [Check out Synto](https://github.com/kytmanov/synto)**
 >
 > Bug fixes will continue. New features are being developed in [**Synto**](https://github.com/kytmanov/synto) — the successor with a broader scope than the Obsidian LLM wiki pattern.
 >
 > Migration is handled by Synto's migration command: point it at your existing vault and it converts the project to Synto's format. Your notes and wiki content remain the source of truth. If you're happy with what this tool does today, it keeps working; when you're ready for more, Synto provides the upgrade path.
 >
-> **→ [Check out Synto](https://github.com/kytmanov/synto)**
+> ****
 
 ---
+
+<p align="center">
+<img width="400" height="390" alt="image" src="https://github.com/user-attachments/assets/0b3998bd-af4d-4f3f-a2da-8334a0e81711"/>
+</p>
+
 
 ## The idea (Karpathy's LLM Wiki)
 
