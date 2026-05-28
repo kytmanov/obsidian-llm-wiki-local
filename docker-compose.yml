@@ -1,0 +1,23 @@
+services:
+  olw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    stdin_open: true
+    tty: true
+    environment:
+      OLW_VAULT: /vault
+      # Cloud provider API keys (pass through from host if needed)
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      OLW_API_KEY: ${OLW_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ${HOST_VAULT_PATH}:/vault
+      - ${OLW_CONFIG_PATH:-~/.config/olw}:/root/.config/olw
+      - ~/.gitconfig:/root/.gitconfig:ro
+    # Linux users: uncomment the line below if host.docker.internal does not resolve
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
+    # Or use --network host on Linux when running against a local Ollama instance:
+    # network_mode: host

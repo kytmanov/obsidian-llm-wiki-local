@@ -1,0 +1,40 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Test and docs
+tests/
+docs/
+scripts/
+
+# Git and editor artifacts
+.git/
+.gitignore
+.DS_Store
+*.log
+.env
+
+# uv / lock files (exclude for latest-compatible builds; include for fully-reproducible builds)
+uv.lock
+
+# Lint / cache artifacts
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local planning / review artifacts
+CONTEXT.md
+REQUIREMENTS.md
+IMPLEMENTATION_PLAN.md
+IMPLEMENTAION_PLAN.md
+REVIEW.md
+
+# Docker artifacts
+Dockerfile
+docker-compose.yml
+.claude/
